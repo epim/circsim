@@ -105,7 +105,7 @@ Hobbyist, possibly with zero formal electronics training, who iterated a design 
 │  - spawns/respawns SimHost via utilityProcess.fork          │
 │  - relays MessagePort between Renderer and SimHost          │
 └──────────────┬─────────────────────────────┬───────────────┘
-               │ contextBridge IPC           │ MessagePort
+               │ contextBridge IPC           │ one-time port handshake
 ┌──────────────▼──────────────┐  ┌───────────▼───────────────┐
 │ Renderer (Chromium)         │  │ SimHost (utilityProcess)   │
 │  - React UI panels          │  │  - loads libngspice via    │
@@ -117,7 +117,8 @@ Hobbyist, possibly with zero formal electronics training, who iterated a design 
 ```
 
 - **Renderer** owns all domain logic that is pure computation (file parsing, netlist extraction, model resolution, SPICE deck generation) — these are plain TS modules imported into the renderer, kept Electron-free so Vitest covers them in Node.
-- **SimHost** exists for *crash isolation*: libngspice is not process-isolated; a pathological netlist can crash it. SimHost crashing must never take down the app. Main relays a `MessagePort` so Renderer↔SimHost traffic doesn't transit Main.
+- **SimHost** exists for *crash isolation*: libngspice is not process-isolated; a pathological netlist can crash it. SimHost crashing must never take down the app.
+- **Port handshake, not relay:** Main creates a `MessageChannelMain` once per SimHost spawn, sends one port to SimHost via `child.postMessage` and the other to the renderer via `webContents.postMessage`. After the handshake, **Main is not in the message path** — `samples` traffic (transferable buffers) flows renderer↔SimHost directly. Main must never proxy individual messages.
 - **Security defaults:** `contextIsolation: true`, `nodeIntegration: false`; the preload script exposes a minimal typed API (`openFile`, `simPort`, …).
 
 ### 6.1 SimHost ⇄ Renderer protocol (the most important interface in the app)
@@ -142,15 +143,18 @@ type SimEvent =
   | { type: 'vectors'; names: string[] }                // vector list after run starts
   | { type: 'samples'; vectorNames: string[]; columns: Float64Array[]; simTime: Float64Array }
       // batched: flushed every 16 ms or 4096 points, whichever first
-  | { type: 'opResult'; values: Record<string, number> }      // node → volts, vsrc → amps
+  | { type: 'opResult'; values: Record<string, number> }
+      // KEY FORMAT (normative): node voltages keyed by the bare lowercase SPICE node name
+      // ("out", never "v(out)" or "OUT"); source/device currents keyed "i(<device>)".
+      // SimHost normalizes whatever vector names ngspice returns into this format.
   | { type: 'acResult'; freq: Float64Array; vectors: Record<string, { mag: Float64Array; phaseDeg: Float64Array }> }
   | { type: 'status'; running: boolean; simTimeSeconds: number; realtimeFactor: number }
+  | { type: 'benchRestarted'; reason: 'window-elapsed' | 'memory' }   // see §7.5 bench windows
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string }   // ngspice stdout/stderr lines
   | { type: 'convergenceFailure'; detail: string }
-  | { type: 'crashed'; willRespawn: true }              // emitted by Main on simhost exit
 ```
 
-The renderer must treat `crashed` as routine: re-send `loadCircuit` + re-apply instrument state after respawn. Instrument state lives in the zustand store, never only inside ngspice.
+**Crash notification travels on a different channel.** When SimHost dies, its MessagePort dies with it — so the crash event cannot be a `SimEvent`. Main detects process exit and notifies the renderer through the contextBridge preload API (`onSimhostCrashed(cb)` with payload `{ willRespawn: boolean }`), then respawns and re-runs the port handshake. The renderer must treat a crash as routine: re-send `loadCircuit` + re-apply instrument state after the new port arrives. Instrument state lives in the zustand store, never only inside ngspice.
 
 ---
 
@@ -160,32 +164,59 @@ The renderer must treat `crashed` as routine: re-send `loadCircuit` + re-apply i
 
 - ngspice ≥ 46, **shared library** (`ngspice.dll` / `libngspice.dylib` / `libngspice.so`), BSD-3-Clause. Redistribution is permitted; the app bundle must include ngspice's `COPYING` file.
 - The library API (from `sharedspice.h`): `ngSpice_Init(SendChar, SendStat, ControlledExit, SendData, SendInitData, BGThreadRunning, userData)`, `ngSpice_Circ(char**)` (load deck from memory — no temp files), `ngSpice_Command(char*)`, `ngGet_Vec_Info(char*)`, `ngSpice_CurPlot()`, `ngSpice_AllVecs(char*)`.
-- Simulation runs on ngspice's background thread (`bg_run`); `SendData` fires per accepted timepoint with all saved vector values.
+- Simulation runs on ngspice's background thread — start transients with `bg_tran <tstep> <tstop>` (the decks carry no `.tran` card, so a bare `bg_run` would have no analysis to run); `SendData` fires per accepted timepoint with all saved vector values.
 
 ### 7.2 XSPICE code models — packaging requirement
 
-XSPICE digital primitives (`d_and`, `d_ff`, `d_lut`, `d_state`, `adc_bridge`, `dac_bridge`, …) live in `.cm` plugin files (`digital.cm`, `analog.cm`, `spice2poly.cm`, `xtradev.cm`, `xtraevt.cm`) that ngspice loads at startup from a path relative to the library. **Shipping the bare DLL without the `.cm` files silently breaks every digital model.** The bundle must ship the full `lib/ngspice/` tree next to the library, and SimHost must verify at startup that `digital.cm` loaded (run a 3-card `d_inv` smoke deck at init; surface failure loudly).
+XSPICE digital primitives (`d_and`, `d_ff`, `d_lut`, `d_state`, `adc_bridge`, `dac_bridge`, …) live in `.cm` plugin files (`digital.cm`, `analog.cm`, `spice2poly.cm`, `xtradev.cm`, `xtraevt.cm`). **Shipping the bare DLL without the `.cm` files silently breaks every digital model.** The bundle must ship the full `lib/ngspice/` tree alongside the library.
+
+**Path resolution is a packaging trap.** ngspice locates `.cm` files via the `spinit` init script, whose relative `codemodel` paths resolve against the *calling process executable* — in a packaged app that's the Electron binary, not our resources directory, so the stock spinit will fail to find the `.cm` files in production while working in dev. Required approach: at startup, **SimHost generates a `spinit` file in a temp/app-data directory containing `codemodel <absolute path>/digital.cm` lines** (absolute paths computed from `process.resourcesPath` or the dev layout), sets `process.env.SPICE_SCRIPTS` to that directory **before** `ngSpice_Init`, and then verifies `.cm` loading with the smoke deck below. CI must include a test that runs SimHost against the *packaged* resources layout, not just the repo layout — this failure mode is invisible in dev.
+
+Startup smoke deck (run at init; on failure emit a loud structured error naming `.cm` files):
+
+```
+* cm smoke: 0V in -> adc -> d_inv -> dac -> expect ~5V out
+v1 in 0 dc 0
+abr_in [in] [din] adcm
+.model adcm adc_bridge(in_low=1.0 in_high=2.0)
+ainv din dout invm
+.model invm d_inv(rise_delay=1n fall_delay=1n)
+abr_out [dout] [out] dacm
+.model dacm dac_bridge(out_low=0 out_high=5)
+.tran 1n 20n
+.end
+```
+
+Pass criterion: transient runs and `v(out)` ends ≥ 4.5 V. (XSPICE `a` elements are event-driven: use `.tran`, never `.op`, to exercise them — DC operating point does not propagate digital events.)
 
 **Exclude `table.cm`** from the bundle: it contains GPL-licensed third-party code; everything else is BSD/public domain.
 
 ### 7.3 Binary acquisition (per platform, done in CI — see §15)
 
 - **Windows x64:** official prebuilt release archive from SourceForge (contains `ngspice.dll` + `.cm` files).
-- **macOS x64/arm64, Linux x64:** build from source in CI: `./configure --with-ngspice-lib --enable-xspice --enable-cider --with-x=no && make`. Cache by ngspice version. Homebrew is stale (v40) — do not depend on it.
+- **macOS x64/arm64, Linux x64:** build from source in CI: `./configure --with-ngshared --enable-xspice --enable-cider --with-x=no --disable-debug && make -j`. **The shared-library flag is `--with-ngshared`** (`--with-ngspice-lib` does not exist; a wrong flag silently produces an executable instead of `libngspice.{dylib,so}`). The build script must verify the output is actually a shared library (`file` says "shared object"/"dynamically linked shared library"). Do not use Homebrew: its formula does not build the shared library at all, regardless of version.
 - Pin the ngspice version in one config file; binaries land in `resources/ngspice/<platform>/`.
 
 ### 7.4 Known gotchas (each one is a verified bug-report-grade fact; encode them in code, not tribal memory)
 
 1. **`alter` device names must be lowercase** through the shared-library API. Uppercase silently no-ops. SimHost lowercases every device token defensively.
 2. **Never call `ngSpice_Command` from inside a `SendData` callback** — deadlock/no-op. SimHost queues all commands; the queue is drained only from the main JS thread, never from FFI callback frames.
-3. The interactive-change sequence is `bg_halt` → `alter …` → `bg_resume`. Batch multiple pending alters inside one halt/resume window.
-4. Memory accumulates across re-runs; issue `destroy all` before each new `loadCircuit`.
-5. Convergence failures arrive as text via `SendChar` and via `ControlledExit`. SimHost pattern-matches known failure strings ("timestep too small", "no convergence") into structured `convergenceFailure` events.
-6. **Watchdog:** if a command gets no response/progress within 10 s, SimHost is killed and respawned by Main. Because libngspice state is unrecoverable after some failures, respawn (not in-process retry) is the only reliable reset.
+3. The interactive-change sequence is `bg_halt` → `alter …` → `bg_resume`. Batch multiple pending alters inside one halt/resume window. **Halt/resume ownership state machine:** three actors issue halts (user pause, alter batching, pacing). SimHost keeps a single `haltOwner: 'none'|'user'|'alter'|'pacing'` state; only the owner that halted may resume, and `user` outranks the others (an alter batch or pacing tick during user-pause applies the alters but does not resume). Without this guard, the 50 ms pacing timer races the alter batcher into double-halt / missed-resume states.
+4. **Blocking FFI calls must use koffi's async call form.** A synchronous `ngSpice_Command("op")` blocks SimHost's event loop, which (a) stops koffi from delivering background-thread callbacks and (b) makes the watchdog timer unable to fire during the exact hangs it exists to catch. Any command that can run long (`op`, non-bg `tran`, `loadCircuit`) is invoked async; `bg_*` commands return immediately and may stay sync.
+5. Memory accumulates across re-runs; issue `destroy all` before each new `loadCircuit`.
+6. Convergence failures arrive as text via `SendChar` and via `ControlledExit`. SimHost pattern-matches known failure strings ("timestep too small", "no convergence") into structured `convergenceFailure` events.
+7. **Watchdog:** if a command gets no response/progress within 10 s, SimHost exits and is respawned by Main. Because libngspice state is unrecoverable after some failures, respawn (not in-process retry) is the only reliable reset. (Viable only because of gotcha 4 — the event loop must be free to run the timer.)
 
-### 7.5 Real-time pacing
+### 7.5 Real-time pacing and bounded bench windows
 
-ngspice simulates as fast as possible — small circuits run far faster than wall-clock. For the "live bench" feel, SimHost paces: a 50 ms interval timer compares sim-time progress vs wall-time and issues `bg_halt`/`bg_resume` to hold `realtimeFactor` ≈ 1.0 (or runs unthrottled when the user selects `max`). The actual achieved factor is reported in `status` events and shown in the UI (slow complex circuits will run < 1× and that must be visible, not mysterious).
+ngspice simulates as fast as possible — small circuits run far faster than wall-clock. For the "live bench" feel, SimHost paces: a 50 ms interval timer compares sim-time progress vs wall-time and issues `bg_halt`/`bg_resume` (respecting the haltOwner state machine, §7.4.3) to hold `realtimeFactor` ≈ 1.0 (or runs unthrottled when the user selects `max`). The actual achieved factor is reported in `status` events and shown in the UI (slow complex circuits will run < 1× and that must be visible, not mysterious).
+
+**Memory constraint (verified): an indefinite transient is not possible.** In shared-library/interactive mode, ngspice retains *every timepoint of every saved vector in RAM* for the life of the plot — the write-to-disk rawfile path exists only in batch mode. A `tran` left running for an open-ended bench session grows until OOM. Therefore the "continuous" bench is implemented as **bounded bench windows**:
+
+- Each Run executes a transient with a finite `tstop` = the bench window `W` (default 30 s of sim-time; configurable).
+- When sim-time reaches `W` (or SimHost RSS exceeds a 1.5 GB guard), SimHost halts, issues `destroy all`, reloads the deck, restarts the transient from t = 0, and emits `benchRestarted` (§6.1) so the UI shows a brief "bench restarted" notice. Scope history survives — the renderer's ring buffers own all history; ngspice never needs to retain it.
+- State across a restart is re-established by the circuit settling again from initial conditions (acceptable for hobbyist observation; sequential-logic state loss is a documented limitation surfaced in the restart notice when digital parts are present).
+- To slow growth within a window, the deck saves all node voltages (needed for the live board overlay) but *not* blanket device currents — `.options savecurrents` is replaced by targeted `.save @dev[i]` lines for active current probes only (§8.8 amended).
 
 ### 7.6 Fallback adapter
 
@@ -213,16 +244,36 @@ KiCad files are UTF-8 Lisp-style S-expressions. Implement a ~200-line tokenizer 
 From `.kicad_pcb`, extract into:
 
 ```ts
+type Vec2 = { x: number; y: number };
+
+// Raw Edge.Cuts primitives (input to outline stitching). KiCad 6+ arcs are the
+// three-point form: start/mid/end are points ON the arc (mid ≠ center).
+type EdgePrimitive =
+  | { kind: 'line'; start: Vec2; end: Vec2 }
+  | { kind: 'arc'; start: Vec2; mid: Vec2; end: Vec2 }
+  | { kind: 'circle'; center: Vec2; radiusPoint: Vec2 }
+  | { kind: 'rect'; start: Vec2; end: Vec2 };
+
+// Copper tracks: discriminated union; arcs use the same three-point form.
+type TrackSegment =
+  | { kind: 'segment'; start: Vec2; end: Vec2; widthMm: number; layer: string; netId: number }
+  | { kind: 'arc'; start: Vec2; mid: Vec2; end: Vec2; widthMm: number; layer: string; netId: number };
+
 interface BoardModel {
-  netByid: Map<number, { id: number; name: string }>;
+  netById: Map<number, { id: number; name: string }>;
   footprints: Footprint[];
-  tracks: TrackSegment[];      // (segment …) and (arc …), with netId, layer, width
+  tracks: TrackSegment[];
   vias: Via[];                 // at, size, drill, layers, netId
   zones: Zone[];               // filled polygons with holes, netId, layer
-  outline: OutlineGeometry;    // stitched closed loop(s) from Edge.Cuts gr_line/gr_arc
-  silkscreen: BoardText[];     // gr_text + fp_text on F/B.Silkscreen
+  edgeCuts: EdgePrimitive[];   // raw, in file order
+  outline: OutlineGeometry;    // stitched from edgeCuts (see below)
+  silkscreen: BoardText[];     // gr_text + fp_text on F.SilkS/F.Silkscreen + B equivalents
   boardThicknessMm: number;    // from (general (thickness …)), default 1.6
 }
+interface OutlineGeometry { outer: Vec2[][]; holes: Vec2[][]; warnings: string[] }
+// Multiple outer loops are legal (panelized/odd boards): the substrate builder
+// creates one THREE.Shape per outer loop (holes assigned by containment) and
+// merges the extrusions. Parsers must default absent rotation to rotDeg: 0.
 interface Footprint {
   ref: string; value: string; libId: string;          // "Resistor_SMD:R_0402"
   layer: 'F' | 'B'; at: { x: number; y: number; rotDeg: number };
@@ -251,13 +302,18 @@ From `.kicad_sch` (minimal parse — no rendering): per symbol instance keyed by
 ```ts
 interface Circuit {
   nets: CircuitNet[];                 // every net with ≥1 pad
-  parts: Part[];                      // one per footprint, with padNet: Map<padNumber, netId>
+  parts: Part[];
   warnings: NetlistWarning[];         // floating pads, single-pad nets, nets with no driver
 }
 interface CircuitNet { id: number; kicadName: string; spiceNode: string; padRefs: { ref: string; pad: string }[] }
+interface Part {
+  ref: string; value: string; libId: string; layer: 'F' | 'B';
+  padNet: Map<string /* pad number */, number /* netId */>;
+  properties: Record<string, string>;          // board fields merged with BOM (BOM wins)
+}
 ```
 
-SPICE node naming: sanitize KiCad net names (strip `/`, `(`, `)`, spaces → `_`; collision-check; keep a bidirectional map). The user-designated ground net maps to node `0`. Heuristic ground/power suggestions (`GND|AGND|DGND|VSS|0V` / `VCC|VDD|\+?\d+V\d*|3V3|5V`) are suggestions only — the UI confirms with the user.
+SPICE node naming (deterministic algorithm — golden tests depend on it): lowercase the KiCad net name; replace every character outside `[a-z0-9_]` with `_`; collapse runs of `_`; on collision append `_2`, `_3`, …. Examples: `VIN` → `vin`; `+5V` → `_5v`; `Net-(R1-Pad1)` → `net_r1_pad1_`. Keep a bidirectional map. The user-designated ground net maps to node `0`. Heuristic ground/power suggestions (`GND|AGND|DGND|VSS|0V` / `VCC|VDD|\+?\d+V\d*|3V3|5V`) are suggestions only — the UI confirms with the user.
 
 ### 8.4 `core/bom` — BOM CSV import
 
@@ -270,7 +326,7 @@ Every `Part` is resolved through a tier cascade; first hit wins; every resolutio
 | Tier | Source | Covers |
 |---|---|---|
 | 1 | **Schematic `Sim.*` fields** (if `.kicad_sch` loaded) | Anything the user already configured in KiCad — highest fidelity, includes explicit `Sim.Pins` mapping |
-| 2 | **Built-in primitive inference** | R/C/L from refdes prefix + parsed value (`10k`, `4.7u`, `100n` — full SI suffix parser incl. `Meg`); polarity-aware for electrolytics |
+| 2 | **Built-in primitive inference** | R/C/L from refdes prefix + parsed value (`10k`, `4.7u`, `100n`, `4k7`); value-field suffix convention: `M`/`Meg`/`MEG` = mega, lowercase `m` = milli (this is the *value-field* domain, not SPICE text — decks emit plain numbers, §8.8); polarity-aware for electrolytics |
 | 3 | **Bundled model library** (see format below) | Common diodes/LEDs/BJTs/MOSFETs, op-amps, comparators, 555, linear regulators, 74HC logic — matched by MPN (normalized), then value, then footprint hints |
 | 4 | **User-imported `.lib`/`.sub` files** | Vendor models the *user* downloads (TI etc. — never bundled; see §14) |
 | 5 | **LLM-assist paste** (§8.7) | Anything else with a datasheet |
@@ -300,11 +356,11 @@ interface LibraryEntry {
 }
 ```
 
-**Pin mapping is a first-class correctness problem.** A board file gives only pad *numbers*. SOT-23 transistor pinouts vary by part; KiCad convention puts diode cathode on pad 1; an op-amp subckt's node order is arbitrary. Therefore: every library entry carries explicit per-footprint pin maps; Tier-1 resolutions use KiCad's `Sim.Pins`; and the Model Doctor (§8.6) includes a pin-map viewer/editor showing pad numbers on the 3D footprint next to model terminal names. Wrong pin maps produce confidently-wrong simulations — the worst failure mode for this audience.
+**Pin mapping is a first-class correctness problem.** A board file gives only pad *numbers*. SOT-23 transistor pinouts vary by part; *standard KiCad library* diode/LED footprints put the cathode on pad 1 (a library default, not a rule — third-party footprints differ, which is why every default map must be user-verifiable in the pin-map editor); an op-amp subckt's node order is arbitrary. Therefore: every library entry carries explicit per-footprint pin maps; Tier-1 resolutions use KiCad's `Sim.Pins`; and the Model Doctor (§8.6) includes a pin-map viewer/editor showing pad numbers on the 3D footprint next to model terminal names. Wrong pin maps produce confidently-wrong simulations — the worst failure mode for this audience.
 
 **Bundled model content rules (licensing — verified, non-negotiable):**
-- Write our own models: behavioral op-amp/comparator/regulator macromodels from datasheet parameters; LED/diode `.model` cards; 74HC parts as XSPICE `d_lut`/`d_state` behavioral templates (adc_bridge → logic → dac_bridge with datasheet-typical delays). All MIT-licensed with provenance headers.
-- ngspice's own `special_models` (555, LM741) may be adapted (BSD-compatible).
+- Write our own models: behavioral op-amp/comparator/regulator macromodels from datasheet parameters; LED/diode `.model` cards; a behavioral NE555 (two comparators + RS latch + discharge switch, from the datasheet block diagram); 74HC parts as XSPICE `d_lut`/`d_state` behavioral templates (adc_bridge → logic → dac_bridge with datasheet-typical delays). All MIT-licensed with provenance headers.
+- ngspice's distributed example netlists (e.g. `examples/p-to-n-examples/555-timer-*.cir` — there is no `special_models` directory in the distribution) may be *consulted* for structure, but per-file provenance is unstated; do not copy their text into the bundle.
 - **Never bundle:** TI/ADI/onsemi vendor models ("use only with our devices" licenses), Micro-Cap-derived 74xx libraries (ngspice's own page flags them non-redistributable), Intusoft-derived `74HC.LIB` ("All Rights Reserved" header).
 - Initial library scope (v1 target ≈ 60 entries): 1N4148/1N400x/Zeners/generic LEDs per color, 2N2222/2N3904/2N3906/BC547/BC557, 2N7002/AO3400/IRLZ44N-class MOSFETs, LM358/LM324/TL072/LM393, NE555, 78xx/AMS1117-class behavioral LDOs, 74HC00/04/08/14/32/74/86/164/595, common Schottkys.
 
@@ -322,12 +378,16 @@ Deterministic, pure function: `(circuit, resolutions, instruments, groundNetId, 
 
 Rules:
 - Element names derive from refs (`r_r1`, `q_q3`, `x_u2`) — lowercase always (alter gotcha).
+- **All numeric values are emitted as plain decimal or exponent notation (`10000`, `4.7e-06`) — never letter suffixes.** This sidesteps SPICE's `M`-means-milli trap entirely; suffix interpretation happens once, in `parseValue` (§8.4 conventions: in *value fields*, `M`/`Meg` = mega, lowercase `m` = milli).
 - Instruments are SPICE elements with stable names (`vpsu_1`, `vfgen_2`, `vlogic_3`) so `alter` can target them.
-- Voltage probes need no elements (node voltages are saved); current probes use the device's own current vector where available, else insert a 0 V ammeter source `vamm_<id>`.
-- Emit `.options savecurrents`, sane `gmin`/`reltol` defaults, `.options noacct`.
+- **Series-resistance splice rule (overlay correctness):** the synthetic node goes on the *source side*, so the KiCad net keeps its own spiceNode and the board overlay/probes read the true pin voltage. E.g. supply on net `vin`: `vpsu_1 vpsu_1_int 0 DC 5` + `rpsu_1 vpsu_1_int vin 0.1`. Voltage overlay and op annotations must always read the named-net node, never a synthetic `_int` node.
+- Voltage probes need no elements (node voltages are saved).
+- **Current probes attach to a specific part, and their liveness depends on the model tier:** parts resolved as top-level primitives (R/C/L/diode/BJT…) read the device's own vector `@<dev>[i]` — live, no deck change. Parts resolved as subckts expose **no** instance current vector (`@x_u2[i]` does not exist); probing them inserts a 0 V ammeter `vamm_<id>` in series at the probed pad, which is a deck-regen + reload operation, not a live alter. The UI must reflect this (probe applies on next reload).
+- Saving: `.save all` for node voltages (board overlay needs every net) plus targeted `.save @<dev>[i]` per active current probe. Do **not** emit blanket `.options savecurrents` — it multiplies vector count and accelerates the §7.5 memory growth.
+- Sane `gmin`/`reltol` defaults, `.options noacct`.
 - Every deck ends with provenance comments (tier per part) so a saved deck is self-describing.
 - Digital templates expand to `adc_bridge`/`dac_bridge` instances per the XSPICE pattern.
-- Convergence aids: if op fails, retry ladder — `.options gminsteps` bump, then source-stepping (`.options srcsteps`), then report structured failure (§7.4.5). Encode the ladder in SimHost, not the user's lap.
+- Convergence aids: if op fails, retry ladder — `.options gminsteps` bump, then source-stepping (`.options srcsteps`), then report structured failure (§7.4.6). Encode the ladder in SimHost, not the user's lap.
 
 ---
 
@@ -341,11 +401,12 @@ type Instrument =
       freqHz: number; amplitudeV: number; offsetV: number; dutyPct?: number; outputOhms: number /* default 50 */ }
   | { kind: 'logic-input'; id: string; netId: number; level: 0 | 1; vHigh: number /* default = chosen rail */ }
   | { kind: 'voltage-probe'; id: string; netId: number; color: string }
-  | { kind: 'current-probe'; id: string; ref: string; color: string }       // device current
+  | { kind: 'current-probe'; id: string; ref: string; pad?: string; color: string }
+      // device current; pad designates the ammeter splice point for subckt parts (§8.8)
 ```
 
-- Mapping to SPICE: dc-supply → `v… node 0 DC <v>` + series R; function-gen → `SIN`/`PULSE` source forms; logic-input → DC source toggled via `alter`.
-- All knob changes route through the alter queue (`bg_halt`→alters→`bg_resume`); changing *waveform shape* (not just value) requires deck regen + reload — the store knows which edits are alter-safe vs reload-required.
+- Mapping to SPICE: dc-supply → `v… node 0 DC <v>` + series R per the §8.8 splice rule; function-gen → `SIN`/`PULSE` source forms; logic-input → DC source toggled via `alter`.
+- Knob changes route through the alter queue (`bg_halt`→alters→`bg_resume`). **Alter-safe:** dc-supply volts, logic-input level, and function-gen freq/amplitude/offset — SIN/PULSE parameters are altered with the vector form, all params re-sent together, exact spacing required: `alter @vfgen_2[sin] [ <vo> <va> <freq> ]`. **Reload-required:** waveform *type* changes (sine↔pulse↔triangle — the element card changes) and current probes on subckt parts (§8.8). The store knows which edits are which.
 - Attachment UX: drag instrument from a rack onto the 3D board (drop targets = pads/vias/tracks → resolves to a net) or onto a net in the net list. Probes: click = voltage probe; Shift+click on a component = current probe (Proteus-style live probing; no restart).
 - **MCU interactive-pins stub:** a panel per stubbed MCU listing its pads (named via schematic pin names when available). Each pin can be: Hi-Z (default), driven 0/1 (toggle → logic-input source), or watched (voltage readout). This covers "press the button, did the GPIO net go high" validation without firmware simulation.
 
@@ -357,7 +418,7 @@ type Instrument =
 
 | Element | Technique |
 |---|---|
-| FR4 substrate | Stitched Edge.Cuts loops → `THREE.Shape` (+holes) → `ExtrudeGeometry`, depth = board thickness |
+| FR4 substrate | Stitched Edge.Cuts loops → one `THREE.Shape` per outer loop (holes assigned by containment) → `ExtrudeGeometry` per shape, merged; depth = board thickness |
 | Copper tracks | Per net per layer: segments/arcs → polyline extrusion (vendored `geometry-extrude` for miter joins, or rect-per-segment + round caps as the simpler fallback) → **merged into one `BufferGeometry` per (net, layer)** |
 | Pads | Shape geometry per pad merged into the same per-net buffers; `InstancedMesh` for plated drills |
 | Zones | Filled polygons (with holes) → `ExtrudeGeometry`, thin, per (net, layer) |
@@ -417,7 +478,7 @@ Parse + first render of a 5 MB board ≤ 2 s on a mid-range laptop; 60 fps orbit
 ## 13. Testing strategy
 
 - **Unit (Vitest):** sexpr parser (quoting, escapes, junk tolerance); board parsing against hand-authored fixtures; Edge.Cuts stitching (arcs, cutouts, broken loops); value parser (`4k7`, `100n`, `2.2Meg`); netlist extraction; model resolution tiers + pin maps; deck generation (golden-file decks); BOM column mapping.
-- **Fixtures:** authored from scratch in-repo (small KiCad projects we own): `fixture-rc.kicad_pcb` (RC divider), `fixture-555.kicad_pcb` (+ sch), `fixture-mixed` (74HC + MCU stub), `fixture-arcs` (curved outline + cutout). No third-party board files in the repo.
+- **Fixtures:** authored from scratch in-repo (small KiCad projects we own): `fixture-rc.kicad_pcb` (RC divider), `fixture-555.kicad_pcb` + `.kicad_sch` (a *complete* minimal 555 astable — NE555, two resistors, two capacitors, LED + series resistor — so end-to-end acceptance tests can actually oscillate), `fixture-mixed` (74HC + MCU stub), `fixture-arcs` (curved outline + cutout). No third-party board files in the repo.
 - **SimHost integration (Node, real libngspice):** load RC deck → op → assert node voltage ±1%; transient RC charge curve vs analytic e^(−t/RC) within tolerance; alter mid-run changes steady state; kill/respawn replay; digital smoke test (`d_inv` via bridges) proving `.cm` loading.
 - **E2E (Playwright, one path):** open fixture-555 → power on → op annotations appear → run → scope draws ≥ N samples → alter supply voltage → annotation changes.
 - **CI gates:** unit + simhost-integration on all three OS runners; E2E on Linux runner (xvfb).
@@ -431,7 +492,7 @@ Parse + first render of a 5 MB board ≤ 2 s on a mid-range laptop; 60 fps orbit
 | ngspice library + `.cm` (minus `table.cm`) | Bundle; include `COPYING` in About + installer |
 | Bundled SPICE models | Only in-house-written (MIT, provenance header) or verified-BSD; CI check: every file in `resources/models/` must contain a `Provenance:` header |
 | Vendor models (TI/ADI/onsemi), Micro-Cap/Intusoft libs | **Never in repo or bundle**; user-import path only |
-| KiCad packages3D `.wrl` | **Never bundled**; loaded from user's KiCad install at runtime |
+| KiCad packages3D `.wrl` | **Never bundled**; loaded from user's KiCad install at runtime. No caching of `.wrl` files into app-data either — a model cache is redistribution and triggers CC-BY-SA share-alike |
 | kicanvas / Velxio | MIT-but-alpha / AGPLv3 — **do not vendor code from either**; pattern reference only |
 | App + own code | MIT |
 
@@ -439,7 +500,7 @@ Parse + first render of a 5 MB board ≤ 2 s on a mid-range laptop; 60 fps orbit
 
 ## 15. Build, packaging, CI
 
-- GitHub Actions matrix: `windows-latest`, `macos-13` (x64), `macos-14` (arm64), `ubuntu-latest`.
+- GitHub Actions matrix: `windows-latest`, `macos-15-intel` (x64 — the `macos-13` image was retired in Dec 2025), `macos-14` (arm64), `ubuntu-latest`. macOS runners need `brew install autoconf automake libtool` before the ngspice source build.
 - Pipeline: fetch/build ngspice (cached per version) → typecheck → unit tests → simhost integration tests → package (electron-builder: NSIS `.exe`, `.dmg`, AppImage + `.deb`) → upload artifacts on tags.
 - Code signing/notarization: out of scope for v1 builds (documented as a release-blocker note for distribution beyond direct download).
 - ngspice version + download/build steps live in `scripts/fetch-ngspice.{ts,sh}` with the version pinned in `package.json` config.

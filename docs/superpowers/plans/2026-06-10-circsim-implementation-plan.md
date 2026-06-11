@@ -46,7 +46,7 @@ Phase 6: T24 → T26 → T27 ; T24 → T28
 - [ ] Add a `simhost` build entry to `electron.vite.config.ts` (extra Node entry alongside `main`/`preload`) producing `out/simhost/index.js`.
 - [ ] ESLint rule: `no-restricted-imports` of `electron|react|three` for files under `src/core/**`.
 - [ ] Smoke test asserting Vitest runs: `expect(1 + 1).toBe(2)`.
-- [ ] CI: `.github/workflows/ci.yml` matrix `[windows-latest, macos-13, macos-14, ubuntu-latest]`, steps: checkout → setup-node 20 → `npm ci` → `npm run typecheck` → `npm test`. (ngspice steps land in Task 8.)
+- [ ] CI: `.github/workflows/ci.yml` matrix `[windows-latest, macos-15-intel, macos-14, ubuntu-latest]` (NOT `macos-13` — that runner image was retired Dec 2025), steps: checkout → setup-node 20 → `npm ci` → `npm run typecheck` → `npm test`. (ngspice steps land in Task 8.)
 - [ ] Acceptance: `npm run dev` opens a window titled "circsim"; `npm test` passes; CI green on all four runners.
 
 ---
@@ -127,6 +127,8 @@ Spec §2, §8.2 (the `BoardModel`/`Footprint`/`Pad` interfaces there are normati
       (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) (net 3 "GND"))
   )
   (segment (start 10.9125 10) (end 19.0875 10) (width 0.25) (layer "F.Cu") (net 2))
+  (gr_text "fixture-rc" (at 15 17) (layer "F.SilkS")
+    (effects (font (size 1 1) (thickness 0.15))))
   (gr_line (start 0 0) (end 30 0) (layer "Edge.Cuts") (width 0.1))
   (gr_line (start 30 0) (end 30 20) (layer "Edge.Cuts") (width 0.1))
   (gr_line (start 30 20) (end 0 20) (layer "Edge.Cuts") (width 0.1))
@@ -134,8 +136,8 @@ Spec §2, §8.2 (the `BoardModel`/`Footprint`/`Pad` interfaces there are normati
 )
 ```
 
-- [ ] Failing tests: `parseBoard(text)` returns 3 named nets + net 0 ignored; 2 footprints with correct `ref`, `value`, `libId`, `at`; R1 pad "1" → netId 1, pad "2" → netId 2; 1 track segment with netId 2, width 0.25; board thickness 1.6; 4 Edge.Cuts primitives collected raw (stitching is Task 4).
-- [ ] Implement `parseBoard` on top of `core/sexpr`. **Both** `fp_text reference|value` (KiCad 6/7) **and** `(property "Reference" …)` (KiCad 8+) forms must populate ref/value — add a small KiCad-8-style footprint variant test inline (string literal in the test, not a second fixture).
+- [ ] Failing tests: `parseBoard(text)` returns 3 named nets + net 0 ignored; 2 footprints with correct `ref`, `value`, `libId`, `at` — **including `at.rotDeg === 0` when the rotation token is absent** (common NaN bug); R1 pad "1" → netId 1, pad "2" → netId 2; 1 track segment (`kind:'segment'`, netId 2, widthMm 0.25 — `TrackSegment` is the discriminated union from Spec §8.2); board thickness 1.6; `edgeCuts` has 4 `EdgePrimitive`s of `kind:'line'` (type defined in Spec §8.2; stitching is Task 4); `silkscreen` has ≥ 1 entry (the `gr_text` on F.SilkS) and value text on `F.Fab` is NOT in `silkscreen`.
+- [ ] Implement `parseBoard` on top of `core/sexpr`. **Both** `fp_text reference|value` (KiCad 6/7) **and** `(property "Reference" …)` (KiCad 8+) forms must populate ref/value — add a small KiCad-8-style footprint variant test inline (string literal in the test, not a second fixture). Accept both `F.SilkS` and `F.Silkscreen` layer spellings. Pad `layers` lists are NOT validated against the file's `(layers …)` table (files legitimately reference undeclared layers).
 - [ ] Unknown tokens anywhere must be skipped silently (test: inject `(zzz_future_field 42)` at three levels, parse still succeeds).
 - [ ] Acceptance: tests pass; fixture committed.
 
@@ -146,10 +148,9 @@ Spec §2, §8.2 (the `BoardModel`/`Footprint`/`Pad` interfaces there are normati
 - Test: `src/core/kicad/__tests__/outline.test.ts`
 - Create: `fixtures/fixture-arcs.kicad_pcb` (rounded-corner rectangle outline using 4 `gr_line` + 4 `gr_arc`, plus one interior circular cutout `gr_circle`; author by hand, ~30 lines, same header style as Task 3's fixture)
 
-Spec §8.2 "Edge.Cuts stitching". API:
+Spec §8.2 "Edge.Cuts stitching". `EdgePrimitive`, `Vec2` (`{x,y}`), and `OutlineGeometry` are defined in Spec §8.2 — copy them, don't improvise. KiCad 6+ arcs are the three-point form (`start`/`mid`/`end` are points ON the arc; `mid` is not the center). API:
 
 ```ts
-export interface OutlineGeometry { outer: Vec2[][]; holes: Vec2[][]; warnings: string[] }
 export function stitchOutline(primitives: EdgePrimitive[], toleranceMm?: number /* 0.01 */): OutlineGeometry;
 ```
 
@@ -157,11 +158,11 @@ export function stitchOutline(primitives: EdgePrimitive[], toleranceMm?: number 
 - [ ] Implement: endpoint-matching chain builder with tolerance; arc tessellation from KiCad's (start/mid/end) arc form; containment test via point-in-polygon; area sign normalization (outer CCW, holes CW).
 - [ ] Acceptance: all tests pass including the arcs fixture parsed end-to-end through `parseBoard` + `stitchOutline`.
 
-### Task 5: `core/kicad` — minimal schematic parser
+### Task 5: `core/kicad` — minimal schematic parser + full 555 fixture pair
 
 **Files:**
 - Create: `src/core/kicad/schematic.ts`
-- Create: `fixtures/fixture-555.kicad_sch` (hand-authored minimal: two symbols — `R1` with `Sim.Device=R`, `U1` with `Sim.Library=ne555.lib`, `Sim.Name=NE555`, `Sim.Pins=1=GND 2=TRIG 3=OUT 4=RESET 5=CTRL 6=THRES 7=DISCH 8=VCC`; pins with numbers+names; one no-connect)
+- Create: `fixtures/fixture-555.kicad_sch` AND `fixtures/fixture-555.kicad_pcb` — a **complete minimal 555 astable** (this pair is reused by Task 14b, Task 24's acceptance, and Task 26's sample): components U1 (NE555, `Sim.Pins=1=GND 2=TRIG 3=OUT 4=RESET 5=CTRL 6=THRES 7=DISCH 8=VCC`, plus `Sim.Library`/`Sim.Name` fields), R1 10k (VCC→DISCH), R2 47k (DISCH→THRES), C1 10u (THRES→GND, THRES tied to TRIG), C2 100n (CTRL→GND), R3 330 (OUT→LED_A), D1 LED (LED_A→GND), nets VCC/GND/DISCH/THRES/OUT/LED_A; RESET tied to VCC. The `.kicad_pcb` mirrors the same nets/pads using the Task 3 fixture's footprint style (SOIC-8 for U1: 8 pads numbered 1–8). U1's pins carry numbers+names; include one no-connect example on a spare net. Author both by hand following Task 3 conventions.
 - Test: `src/core/kicad/__tests__/schematic.test.ts`
 
 Spec §2, §8.2. API: `parseSchematicSimData(text): SchematicSimData` where `SchematicSimData = Map<string /*ref*/, SymbolSimInfo>`; `SymbolSimInfo = { value?: string; sim: Partial<Record<'Device'|'Type'|'Params'|'Pins'|'Library'|'Name', string>>; pins: { number: string; name: string; type: string }[]; noConnects: string[] }`.
@@ -178,8 +179,8 @@ Spec §2, §8.2. API: `parseSchematicSimData(text): SchematicSimData` where `Sch
 
 Spec §8.3 (interfaces normative). 
 
-- [ ] Failing tests: fixture-rc → 3 `CircuitNet`s; `OUT` net has padRefs `[{R1,2},{R2,1}]`; spiceNode sanitization (`Net-(R1-Pad1)` → `net__r1_pad1__`-style: only `[a-z0-9_]`, collision suffix `_2`); designated ground netId → spiceNode `"0"`; warnings: pad with no net → `floating-pad`, net with single pad → `single-pad-net`; `suggestGround(nets)` returns the `GND` net for names `GND|AGND|DGND|VSS|0V` (case-insensitive) and `suggestSupplies(nets)` matches `VCC|VDD|3V3|5V|+5V|+3.3V|12V` patterns.
-- [ ] Implement.
+- [ ] Failing tests: fixture-rc → 3 `CircuitNet`s; `OUT` net has padRefs `[{R1,2},{R2,1}]`; spiceNode sanitization follows the Spec §8.3 deterministic algorithm exactly — assert `VIN`→`vin`, `+5V`→`_5v`, `Net-(R1-Pad1)`→`net_r1_pad1_`, collision → `_2` suffix; designated ground netId → spiceNode `"0"`; `Part` objects built per Spec §8.3 (`padNet` map correct for both fixtures); warnings: pad with no net → `floating-pad`, net with single pad → `single-pad-net`; `suggestGround(nets)` returns the `GND` net for names `GND|AGND|DGND|VSS|0V` (case-insensitive) and `suggestSupplies(nets)` matches `VCC|VDD|3V3|5V|+5V|+3.3V|12V` patterns.
+- [ ] Implement (the golden decks in Task 13 depend on this sanitization being exactly as specified — do not deviate).
 - [ ] Acceptance: tests pass.
 
 ### Task 7: value parser + BOM CSV importer
@@ -190,8 +191,8 @@ Spec §8.3 (interfaces normative).
 
 Spec §8.4, §8.5 Tier 2.
 
-- [ ] Failing tests for `parseValue(text, kind: 'R'|'C'|'L'): number|undefined` (returns base units):
-  `"10k"→1e4`, `"4k7"→4.7e3`, `"4.7u"→4.7e-6`, `"100n"→1e-7`, `"2.2Meg"→2.2e6`, `"0R22"→0.22`, `"1m" (R)→1e-3`, `"DNP"→undefined`, `"10uF"→1e-5`, `"470"(R)→470`.
+- [ ] Failing tests for `parseValue(text, kind: 'R'|'C'|'L'): number|undefined` (returns base units). Convention (Spec §8.5 Tier 2 — this is the *value-field* domain, not SPICE text): uppercase `M` and `Meg`/`MEG` = mega; lowercase `m` = milli. Decks never see suffixes (spicegen emits plain numbers), so SPICE's own M-means-milli rule never applies. Cases:
+  `"10k"→1e4`, `"4k7"→4.7e3`, `"4.7u"→4.7e-6`, `"100n"→1e-7`, `"2.2Meg"→2.2e6`, `"1M"(R)→1e6`, `"1m"(R)→1e-3`, `"0R22"→0.22`, `"DNP"→undefined`, `"10uF"→1e-5`, `"470"(R)→470`.
 - [ ] Failing tests for `parseBom(csvText): BomParseResult` (`{ rows: Map<ref, {value?, mpn?, footprint?}>, columnGuess: Record<string,string>, errors: string[] }`): comma + semicolon + tab autodetect; header aliases (`Designator`→ref, `Manufacturer Part Number`/`MPN`/`Part Number`→mpn); grouped-ref rows (`"R1, R2, R3"` in one row) expand to one entry per ref; quoted fields with embedded commas.
 - [ ] Implement both (no external CSV dependency; ~120 lines is enough given the tolerance requirements above).
 - [ ] Acceptance: tests pass.
@@ -210,8 +211,8 @@ Spec §8.4, §8.5 Tier 2.
 Spec §7.2, §7.3, §15.
 
 - [ ] `fetch-ngspice.mjs`: downloads the pinned official Windows 64-bit release archive from SourceForge, extracts `ngspice.dll` + `lib/ngspice/*.cm` into `resources/ngspice/win32-x64/`, **deletes `table.cm`**, verifies `digital.cm` exists, writes a `manifest.json` with version + sha256s.
-- [ ] `build-ngspice.sh`: on mac/linux builds the pinned version: `./configure --with-ngspice-lib --enable-xspice --enable-cider --with-x=no && make -j && copy lib + .cm files` into `resources/ngspice/<darwin-x64|darwin-arm64|linux-x64>/`, same `table.cm` deletion + manifest.
-- [ ] CI: add an ngspice step per OS with `actions/cache` keyed on the pinned version; artifacts must exist before tests of Phase 2 run.
+- [ ] `build-ngspice.sh`: on mac/linux builds the pinned version: `./configure --with-ngshared --enable-xspice --enable-cider --with-x=no --disable-debug && make -j` then copy the shared library + `.cm` files into `resources/ngspice/<darwin-x64|darwin-arm64|linux-x64>/`, same `table.cm` deletion + manifest. **The shared-library flag is `--with-ngshared`** — there is no `--with-ngspice-lib`; a wrong flag silently builds an executable instead. The script must end with a verification that the artifact is a shared library: `file libngspice.so | grep -q "shared object"` (Linux) / `test -f libngspice.dylib` + `file … | grep -q "dynamically linked shared library"` (macOS) — fail loudly otherwise.
+- [ ] CI: add an ngspice step per OS with `actions/cache` keyed on the pinned version (macOS runners first: `brew install autoconf automake libtool`); artifacts must exist before tests of Phase 2 run.
 - [ ] Acceptance: script run on each CI OS leaves `resources/ngspice/<platform>/{libngspice.*, lib/ngspice/digital.cm, manifest.json}` and **no `table.cm`**; a unit test asserts `manifest.json` parses and `table.cm` is absent.
 
 ### Task 9: SimHost FFI bindings + command queue + op analysis
@@ -244,10 +245,25 @@ bool ngSpice_running(void);
 ```
 
 - [ ] Implement `ngspiceFfi.ts` with koffi: load the platform library from `resources/ngspice/<platform>/` (path resolution helper honoring packaged vs dev layout), register the six callbacks, expose a typed wrapper.
-- [ ] **Hard rules encoded here:** (a) command strings lowercased for device tokens before `alter`; (b) callbacks ONLY enqueue onto an internal event queue — never call `ngSpice_Command` from a callback frame (drain the command queue from a `setImmediate` loop); (c) `destroy all` issued before every `loadCircuit`; (d) 10 s watchdog: if a submitted command produces no SendChar/SendStat/queue progress in 10 s, `process.exit(86)` (Main respawns, Task 11).
-- [ ] `loadCircuit` via `ngSpice_Circ`; `runOp` = command `op`, then read all vectors of the current plot via `ngSpice_CurPlot`/`ngSpice_AllVecs`/`ngGet_Vec_Info` into `opResult`.
-- [ ] Startup self-check: run the 3-card digital smoke deck (`adc_bridge`+`d_inv`+`dac_bridge` or simplest equivalent) once at init; on failure emit `log{level:'error'}` mentioning `.cm` (Spec §7.2).
-- [ ] Integration test (skipped automatically when `resources/ngspice/<platform>` is missing): deck `["* rc divider","v1 vin 0 dc 5","r1 vin out 10k","r2 out 0 10k",".end"]` → `runOp` → `opResult.values["out"]` ≈ 2.5 within 1 %; `values["vin"]` ≈ 5.
+- [ ] **`.cm` path bootstrap (packaging-critical, Spec §7.2):** before `ngSpice_Init`, generate a `spinit` file in an app-data/temp dir whose `codemodel` lines use ABSOLUTE paths to the five bundled `.cm` files, and set `process.env.SPICE_SCRIPTS` to that directory. Relative spinit paths resolve against the Electron executable in packaged builds and will silently fail — never rely on the stock spinit.
+- [ ] **Hard rules encoded here:** (a) command strings lowercased for device tokens before `alter`; (b) callbacks ONLY enqueue onto an internal event queue — never call `ngSpice_Command` from a callback frame (drain the command queue from a `setImmediate` loop); (c) `destroy all` issued before every `loadCircuit`; (d) **potentially-blocking commands (`op`, `loadCircuit`, non-bg runs) are invoked via koffi's async call form** — a sync FFI call blocks the event loop, which freezes both callback delivery and the watchdog timer (`bg_*` commands return immediately and may stay sync); (e) 10 s watchdog: if a submitted command produces no SendChar/SendStat/queue progress in 10 s, `process.exit(86)` (Main respawns, Task 11).
+- [ ] `loadCircuit` via `ngSpice_Circ`; `runOp` = async command `op`, then read all vectors of the current plot via `ngSpice_CurPlot`/`ngSpice_AllVecs`/`ngGet_Vec_Info` into `opResult`. **Key normalization (Spec §6.1):** `opResult.values` keys are bare lowercase node names (`"out"`, never `"v(out)"`/`"OUT"`); strip any `v(...)` wrapper ngspice returns; device/source currents keyed `i(<device>)`. Encode this in `protocol.ts` doc comments and assert it in the test.
+- [ ] Startup self-check: run this exact smoke deck once at init (XSPICE `a` elements are event-driven — `.tran`, never `.op`); pass = final `v(out)` ≥ 4.5; on failure emit `log{level:'error'}` naming the `.cm` files (Spec §7.2):
+
+```
+* cm smoke: 0V in -> adc -> d_inv -> dac -> expect ~5V out
+v1 in 0 dc 0
+abr_in [in] [din] adcm
+.model adcm adc_bridge(in_low=1.0 in_high=2.0)
+ainv din dout invm
+.model invm d_inv(rise_delay=1n fall_delay=1n)
+abr_out [dout] [out] dacm
+.model dacm dac_bridge(out_low=0 out_high=5)
+.tran 1n 20n
+.end
+```
+
+- [ ] Integration test (skipped automatically when `resources/ngspice/<platform>` is missing): deck `["* rc divider","v1 vin 0 dc 5","r1 vin out 10k","r2 out 0 10k",".end"]` → `runOp` → `opResult.values["out"]` ≈ 2.5 within 1 %; `values["vin"]` ≈ 5 (keys per the normalization rule above).
 - [ ] Acceptance: `npm run test:integration` passes locally and in CI on all OS runners.
 
 ### Task 10: SimHost transient streaming, pacing, alter
@@ -259,10 +275,12 @@ bool ngSpice_running(void);
 
 Spec §6.1, §7.4, §7.5.
 
-- [ ] `runTransient`: `bg_run` after `tran <tstep> <tstop>` setup; `SendInitData` → emit `vectors`; `SendData` → `sampleBatcher` (flush every 16 ms or 4096 points, transferable Float64Arrays).
-- [ ] `alter`: queue → `bg_halt` → all pending alters → `bg_resume` (batch window 30 ms so a knob drag coalesces).
-- [ ] Pacing (Spec §7.5): 50 ms loop comparing sim-time vs wall-time × factor, halting/resuming as needed; `setPace` with `'max'` disables; report achieved factor in `status` every 250 ms.
-- [ ] Convergence pattern-match on SendChar text ("timestep too small", "no convergence", "singular matrix") → `convergenceFailure` (Spec §7.4.5) and gmin/src-step retry ladder for `op` (Spec §8.8).
+- [ ] `runTransient`: issue `bg_tran <tstep> <tstop>` (decks carry no `.tran` card; a bare `bg_run` has no analysis to run); `SendInitData` → emit `vectors`; `SendData` → `sampleBatcher` (flush every 16 ms or 4096 points, transferable Float64Arrays).
+- [ ] **Bounded bench windows (Spec §7.5 — mandatory, sharedspice retains all timepoints in RAM):** `tstop` = bench window `W` (default 30 s sim-time). On window end OR SimHost RSS > 1.5 GB (check `process.memoryUsage().rss` in the pacing loop): halt → `destroy all` → reload deck → restart tran from t=0 → emit `benchRestarted{reason}`. Scope history lives in renderer ring buffers, so nothing is lost visually. Never issue an unbounded/huge tstop.
+- [ ] **Halt ownership state machine (Spec §7.4.3):** single `haltOwner: 'none'|'user'|'alter'|'pacing'` field; only the halting owner resumes; `user` outranks others (alters during user-pause apply but don't resume). Renderer `halt`/`resume` commands set/clear the `user` owner. Unit-test the state transitions with a stubbed engine.
+- [ ] `alter`: queue → `bg_halt` → all pending alters → `bg_resume` (batch window 30 ms so a knob drag coalesces), respecting haltOwner. Function-gen SIN/PULSE params use the vector form with exact spacing: `alter @vfgen_2[sin] [ <vo> <va> <freq> ]` (all params re-sent together).
+- [ ] Pacing (Spec §7.5): 50 ms loop comparing sim-time vs wall-time × factor, halting/resuming as needed (owner `pacing`); `setPace` with `'max'` disables; report achieved factor in `status` every 250 ms.
+- [ ] Convergence pattern-match on SendChar text ("timestep too small", "no convergence", "singular matrix") → `convergenceFailure` (Spec §7.4.6) and gmin/src-step retry ladder for `op` (Spec §8.8).
 - [ ] Integration tests: (1) RC charge: deck `v1 in 0 dc 5` / `r1 in out 1k` / `c1 out 0 1u`, tran 1u 10m → captured samples match `5*(1-e^(-t/RC))` within 2 % at t = 1 ms, 2 ms, 5 ms; (2) mid-run `alter v1` to 10 → final samples ≈ 10 V steady-state; (3) sample batches arrive as Float64Array with matching `simTime` length.
 - [ ] Acceptance: integration tests pass on all OS runners.
 
@@ -275,8 +293,8 @@ Spec §6.1, §7.4, §7.5.
 
 Spec §6, §6.1 (`crashed` event), §12.
 
-- [ ] `utilityProcess.fork(out/simhost/index.js)`; create a `MessageChannelMain`; pass one port to SimHost, relay the other to the renderer via `postMessage` on window load.
-- [ ] On SimHost exit (any code): emit `crashed { willRespawn: true }` to renderer, respawn with backoff (250 ms, 1 s, 5 s; give up after 5 consecutive crashes < 30 s apart → surface fatal error state).
+- [ ] `utilityProcess.fork(out/simhost/index.js)`; create a `MessageChannelMain`; send one port to SimHost via `child.postMessage` and the other to the renderer via `webContents.postMessage` — a **one-time handshake per spawn**; Main is NOT in the message path afterward (Spec §6).
+- [ ] On SimHost exit (any code): notify the renderer via the **contextBridge** path (`onSimhostCrashed(cb)` with `{ willRespawn }`) — the MessagePort died with the process and cannot carry this event (Spec §6.1). Respawn with backoff (250 ms, 1 s, 5 s; give up after 5 consecutive crashes < 30 s apart → surface fatal error state) and re-run the port handshake.
 - [ ] `contextIsolation: true`, `nodeIntegration: false`, CSP allowing `worker-src blob:` (troika — Spec §5 table).
 - [ ] Acceptance: unit test proves respawn/backoff with a child that exits immediately; `npm run dev` shows "simhost ready" log in devtools console.
 
@@ -305,22 +323,21 @@ Spec §8.5 (tier table normative).
 
 Spec §8.8, §9.
 
-- [ ] Failing golden test #1 (fixture-rc + ground=GND + dc-supply 5 V on VIN):
+- [ ] Failing golden test #1 (fixture-rc + ground=GND + dc-supply 5 V on VIN). Node names are deterministic per the Spec §8.3 sanitization algorithm (`VIN`→`vin`, `OUT`→`out`, ground→`0`), so this golden is exact. Note the series-R splice puts the synthetic node on the **source side** (Spec §8.8) so net `vin` keeps its name for the overlay:
 
 ```
 * circsim deck — fixture-rc
 * R1: tier 2 (primitive) | R2: tier 2 (primitive)
-vpsu_1 vin 0 DC 5
-rpsu_1 vin vin_psu 0.1
-r_r1 vin_psu out 10000
+vpsu_1 vpsu_1_int 0 DC 5
+rpsu_1 vpsu_1_int vin 0.1
+r_r1 vin out 10000
 r_r2 out 0 10000
-.options savecurrents
+.save all
 .end
 ```
 
-  (Exact node naming may differ per Task 6 sanitization — regenerate golden once, then freeze. Series-R splitting of the supply net: supply connects through `rpsu_1`; document the node-splice rule in code: instrument with `seriesOhms>0` splices a synthetic node.)
-- [ ] Tests: function-gen sine → `SIN(<offset> <amp> <freq>)` source; pulse with duty → `PULSE(…)` with computed widths; logic-input level 1, vHigh 5 → `DC 5`; current probe on R1 → reuse `@r_r1[i]` via savecurrents (no extra element); voltage probes add nothing; stub-open part contributes no cards but a comment line; stub-short ties pads via 1 µΩ resistors; xspice-digital template expands with `adc_bridge`/`dac_bridge` cards; every deck ends `.end`; all element names lowercase.
-- [ ] `alterPlan(instrumentChange) → {kind:'alter', device, value} | {kind:'reload'}`: value-only changes (volts, freq via re-deck? NO —) **rule:** `dc-supply.volts` and `logic-input.level` → alter; `function-gen` freq/amp/offset/wave → reload (SIN params are not alterable reliably); test this mapping.
+- [ ] Tests: function-gen sine → `SIN(<offset> <amp> <freq>)` source; pulse with duty → `PULSE(…)` with computed widths; logic-input level 1, vHigh 5 → `DC 5`; numeric emission rule — values always plain decimal/exponent, never letter suffixes (test a 4.7 µF cap emits `4.7e-06`); current probe on R1 (top-level primitive) → adds `.save @r_r1[i]`, no extra element; current probe on a subckt part → inserts `vamm_<id>` 0 V ammeter at the designated pad (golden test #2 — this is a reload-path deck change, Spec §8.8); voltage probes add nothing; stub-open part contributes no cards but a comment line; stub-short ties pads via 1 µΩ resistors; xspice-digital template expands with `adc_bridge`/`dac_bridge` cards; every deck ends `.end`; all element names lowercase; **no blanket `.options savecurrents`** (memory — Spec §8.8).
+- [ ] `alterPlan(instrumentChange) → {kind:'alter', commands: string[]} | {kind:'reload'}` rule (Spec §9): `dc-supply.volts`, `logic-input.level` → alter; `function-gen` freq/amp/offset → alter via the SIN/PULSE vector form `alter @vfgen_2[sin] [ <vo> <va> <freq> ]` (exact spacing, all params re-sent); `function-gen.wave` type change → reload; current-probe add/remove on subckt part → reload. Test every branch of this mapping.
 - [ ] Acceptance: golden + unit tests pass.
 
 ### Task 14a: Bundled model library — discretes
@@ -348,9 +365,9 @@ Spec §8.5.
 
 - [ ] Behavioral op-amp macromodel (single subckt, parameterized: Aol, GBW, slew, Vsat from rails) instantiated for LM358, LM324, TL072, LM393 (comparator variant: open-collector output stage).
 - [ ] Behavioral LDO/linear-regulator macromodel (Vout param, dropout, current limit) for 78xx family + AMS1117-3.3/5 (write from datasheet params — research confirmed no redistributable vendor model exists).
-- [ ] NE555: adapt ngspice's own `special_models` 555 (BSD-compatible; keep provenance line citing origin).
+- [ ] NE555: write an in-house behavioral subckt from the datasheet block diagram (two comparators + RS latch via XSPICE `d_srlatch` or a B-source latch + discharge switch + 5k/5k/5k divider). There is NO `special_models` directory in the ngspice distribution; its example netlists (`examples/p-to-n-examples/555-timer-*.cir`) may be consulted for structure but their text must not be copied (provenance unstated — Spec §8.5).
 - [ ] `logic74hc.json`: XSPICE digital templates (Spec §8.5 `xspice-digital`) for 74HC00/04/08/14/32/74/86/164/595 — gate-level using `d_nand`/`d_inv`/etc. with datasheet-typical delays, schmitt (HC14) via `d_inv` + hysteresis on the `adc_bridge` thresholds; per-package pinMaps (DIP-14/SOIC-14 etc. from datasheet pinouts).
-- [ ] Integration tests: LM358 voltage-follower deck → op → out ≈ in; 555 astable fixture deck → transient → oscillation period within 20 % of RC formula; 74HC00 NAND truth table via 4 op runs (inputs 00/01/10/11 → out high/high/high/low).
+- [ ] Integration tests: LM358 voltage-follower deck → op → out ≈ in; 555 astable fixture deck → transient → oscillation period within 20 % of RC formula; 74HC00 NAND truth table via **one `.tran` run stepping the four input states with PWL sources** (e.g. hold each state 1 µs, sample mid-state; inputs 00/01/10/11 → out high/high/high/low). XSPICE digital elements are event-driven and do NOT propagate in `.op` — never test digital logic with operating-point analysis.
 - [ ] Acceptance: tests pass.
 
 ### Task 15: Library matching (tier 3) + user `.lib` import (tier 4)
@@ -379,7 +396,7 @@ Spec §8.5, §8.7 (validation flow — engine call is injected, keep core pure: 
 
 Spec §10.1 (substrate row), §10.3.
 
-- [ ] `buildSubstrate(outline: OutlineGeometry, thicknessMm): THREE.BufferGeometry` via `THREE.Shape` (+holes) + `ExtrudeGeometry`; unit test asserts bounding box = 30×20×1.6 for fixture-rc and hole vertex presence for fixture-arcs.
+- [ ] `buildSubstrate(outline: OutlineGeometry, thicknessMm): THREE.BufferGeometry`: one `THREE.Shape` per `outer` loop (holes assigned to their containing loop) → one `ExtrudeGeometry` each → merged (Spec §8.2 note — `outer` is `Vec2[][]`, multi-loop boards are legal); unit test asserts bounding box = 30×20×1.6 for fixture-rc, hole vertex presence for fixture-arcs, and a two-outer-loop synthetic input produces merged geometry.
 - [ ] `scene.ts`: scene, ambient+directional lights, `OrbitControls`, ortho-top toggle, flip-to-back action, render loop with on-demand invalidation (render only when dirty — battery matters).
 - [ ] KiCad-Y-axis note: KiCad Y grows downward; viewport flips to Z-up right-handed — conversion lives in ONE exported function `kicadToWorld(x,y)` used by all geometry builders (test it).
 - [ ] Acceptance: `npm run dev` shows the fixture-rc board substrate in 3D, orbitable at 60 fps; geometry tests pass.
@@ -393,7 +410,7 @@ Spec §10.1 (substrate row), §10.3.
 
 Spec §10.1 (copper rows — **merge per (net, layer)**; that grouping is what enables picking/tinting later).
 
-- [ ] `buildCopper(board: BoardModel) → Map<netId, { F?: BufferGeometry; B?: BufferGeometry }>`: segments as quad strips with round caps (12-segment fans), arcs tessellated, pads as shape geometries (circle/rect/oval/roundrect; `custom` → bounding rect + warning), zone polygons earcut-triangulated (`THREE.ShapeUtils`), all merged per net/layer via `BufferGeometryUtils.mergeGeometries`.
+- [ ] `buildCopper(board: BoardModel) → Map<netId, { F?: BufferGeometry; B?: BufferGeometry }>`: `TrackSegment` is the Spec §8.2 discriminated union — `kind:'segment'` as quad strips with round caps (12-segment fans); `kind:'arc'` tessellated from the three-point start/mid/end form (compute center from the three points, ≥ 8 points per 90°) then rendered like segments; pads as shape geometries (circle/rect/oval/roundrect; `custom` → bounding rect + warning), zone polygons earcut-triangulated (`THREE.ShapeUtils`), all merged per net/layer via `BufferGeometryUtils.mergeGeometries`.
 - [ ] Vias: one `InstancedMesh` of cylinders; instance→netId lookup array kept alongside.
 - [ ] Materials: copper PBR per Spec §10.1 table; one material instance per net (clone of shared base) so tinting is per-net.
 - [ ] Unit tests: fixture-rc → copper map has nets 1,2,3; net 2 F geometry vertex count > net 1 (track + 2 pads); via instancing count matches fixture-arcs via count (add one via to that fixture).
@@ -491,7 +508,7 @@ Spec §11.
 Spec §4 (the primary scenario IS this task's acceptance), §6.1, §12.
 
 - [ ] Power On: generate deck → `loadCircuit` → `runOp` → op annotations on board (Task 20) + copper voltage tint; convergence failure → plain-language card with retry-ladder note + expandable raw log (Spec §12).
-- [ ] Run/Pause: deck (re)load when dirty → `runTransient` (tstep from fastest instrument: `min(1/(200·fmax), 10 µs)`, tstop = 1e6 s i.e. indefinite) → samples → ring buffers → scope + live voltage overlay (latest sample per probed net; un-probed nets keep op tint); pace selector (0.1×/1×/max) → `setPace`.
+- [ ] Run/Pause: deck (re)load when dirty → `runTransient` (tstep from fastest instrument: `min(1/(200·fmax), 10 µs)`; tstop = the bench window, default 30 s sim-time — never unbounded, Spec §7.5) → samples → ring buffers → scope + live voltage overlay (latest sample per probed net; un-probed nets keep op tint); `benchRestarted` events show a brief toast ("bench restarted" + sequential-logic caveat when digital parts present) while scope history persists in the ring buffers; pace selector (0.1×/1×/max) → `setPace`; Pause button → `halt`/`resume` commands (user-owner semantics, Task 10).
 - [ ] Fidelity banner: persistent when any `Resolution.status !== 'ok'`, listing refs + modes (Spec §8.6 wording); SimLog panel streams `log` events; `crashed` → toast + auto state replay (re-send deck + re-apply instrument state, resume if was running).
 - [ ] Acceptance (= Spec §4 scenario on fixture-rc + fixture-555): power-on annotates 2.5 V on OUT (rc); run + probe shows 555 oscillation on scope; supply knob drag changes amplitude live; kill SimHost process manually → app recovers within 5 s, sim resumes.
 
@@ -516,11 +533,13 @@ Spec §8.7.
 ### Task 26: Bundled sample project + Playwright E2E
 
 **Files:**
-- Create: `resources/sample/blinker-555.kicad_pcb`, `resources/sample/blinker-555.kicad_sch` (authored in-house: 555 astable + LED + R/C, ~8 components — author the files by hand following fixture conventions; netlist must simulate out-of-the-box with bundled models)
+- Create: `resources/sample/blinker-555.kicad_pcb`, `resources/sample/blinker-555.kicad_sch` (start from Task 5's `fixture-555` pair — copy and polish: nicer board outline, sensible silkscreen; netlist must simulate out-of-the-box with bundled models)
 - Create: `e2e/smoke.spec.ts`, `playwright.config.ts`
 - Modify: first-run UI (`App.tsx`): "Open sample project" empty-state button
 
 Spec §11 (first-run), §13 (E2E path).
+
+- [ ] Guard test (CI, plain Vitest): `parseBoard` + `parseSchematicSimData` + `extract` + `resolveAll` over the sample files → 0 parse errors, 0 unresolved parts. A malformed sample must fail CI, not first launch.
 
 - [ ] E2E (Playwright `_electron.launch`): launch → open sample → expect parts list 8 rows, 0 unresolved → Power On → expect ≥ 1 op annotation visible → Run → wait 2 s → expect scope canvas non-blank (pixel sample) → alter supply to 9 V → expect annotation text change.
 - [ ] CI: E2E on ubuntu runner under xvfb; artifact screenshots on failure.
@@ -564,4 +583,5 @@ VRML component models from user's KiCad install; AC/Bode panel (protocol already
 
 - **Spec coverage check:** §2–§12, §14–§15 all map to tasks (§5 → T1; §6 → T11/T21; §7 → T8–T10; §8 → T2–T7, T12–T15; §9 → T13/T22; §10 → T16–T20; §11 → T21–T24; §12 → T24/T28; §13 → distributed test steps + T26; §14 → T14a/T27; §15 → T1/T8/T27). §16/§17 are risk/deferral registers, no tasks needed.
 - **Known intentional deviations:** VRML loading deferred from Spec §10.1's "progressive enhancement" to post-v1 backlog (T18 note) — placeholder boxes satisfy v1 G1.
-- **Type-consistency anchors:** `SimCommand`/`SimEvent` (T9 copies Spec §6.1), `Resolution`/`LibraryEntry` (T12 copies Spec §8.5), `Instrument` (T13 copies Spec §9). Agents must copy from spec, not improvise.
+- **Type-consistency anchors:** `SimCommand`/`SimEvent` (T9 copies Spec §6.1), `Vec2`/`EdgePrimitive`/`TrackSegment`/`BoardModel` (T3/T4 copy Spec §8.2), `Circuit`/`Part` (T6 copies Spec §8.3), `Resolution`/`LibraryEntry` (T12 copies Spec §8.5), `Instrument` (T13 copies Spec §9). Agents must copy from spec, not improvise.
+- **Adversarial review applied (2026-06-10, 3 reviewers):** bounded bench windows replace the indefinite transient (RAM growth in sharedspice); `--with-ngshared` build flag; `macos-15-intel` runner; runtime-generated spinit with absolute `.cm` paths + `SPICE_SCRIPTS` env; `crashed` moved off the MessagePort to the contextBridge; series-R splice on the source side; async FFI for blocking commands; haltOwner state machine; digital tests via `.tran` only; in-house 555; deterministic node-name algorithm anchoring the golden decks; full 555 fixture pair so end-to-end acceptance can actually oscillate.
