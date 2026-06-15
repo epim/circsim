@@ -29,8 +29,18 @@ export type EngineEvent =
   | { type: 'stat'; text: string }
   /** ControlledExit callback fired (ngspice wants to terminate). */
   | { type: 'controlledExit'; status: number; immediate: boolean; quitOnExit: boolean }
-  /** SendInitData: vector names for a starting run. */
-  | { type: 'initData'; names: string[] }
+  /**
+   * SendInitData: the full vector list for a starting run (includes the scale
+   * vector, e.g. "time"). Decoded from `vecinfoall`.
+   */
+  | { type: 'initData'; plot: string; analysisType: string; names: string[] }
+  /**
+   * SendData: one accepted timepoint. `row` maps every vector name (incl. the
+   * scale vector, e.g. "time") to its real value. Decoded from `vecvaluesall`.
+   * Emitted from the FFI callback frame — listeners MUST be cheap and MUST NOT
+   * call back into ngspice (Spec §7.4 gotcha 2).
+   */
+  | { type: 'data'; row: Record<string, number>; scaleName: string }
   /** Background thread running state changed (true = NOT running). */
   | { type: 'bgRunning'; running: boolean }
 

@@ -180,14 +180,61 @@ function registerTypes(): void {
   })
   koffi.pointer('pvector_info', koffi.resolve('vector_info'))
 
-  // Callback prototypes (sharedspice.h). We deliberately type the struct-bearing
-  // callbacks (SendData/SendInitData) with void* — the orchestrator that needs
-  // their payloads (Task 10) decodes them explicitly; op/loadCircuit do not.
+  // sharedspice.h transient-streaming structs (verified field layout against
+  // ngspice 46 via live FFI probe — see scripts/probe-senddata.mjs):
+  //   typedef struct vecvalues {
+  //     char* name; double creal; double cimag; bool is_scale; bool is_complex;
+  //   } vecvalues, *pvecvalues;
+  //   typedef struct vecvaluesall {
+  //     int veccount; int vecindex; pvecvalues* vecsa;
+  //   } vecvaluesall, *pvecvaluesall;
+  koffi.struct('vecvalues', {
+    name: 'char*',
+    creal: 'double',
+    cimag: 'double',
+    is_scale: 'bool',
+    is_complex: 'bool'
+  })
+  koffi.pointer('pvecvalues', koffi.resolve('vecvalues'))
+  koffi.struct('vecvaluesall', {
+    veccount: 'int',
+    vecindex: 'int',
+    vecsa: 'pvecvalues*'
+  })
+  koffi.pointer('pvecvaluesall', koffi.resolve('vecvaluesall'))
+
+  //   typedef struct vecinfo {
+  //     int number; char* vecname; bool is_real; void* pdvec; void* pdvecscale;
+  //   } vecinfo, *pvecinfo;
+  //   typedef struct vecinfoall {
+  //     char* name; char* title; char* date; char* type; int veccount; pvecinfo* vecs;
+  //   } vecinfoall, *pvecinfoall;
+  koffi.struct('vecinfo', {
+    number: 'int',
+    vecname: 'char*',
+    is_real: 'bool',
+    pdvec: 'void*',
+    pdvecscale: 'void*'
+  })
+  koffi.pointer('pvecinfo', koffi.resolve('vecinfo'))
+  koffi.struct('vecinfoall', {
+    name: 'char*',
+    title: 'char*',
+    date: 'char*',
+    type: 'char*',
+    veccount: 'int',
+    vecs: 'pvecinfo*'
+  })
+  koffi.pointer('pvecinfoall', koffi.resolve('vecinfoall'))
+
+  // Callback prototypes (sharedspice.h). SendData/SendInitData carry the structs
+  // above; the FFI callbacks decode them into plain JS rows / name lists for the
+  // orchestrator (Task 10 transient streaming).
   koffi.proto('int CsSendChar(char* output, int libId, void* user)')
   koffi.proto('int CsSendStat(char* status, int libId, void* user)')
   koffi.proto('int CsControlledExit(int exitStatus, bool immediate, bool quitOnExit, int libId, void* user)')
-  koffi.proto('int CsSendData(void* data, int vecCount, int libId, void* user)')
-  koffi.proto('int CsSendInitData(void* data, int libId, void* user)')
+  koffi.proto('int CsSendData(pvecvaluesall data, int vecCount, int libId, void* user)')
+  koffi.proto('int CsSendInitData(pvecinfoall data, int libId, void* user)')
   koffi.proto('int CsBGThreadRunning(bool notRunning, int libId, void* user)')
   typesRegistered = true
 }
@@ -312,11 +359,69 @@ export class NgspiceFfiEngine implements SpiceEngine {
       koffi.pointer('CsControlledExit')
     )
 
-    // Task 9 only needs op/loadCircuit; SendData/SendInitData payloads are decoded
-    // by the Task 10 transient path. We register stubs that emit nothing heavy here
-    // but surface init vector names (cheap, useful for vectors event later).
-    const cbSendData = koffi.register(() => 0, koffi.pointer('CsSendData'))
-    const cbSendInitData = koffi.register(() => 0, koffi.pointer('CsSendInitData'))
+    // SendData fires once per accepted timepoint with all saved vector values.
+    // Decode the vecvaluesall struct into a plain row and emit a 'data' event.
+    // This runs on ngspice's background thread frame — keep it cheap and never
+    // call back into ngspice (Spec §7.4 gotcha 2). The orchestrator's
+    // sampleBatcher does the buffering/flush.
+    const cbSendData = koffi.register((dataPtr: unknown) => {
+      try {
+        if (!dataPtr) return 0
+        const all = koffi.decode(dataPtr, 'vecvaluesall') as {
+          veccount: number
+          vecsa: unknown
+        }
+        const row: Record<string, number> = {}
+        let scaleName = 'time'
+        const n = all.veccount
+        for (let i = 0; i < n; i++) {
+          const vvPtr = koffi.decode(all.vecsa, i * POINTER_SIZE, 'pvecvalues')
+          if (!vvPtr) continue
+          const vv = koffi.decode(vvPtr, 'vecvalues') as {
+            name: string
+            creal: number
+            is_scale: boolean
+          }
+          const name = String(vv.name)
+          row[name] = vv.creal
+          if (vv.is_scale) scaleName = name
+        }
+        this.emit({ type: 'data', row, scaleName })
+      } catch {
+        /* a decode hiccup must not crash the FFI callback frame */
+      }
+      return 0
+    }, koffi.pointer('CsSendData'))
+
+    // SendInitData fires once when a run starts, carrying the vector list.
+    const cbSendInitData = koffi.register((infoPtr: unknown) => {
+      try {
+        if (!infoPtr) return 0
+        const all = koffi.decode(infoPtr, 'vecinfoall') as {
+          name: string
+          type: string
+          veccount: number
+          vecs: unknown
+        }
+        const names: string[] = []
+        const n = all.veccount
+        for (let i = 0; i < n; i++) {
+          const viPtr = koffi.decode(all.vecs, i * POINTER_SIZE, 'pvecinfo')
+          if (!viPtr) continue
+          const vi = koffi.decode(viPtr, 'vecinfo') as { vecname: string }
+          names.push(String(vi.vecname))
+        }
+        this.emit({
+          type: 'initData',
+          plot: String(all.name ?? ''),
+          analysisType: String(all.type ?? ''),
+          names
+        })
+      } catch {
+        /* ignore decode errors in the FFI callback frame */
+      }
+      return 0
+    }, koffi.pointer('CsSendInitData'))
     const cbBGRunning = koffi.register((notRunning: boolean) => {
       this.emit({ type: 'bgRunning', running: !notRunning })
       return 0

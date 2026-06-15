@@ -10,17 +10,22 @@
  *    only because blocking commands use koffi's async form so the event loop runs
  *  - `destroy all` before every loadCircuit (Spec §7.4 gotcha 5)
  *  - device-token lowercasing before alter (Spec §7.4 gotcha 1)
- *  - the haltOwner state machine scaffold (Spec §7.4.3 — fully exercised in Task 10)
- *  - runOp + opResult key normalization (Spec §6.1)
+ *  - the haltOwner state machine (Spec §7.4.3, HaltCoordinator)
+ *  - runOp + opResult key normalization + gmin/src-step retry ladder (Spec §6.1, §8.8)
+ *  - runTransient via `bg_tran <tstep> <tstop> uic` streaming → sampleBatcher → `samples`
+ *  - bounded bench windows: tstop = W (default 30 s); on window end OR RSS>1.5 GB,
+ *    halt → destroy all → reload → restart at t=0 → emit `benchRestarted` (Spec §7.5)
+ *  - pacing: 50 ms loop holding realtimeFactor ≈ 1 (or 'max'); report achieved
+ *    factor every 250 ms (Spec §7.5)
+ *  - alter batching: bg_halt → alters → bg_resume, 30 ms coalesce window (Spec §7.4.3)
+ *  - convergence pattern-match on SendChar text → convergenceFailure (Spec §7.4.6)
  *  - the XSPICE `.cm` startup smoke deck (Spec §7.2)
- *
- * Transient streaming, pacing, alter batching and bounded bench windows land in
- * Task 10; this module exposes the engine + runOp + smoke check that Task 10 and
- * the integration test build on.
  */
 
+import { HaltCoordinator } from './haltCoordinator'
 import { NgspiceFfiEngine, ngspiceResourcesAvailable } from './ngspiceFfi'
-import type { SpiceEngine } from './engine'
+import { SampleBatcher } from './sampleBatcher'
+import type { EngineEvent, SpiceEngine } from './engine'
 import {
   isScaleVectorName,
   normalizeVectorKey,
@@ -33,7 +38,30 @@ import {
 const WATCHDOG_MS = 10_000
 const WATCHDOG_EXIT_CODE = 86
 
-export type HaltOwner = 'none' | 'user' | 'alter' | 'pacing'
+/** Default bench window (sim-time seconds) for a bounded transient (Spec §7.5). */
+const DEFAULT_BENCH_WINDOW_S = 30
+/** RSS guard: restart the bench window if SimHost memory exceeds this (Spec §7.5). */
+const RSS_GUARD_BYTES = 1.5 * 1024 * 1024 * 1024
+/** Pacing loop interval (Spec §7.5). */
+const PACING_INTERVAL_MS = 50
+/** Achieved-factor status report cadence (Spec §7.5). */
+const STATUS_REPORT_MS = 250
+/** Alter coalesce window so a knob drag batches into one halt/resume (Spec §7.4.3). */
+const ALTER_COALESCE_MS = 30
+/** Sample-flush age threshold (Spec §6.1). */
+const FLUSH_AGE_MS = 16
+
+/** ngspice convergence-failure signatures (Spec §7.4.6). */
+const CONVERGENCE_PATTERNS = [
+  /timestep too small/i,
+  /no convergence/i,
+  /singular matrix/i,
+  /iteration limit reached/i,
+  /gmin stepping failed/i,
+  /source stepping failed/i
+]
+
+export type { HaltOwner } from './haltCoordinator'
 
 // ─── queued work item ────────────────────────────────────────────────────────
 
@@ -47,17 +75,29 @@ interface QueueItem {
 export interface SimHostOptions {
   engine?: SpiceEngine
   /** Sink for SimEvents — the MessagePort in production, a spy in tests. */
-  emit?: (ev: SimEvent) => void
+  emit?: (ev: SimEvent, transfer?: ArrayBuffer[]) => void
   /** Override resources base dir (tests). */
   resourcesBaseDir?: string
   /** Disable the watchdog (unit tests with stub engines). */
   disableWatchdog?: boolean
+  /** Bench window in sim-time seconds (Spec §7.5). Default 30. */
+  benchWindowSeconds?: number
+  /** Override the RSS-usage probe (tests). */
+  rssBytes?: () => number
+  /** Monotonic wall clock (ms). Injectable for deterministic tests. */
+  now?: () => number
+  /** Disable the internal pacing/flush timers (unit tests drive ticks directly). */
+  disableTimers?: boolean
 }
 
 export class SimHost {
   private engine: SpiceEngine
-  private readonly emit: (ev: SimEvent) => void
+  private readonly emit: (ev: SimEvent, transfer?: ArrayBuffer[]) => void
   private readonly disableWatchdog: boolean
+  private readonly disableTimers: boolean
+  private readonly benchWindowSeconds: number
+  private readonly rssBytes: () => number
+  private readonly now: () => number
 
   private queue: QueueItem[] = []
   private draining = false
@@ -68,7 +108,42 @@ export class SimHost {
   private deckLoaded = false
 
   /** Halt-ownership state machine (Spec §7.4.3). */
-  private haltOwner: HaltOwner = 'none'
+  private halt: HaltCoordinator
+
+  /** Transient streaming state. */
+  private batcher = new SampleBatcher({ maxAgeMs: FLUSH_AGE_MS })
+  private vectorsEmitted = false
+
+  /** Active transient run parameters (null when not running a tran). */
+  private tran: {
+    tstep: number
+    tstop: number
+    /** sim-time of the latest sample seen this window. */
+    simTime: number
+    /** wall-clock ms when the window started. */
+    windowStartWall: number
+    /** sim-time at which this bg_tran's tstop sits (= min(tstop, W)). */
+    windowStop: number
+    /**
+     * True when the requested tstop exceeds the bench window W, so reaching
+     * windowStop means "restart the next window" (continuous bench). False for a
+     * finite run that should simply complete when it reaches windowStop.
+     */
+    continuous: boolean
+    /** Set once the run has reached its end (finite) — suppresses restart loop. */
+    finished: boolean
+    /** target realtimeFactor, or 'max' to run unthrottled. */
+    pace: number | 'max'
+  } | null = null
+
+  /** Pending alters awaiting their coalesce window (Spec §7.4.3). */
+  private pendingAlters: string[] = []
+  private alterTimer: NodeJS.Timeout | null = null
+
+  /** Periodic timers (pacing/flush + status report). */
+  private pacingTimer: NodeJS.Timeout | null = null
+  private statusTimer: NodeJS.Timeout | null = null
+  private lastStatusAt = 0
 
   private engineUnsub: (() => void) | null = null
 
@@ -77,49 +152,94 @@ export class SimHost {
       opts.engine ?? new NgspiceFfiEngine({ resourcesBaseDir: opts.resourcesBaseDir })
     this.emit = opts.emit ?? (() => {})
     this.disableWatchdog = opts.disableWatchdog ?? false
+    this.disableTimers = opts.disableTimers ?? false
+    this.benchWindowSeconds = opts.benchWindowSeconds ?? DEFAULT_BENCH_WINDOW_S
+    this.rssBytes = opts.rssBytes ?? (() => process.memoryUsage().rss)
+    this.now = opts.now ?? (() => Date.now())
+
+    this.halt = new HaltCoordinator({
+      halt: () => {
+        void this.engine.command('bg_halt', false)
+      },
+      resume: () => {
+        void this.engine.command('bg_resume', false)
+      }
+    })
+
+    // Wire the engine event stream now (registration only — no init required), so
+    // unit tests that drive a stub engine without start() still receive char/
+    // data/initData events.
+    this.engineUnsub = this.engine.on((ev: EngineEvent) => this.onEngineEvent(ev))
   }
 
   // ── lifecycle ──────────────────────────────────────────────────────────────
 
-  /** Initialize the engine, wire events, run the startup smoke check. */
+  /** Initialize the engine, run the startup smoke check. */
   async start(): Promise<void> {
     this.engine.init()
-
-    // Any FFI callback that reports text/stat is "progress" — feed the watchdog
-    // and relay logs. Callbacks ONLY enqueue/emit; they never call into ngspice.
-    this.engineUnsub = this.engine.on((ev) => {
-      switch (ev.type) {
-        case 'char':
-        case 'stat':
-          this.noteProgress()
-          break
-        case 'log':
-          this.emit({ type: 'log', level: ev.level, text: ev.text })
-          this.noteProgress()
-          break
-        case 'controlledExit':
-          // ngspice asked to exit — surface it; Main will respawn (Task 11).
-          this.emit({
-            type: 'log',
-            level: 'error',
-            text: `ngspice ControlledExit status=${ev.status} immediate=${ev.immediate}`
-          })
-          break
-        default:
-          break
-      }
-    })
-
     this.emit({ type: 'ready', ngspiceVersion: this.engine.version })
-
     await this.runStartupSmokeCheck()
+  }
+
+  /**
+   * Handle one EngineEvent. Runs on the FFI callback frame for char/stat/data/
+   * initData — must stay cheap and never call back into ngspice (Spec §7.4 #2).
+   * The sampleBatcher.push() here is just array appends; flushes are emitted from
+   * the JS-thread pacing timer, not from here.
+   */
+  private onEngineEvent(ev: EngineEvent): void {
+    switch (ev.type) {
+      case 'char':
+        this.noteProgress()
+        this.detectConvergence(ev.text)
+        break
+      case 'stat':
+        this.noteProgress()
+        break
+      case 'log':
+        this.emit({ type: 'log', level: ev.level, text: ev.text })
+        this.noteProgress()
+        this.detectConvergence(ev.text)
+        break
+      case 'controlledExit':
+        this.emit({
+          type: 'log',
+          level: 'error',
+          text: `ngspice ControlledExit status=${ev.status} immediate=${ev.immediate}`
+        })
+        break
+      case 'initData':
+        if (this.tran) {
+          const scale = ev.names.find(isScaleVectorName) ?? 'time'
+          this.batcher.setVectors(ev.names, scale)
+          if (!this.vectorsEmitted) {
+            this.emit({ type: 'vectors', names: this.batcher.getVectorNames() })
+            this.vectorsEmitted = true
+          }
+        }
+        this.noteProgress()
+        break
+      case 'data':
+        if (this.tran) {
+          const t = ev.row[ev.scaleName]
+          if (Number.isFinite(t)) this.tran.simTime = t
+          const flush = this.batcher.push(ev.row)
+          if (flush) this.emit(flush.event, flush.transfer)
+        }
+        this.noteProgress()
+        break
+      default:
+        break
+    }
   }
 
   /** Tear down (best effort). */
   dispose(): void {
-    if (this.watchdogTimer) {
-      clearInterval(this.watchdogTimer)
-      this.watchdogTimer = null
+    this.stopWatchdog()
+    this.stopPeriodicTimers()
+    if (this.alterTimer) {
+      clearTimeout(this.alterTimer)
+      this.alterTimer = null
     }
     if (this.engineUnsub) {
       this.engineUnsub()
@@ -141,53 +261,56 @@ export class SimHost {
           await this.doRunOp()
         })
         break
+      case 'runTransient':
+        this.enqueueRunTransient(cmd.tstepSeconds, cmd.tstopSeconds)
+        break
       case 'alter':
-        this.enqueueAlter(cmd)
+        this.queueAlter(cmd)
         break
       case 'halt':
-        this.setHaltOwner('user')
-        this.enqueue('halt', () => this.engine.command('bg_halt', false))
+        // User pause outranks alter/pacing (Spec §7.4.3).
+        this.enqueue('halt', async () => {
+          this.halt.requestHalt('user')
+        })
         break
       case 'resume':
-        // Only the 'user' owner may clear a user halt (Spec §7.4.3).
-        if (this.haltOwner === 'user') {
-          this.haltOwner = 'none'
-          this.enqueue('resume', () => this.engine.command('bg_resume', false))
-        }
+        this.enqueue('resume', async () => {
+          this.halt.requestResume('user')
+        })
         break
       case 'stop':
-        this.enqueue('stop', () => this.engine.command('bg_halt', false))
+        this.enqueue('stop', async () => {
+          this.stopTransient()
+        })
         break
-      case 'runTransient':
-      case 'runAc':
       case 'setPace':
-        // Implemented in Task 10. Acknowledge with a log so nothing silently drops.
+        this.enqueue('setPace', async () => {
+          if (this.tran) this.tran.pace = cmd.realtimeFactor
+        })
+        break
+      case 'runAc':
+        // AC analysis is specced in the protocol but deferred (post-v1 backlog).
         this.emit({
           type: 'log',
           level: 'info',
-          text: `command "${cmd.type}" not yet implemented (Task 10)`
+          text: 'runAc is not implemented in v1 (protocol reserved for post-v1)'
         })
         break
       default: {
-        // exhaustiveness guard
         const _never: never = cmd
         void _never
       }
     }
   }
 
-  // ── op analysis ────────────────────────────────────────────────────────────
+  // ── op analysis + convergence retry ladder (Spec §8.8) ─────────────────────
 
-  /**
-   * Run a DC operating point and emit a normalized opResult (Spec §6.1).
-   * Public so the integration test can await it directly.
-   */
+  /** Run a DC operating point with the gmin/src-step retry ladder. */
   async runOp(): Promise<Record<string, number>> {
     return new Promise<Record<string, number>>((resolve, reject) => {
       this.enqueue('runOp', async () => {
         try {
-          const values = await this.doRunOp()
-          resolve(values)
+          resolve(await this.doRunOp())
         } catch (e) {
           reject(e)
           throw e
@@ -196,21 +319,47 @@ export class SimHost {
     })
   }
 
+  /**
+   * op with a convergence retry ladder (Spec §8.8): plain op → gmin stepping →
+   * source stepping. Each rung re-checks for a usable result; on exhaustion emit
+   * a structured convergenceFailure.
+   */
   private async doRunOp(): Promise<Record<string, number>> {
-    // op is a potentially-blocking command → async FFI (Spec §7.4 #4).
-    await this.engine.command('op', true)
-    const values = this.readPlotValues()
-    this.emit({ type: 'opResult', values })
-    return values
+    const ladder = [
+      { cmd: 'op', label: 'op' },
+      { cmd: 'setplot new\nop', label: 'op (retry)', options: 'set gminsteps=10' },
+      { cmd: 'op', label: 'op (source-step)', options: 'set srcsteps=10' }
+    ]
+    let lastValues: Record<string, number> = {}
+    for (let rung = 0; rung < ladder.length; rung++) {
+      const step = ladder[rung]
+      if (step.options) {
+        await this.engine.command(step.options, false)
+      }
+      // op is potentially-blocking → async FFI (Spec §7.4 #4).
+      await this.engine.command('op', true)
+      lastValues = this.readPlotValues()
+      // A converged op yields finite node voltages.
+      const finite = Object.values(lastValues).some((v) => Number.isFinite(v))
+      if (finite && Object.keys(lastValues).length > 0) {
+        this.emit({ type: 'opResult', values: lastValues })
+        return lastValues
+      }
+    }
+    this.emit({
+      type: 'convergenceFailure',
+      detail:
+        'DC operating point did not converge after gmin stepping and source ' +
+        'stepping. Common causes: missing DC path to ground, a floating node, or ' +
+        'an unstable feedback loop.'
+    })
+    this.emit({ type: 'opResult', values: lastValues })
+    return lastValues
   }
 
   /**
-   * Read every real vector of the current plot, normalize keys per Spec §6.1:
-   *  - bare lowercase node names for voltages ("out", not "v(out)"/"OUT")
-   *  - "i(<dev>)" for source/device branch currents
-   *  - scale vectors (time/frequency) dropped
-   * Each vector's *last* sample is taken (op plots are length 1; this is also
-   * correct for reading a settled value off a tran plot).
+   * Read every real vector of the current plot, normalize keys per Spec §6.1.
+   * Takes each vector's last sample (op plots are length 1).
    */
   private readPlotValues(): Record<string, number> {
     const plot = this.engine.currentPlot()
@@ -220,19 +369,201 @@ export class SimHost {
       if (isScaleVectorName(raw)) continue
       const data = this.engine.vectorData(raw)
       if (!data || data.length === 0) continue
-      const key = normalizeVectorKey(raw)
-      values[key] = data[data.length - 1]
+      values[normalizeVectorKey(raw)] = data[data.length - 1]
     }
     return values
+  }
+
+  // ── transient streaming + bounded bench windows (Spec §7.5) ────────────────
+
+  private enqueueRunTransient(tstep: number, tstop: number): void {
+    this.enqueue('runTransient', async () => {
+      await this.startTransientWindow(tstep, tstop, this.now())
+    })
+  }
+
+  /**
+   * Begin (or restart) a bounded bench window. The requested `tstopSeconds` is
+   * capped to the bench window W so ngspice never retains an unbounded plot in
+   * RAM (Spec §7.5). `uic` is used so the circuit charges from its initial
+   * conditions (the "power on and watch it come alive" bench semantics — without
+   * uic ngspice solves the DC operating point first and the run starts settled;
+   * verified against ngspice 46).
+   */
+  private async startTransientWindow(
+    tstep: number,
+    tstop: number,
+    wallNow: number,
+    pace: number | 'max' = 1
+  ): Promise<void> {
+    // Bench window: the effective tstop is the smaller of the request and W.
+    // When the request exceeds W the run is "continuous" and restarts at the
+    // window boundary; otherwise it is a finite run that completes at windowStop.
+    const windowStop = Math.min(tstop, this.benchWindowSeconds)
+    const continuous = tstop > this.benchWindowSeconds
+
+    this.batcher.reset()
+    this.vectorsEmitted = false
+    this.halt.clear()
+
+    this.tran = {
+      tstep,
+      tstop,
+      simTime: 0,
+      windowStartWall: wallNow,
+      windowStop,
+      continuous,
+      finished: false,
+      pace
+    }
+
+    // bg_tran returns immediately (background thread) — non-blocking is correct.
+    await this.engine.command(`bg_tran ${formatNum(tstep)} ${formatNum(windowStop)} uic`, false)
+
+    this.lastStatusAt = wallNow
+    this.startPeriodicTimers()
+  }
+
+  /**
+   * One pacing/flush tick (Spec §7.5). Drives: time-based sample flush, real-time
+   * pacing (halt/resume to hold realtimeFactor), bench-window restart on window
+   * end or RSS guard, and the periodic achieved-factor status report.
+   *
+   * Public + parameterless-by-clock so unit tests can step it deterministically.
+   */
+  pacingTick(): void {
+    if (!this.tran) return
+    const t = this.tran
+
+    // (1) Time-based sample flush (size-based flushes happen inline on push).
+    if (this.batcher.shouldFlushByAge()) {
+      const flush = this.batcher.flush()
+      if (flush) this.emit(flush.event, flush.transfer)
+    }
+
+    // (2) Bench-window handling (§7.5).
+    //   - RSS guard always forces a restart of the (continuous) window.
+    //   - Reaching windowStop: restart for a continuous run; for a finite run it
+    //     simply means the requested transient has completed → finalize.
+    const memoryHit = this.rssBytes() > RSS_GUARD_BYTES
+    const windowHit = t.simTime >= t.windowStop && t.windowStop > 0
+    if (memoryHit) {
+      void this.restartBenchWindow('memory')
+      return
+    }
+    if (windowHit) {
+      if (t.continuous) {
+        void this.restartBenchWindow('window-elapsed')
+      } else if (!t.finished && !this.engine.isRunning()) {
+        // Finite run reached its tstop and the bg thread has stopped → finalize:
+        // flush the tail and tear down the pacing loop. Keep `tran` so a late
+        // pacingTick (e.g. from a test) is a no-op rather than a crash.
+        t.finished = true
+        this.finalizeFiniteRun()
+      }
+      return
+    }
+
+    // (3) Real-time pacing. Skip while the user has paused (their pause outranks).
+    if (!this.halt.isUserPaused() && t.pace !== 'max') {
+      const wallElapsedS = (this.now() - t.windowStartWall) / 1000
+      const targetSimTime = wallElapsedS * (t.pace as number)
+      if (t.simTime > targetSimTime) {
+        // Sim is ahead of wall-clock → throttle by halting (owner 'pacing').
+        this.halt.requestHalt('pacing')
+      } else if (this.halt.getOwner() === 'pacing') {
+        // Sim has fallen back to/behind target → release the pacing halt.
+        this.halt.requestResume('pacing')
+      }
+    } else if (t.pace === 'max' && this.halt.getOwner() === 'pacing') {
+      // Switched to 'max' while pacing-halted → release.
+      this.halt.requestResume('pacing')
+    }
+
+    // (4) Periodic achieved-factor status report (§7.5).
+    if (this.now() - this.lastStatusAt >= STATUS_REPORT_MS) {
+      this.reportStatus()
+      this.lastStatusAt = this.now()
+    }
+  }
+
+  private reportStatus(): void {
+    if (!this.tran) return
+    const wallElapsedS = (this.now() - this.tran.windowStartWall) / 1000
+    const achieved = wallElapsedS > 0 ? this.tran.simTime / wallElapsedS : 0
+    this.emit({
+      type: 'status',
+      running: this.engine.isRunning(),
+      simTimeSeconds: this.tran.simTime,
+      realtimeFactor: achieved
+    })
+  }
+
+  /**
+   * Bench-window restart (Spec §7.5): halt → destroy all → reload deck → restart
+   * the transient from t=0 → emit benchRestarted. Scope history lives in the
+   * renderer ring buffers, so nothing is lost visually.
+   */
+  private async restartBenchWindow(reason: 'window-elapsed' | 'memory'): Promise<void> {
+    if (!this.tran) return
+    const { tstep, tstop, pace } = this.tran
+    // Suspend the windowed run so the timers don't re-trigger mid-restart.
+    this.tran = null
+    this.stopPeriodicTimers()
+
+    this.enqueue('benchRestart', async () => {
+      await this.engine.command('bg_halt', false)
+      await this.waitForHalt()
+      await this.engine.command('destroy all', false)
+      this.halt.clear()
+      // Reload the deck so the plot is fresh (frees retained timepoints).
+      this.engine.loadCircuit(this.currentDeck)
+      this.deckLoaded = true
+      this.emit({ type: 'benchRestarted', reason })
+      await this.startTransientWindow(tstep, tstop, this.now(), pace)
+    })
+  }
+
+  /**
+   * A finite (non-continuous) transient reached its requested tstop on its own.
+   * Flush the tail, emit a final status, and tear down the pacing loop without a
+   * restart. `tran` is retained (marked finished) so stray ticks no-op.
+   */
+  private finalizeFiniteRun(): void {
+    const flush = this.batcher.flush()
+    if (flush) this.emit(flush.event, flush.transfer)
+    this.reportStatus()
+    this.halt.clear()
+    this.stopPeriodicTimers()
+  }
+
+  private stopTransient(): void {
+    void this.engine.command('bg_halt', false)
+    this.halt.clear()
+    this.tran = null
+    this.stopPeriodicTimers()
+    // Flush whatever remains so the renderer sees the tail.
+    const flush = this.batcher.flush()
+    if (flush) this.emit(flush.event, flush.transfer)
+  }
+
+  // ── convergence detection (Spec §7.4.6) ────────────────────────────────────
+
+  private detectConvergence(text: string): void {
+    for (const re of CONVERGENCE_PATTERNS) {
+      if (re.test(text)) {
+        this.emit({ type: 'convergenceFailure', detail: text.trim() })
+        return
+      }
+    }
   }
 
   // ── loadCircuit ──────────────────────────────────────────────────────────
 
   private enqueueLoadCircuit(deckLines: string[]): void {
     this.enqueue('loadCircuit', async () => {
-      // Spec §7.4 gotcha 5: free retained vectors before each reload.
       if (this.deckLoaded) {
-        await this.engine.command('destroy all', false)
+        await this.engine.command('destroy all', false) // Spec §7.4 gotcha 5
       }
       this.currentDeck = [...deckLines]
       this.engine.loadCircuit(this.currentDeck)
@@ -240,39 +571,65 @@ export class SimHost {
     })
   }
 
-  // ── alter ──────────────────────────────────────────────────────────────────
+  // ── alter batching (Spec §7.4.3) ───────────────────────────────────────────
 
-  private enqueueAlter(cmd: Extract<SimCommand, { type: 'alter' }>): void {
-    // Spec §7.4 gotcha 1: device tokens must be lowercased or the alter silently
-    // no-ops through the shared-library API.
-    const device = cmd.device.toLowerCase()
-    const value = cmd.value
-    const alterCmd =
-      cmd.param !== undefined
-        ? `alter ${device} ${cmd.param} = ${value}`
-        : `alter ${device} = ${value}`
-    this.enqueue('alter', async () => {
-      await this.engine.command(alterCmd, false)
+  /**
+   * Queue an alter into the coalesce window. A knob drag fires many alters; we
+   * batch them inside one bg_halt → alters → bg_resume so the bg thread isn't
+   * thrashed (Spec §7.4.3). Device tokens are lowercased (gotcha 1).
+   */
+  private queueAlter(cmd: Extract<SimCommand, { type: 'alter' }>): void {
+    this.pendingAlters.push(buildAlterCommand(cmd))
+    if (this.alterTimer) return
+    this.alterTimer = setTimeout(() => {
+      this.alterTimer = null
+      this.flushAlters()
+    }, ALTER_COALESCE_MS)
+    if (this.disableTimers && this.alterTimer.unref) this.alterTimer.unref()
+  }
+
+  /** Drain pending alters inside one halt/resume window, respecting haltOwner. */
+  flushAlters(): void {
+    if (this.pendingAlters.length === 0) return
+    const alters = this.pendingAlters
+    this.pendingAlters = []
+    this.enqueue('alterBatch', async () => {
+      // Halt, then WAIT for the bg thread to actually stop before applying alters.
+      // bg_halt only requests the background thread to pause; an alter issued
+      // before the thread has stopped races and is silently dropped (verified
+      // against ngspice 46 — the alter must land while the engine is halted).
+      const tookHalt = this.halt.requestHalt('alter')
+      const wasRunning = tookHalt
+      if (wasRunning) await this.waitForHalt()
+      for (const a of alters) {
+        await this.engine.command(a, false)
+      }
+      // If the user paused, we keep their pause (a non-owner resume is a no-op in
+      // the coordinator); otherwise the alter batch resumes the run.
+      if (tookHalt) {
+        this.halt.requestResume('alter')
+      }
     })
   }
 
-  // ── haltOwner state machine (Spec §7.4.3) ──────────────────────────────────
-
   /**
-   * Request a halt on behalf of `owner`. `user` outranks alter/pacing; an alter
-   * or pacing halt during a user-pause is recorded but must not later resume.
-   * (Resume logic for non-user owners lands fully in Task 10's pacing/alter loop.)
+   * Wait (bounded) until ngspice's background thread reports stopped after a
+   * bg_halt. Returns promptly once `ngSpice_running()` is false. Bounded by the
+   * watchdog window so a wedged engine still gets caught.
    */
-  setHaltOwner(owner: Exclude<HaltOwner, 'none'>): void {
-    if (this.haltOwner === 'user' && owner !== 'user') {
-      // user pause outranks: keep user ownership.
-      return
+  private async waitForHalt(timeoutMs = 2000): Promise<void> {
+    const deadline = this.now() + timeoutMs
+    while (this.now() < deadline) {
+      if (!this.engine.isRunning()) return
+      this.noteProgress() // polling counts as progress for the watchdog
+      await new Promise((r) => setTimeout(r, 5))
     }
-    this.haltOwner = owner
   }
 
-  getHaltOwner(): HaltOwner {
-    return this.haltOwner
+  // ── haltOwner accessors (tests) ────────────────────────────────────────────
+
+  getHaltOwner(): import('./haltCoordinator').HaltOwner {
+    return this.halt.getOwner()
   }
 
   // ── queue + watchdog ────────────────────────────────────────────────────
@@ -285,9 +642,7 @@ export class SimHost {
   private scheduleDrain(): void {
     if (this.draining) return
     this.draining = true
-    // Drain from a JS-thread frame (setImmediate), NEVER from an FFI callback
-    // (Spec §7.4 gotcha 2).
-    setImmediate(() => void this.drain())
+    setImmediate(() => void this.drain()) // never from an FFI callback (gotcha 2)
   }
 
   private async drain(): Promise<void> {
@@ -314,16 +669,14 @@ export class SimHost {
   }
 
   private noteProgress(): void {
-    this.lastProgress = Date.now()
+    this.lastProgress = this.now()
   }
 
   private startWatchdog(): void {
     if (this.disableWatchdog || this.watchdogTimer) return
-    this.lastProgress = Date.now()
+    this.lastProgress = this.now()
     this.watchdogTimer = setInterval(() => {
-      if (Date.now() - this.lastProgress > WATCHDOG_MS) {
-        // No progress for 10 s while work is queued → ngspice is wedged.
-        // Respawn is the only reliable reset (Spec §7.4 gotcha 7).
+      if (this.now() - this.lastProgress > WATCHDOG_MS) {
         // eslint-disable-next-line no-console
         console.error(
           `[simhost] watchdog: no progress for ${WATCHDOG_MS} ms — exiting ${WATCHDOG_EXIT_CODE}`
@@ -341,17 +694,33 @@ export class SimHost {
     }
   }
 
+  // ── periodic pacing/flush + status timers ──────────────────────────────────
+
+  private startPeriodicTimers(): void {
+    if (this.disableTimers || this.pacingTimer) return
+    this.pacingTimer = setInterval(() => this.pacingTick(), PACING_INTERVAL_MS)
+    if (typeof this.pacingTimer.unref === 'function') this.pacingTimer.unref()
+  }
+
+  private stopPeriodicTimers(): void {
+    if (this.pacingTimer) {
+      clearInterval(this.pacingTimer)
+      this.pacingTimer = null
+    }
+    if (this.statusTimer) {
+      clearInterval(this.statusTimer)
+      this.statusTimer = null
+    }
+  }
+
   // ── startup smoke check (Spec §7.2) ────────────────────────────────────────
 
   /**
    * Load + run the XSPICE adc_bridge→d_inverter→dac_bridge deck once at init.
-   * Pass = final v(out) ≥ 4.5 (proves the `.cm` code models loaded). On failure,
-   * emit a loud error naming the `.cm` files.
+   * Pass = final v(out) ≥ 4.5 (proves the `.cm` code models loaded).
    *
-   * NOTE (verified against ngspice 46, deviation from plan/spec text): the
-   * inverter code model is named `d_inverter`, not `d_inv` — `d_inv` does not
-   * exist in ngspice's digital.cm (confirmed via `devhelp`). The chain itself is
-   * exactly the spec's adc_bridge→inverter→dac_bridge structure.
+   * NOTE (verified against ngspice 46): the inverter code model is `d_inverter`,
+   * not `d_inv` — `d_inv` does not exist in ngspice's digital.cm.
    */
   async runStartupSmokeCheck(): Promise<boolean> {
     const deck = [
@@ -382,7 +751,6 @@ export class SimHost {
             `not load. Check resources/ngspice/<platform>/lib/ngspice and SPICE_SCRIPTS.`
         })
       }
-      // Clean up the smoke plot so it doesn't pollute later loads.
       await this.engine.command('destroy all', false)
       this.deckLoaded = false
       return passed
@@ -404,6 +772,50 @@ export class SimHost {
       await new Promise((r) => setImmediate(r))
     }
   }
+
+  /** For integration/unit tests: true while a bench window is active. */
+  isTransientActive(): boolean {
+    return this.tran !== null
+  }
+}
+
+// ─── helpers (pure, exported for unit tests) ──────────────────────────────────
+
+/**
+ * Build the ngspice `alter` command string from a SimCommand (Spec §7.4.1, §9).
+ * Device tokens are lowercased (gotcha 1). Function-gen SIN/PULSE param changes
+ * use the vector form with EXACT spacing: `alter @vfgen_2[sin] [ <vo> <va> <freq> ]`.
+ *
+ * Conventions on the `param` field:
+ *  - param undefined           → `alter <dev> = <value>`         (e.g. dc-supply via a value)
+ *  - param a plain token       → `alter <dev> <param> = <value>` (e.g. `dc`, `acmag`)
+ *  - value is a space-joined   → vector form, when device already names the
+ *    list of numbers AND param  parameter vector (@dev[sin]); detected by `[` in device.
+ *    is the vector tag
+ */
+export function buildAlterCommand(cmd: Extract<SimCommand, { type: 'alter' }>): string {
+  const device = cmd.device.toLowerCase()
+  // Vector form for SIN/PULSE: caller passes device already like "@vfgen_2[sin]"
+  // and value as a space-separated number string; we wrap with exact spacing.
+  if (/\[(sin|pulse|sine|exp|pwl)\]$/.test(device)) {
+    return `alter ${device} [ ${String(cmd.value)} ]`
+  }
+  if (cmd.param !== undefined) {
+    return `alter ${device} ${cmd.param} = ${cmd.value}`
+  }
+  return `alter ${device} = ${cmd.value}`
+}
+
+/**
+ * Format a number for an ngspice `bg_tran` token. ngspice's command parser
+ * accepts both plain-decimal and e-notation for tran step/stop (verified against
+ * ngspice 46 — e.g. `bg_tran 1e-5 30`), and crucially it must NEVER carry a
+ * letter suffix (a bare `1e-5`, not `10u`). JS `Number.prototype.toString`
+ * already chooses a compact, suffix-free form, so we use it directly.
+ */
+export function formatNum(n: number): string {
+  if (!Number.isFinite(n)) return '0'
+  return String(n)
 }
 
 // ─── MessagePort wiring (runs only inside the utilityProcess) ─────────────────
@@ -419,7 +831,6 @@ function bootstrapUtilityProcess(): void {
   if (!parentPort) return // not running as a utilityProcess (e.g. unit tests)
 
   if (!ngspiceResourcesAvailable()) {
-    // No engine available; report and idle. Main's watchdog/respawn handles the rest.
     parentPort.on('message', () => {})
     try {
       parentPort.postMessage({
@@ -434,9 +845,15 @@ function bootstrapUtilityProcess(): void {
   }
 
   const host = new SimHost({
-    emit: (ev: SimEvent) => {
+    emit: (ev: SimEvent, transfer?: ArrayBuffer[]) => {
       try {
-        parentPort.postMessage(ev)
+        // Electron's MessagePortMain.postMessage(message, transfer?) — transfer
+        // the sample buffers zero-copy when present.
+        if (transfer && transfer.length > 0) {
+          parentPort.postMessage(ev, transfer)
+        } else {
+          parentPort.postMessage(ev)
+        }
       } catch {
         /* port may have closed during shutdown */
       }
