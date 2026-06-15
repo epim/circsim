@@ -12,7 +12,7 @@
  *  - CSP: allows worker-src blob: for troika-three-text (Spec §5).
  */
 
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { join } from 'path'
 import { readFile } from 'fs/promises'
 import { createProductionSupervisor } from './simhostSupervisor'
@@ -87,6 +87,37 @@ function registerIpcHandlers(): void {
       resourcesPath: process.resourcesPath,
       appPath: app.getAppPath(),
       userData: app.getPath('userData')
+    }
+  })
+
+  /**
+   * Return the absolute path to the bundled sample project's .kicad_pcb file.
+   * In dev: <appRoot>/resources/sample/blinker-555.kicad_pcb.
+   * Packaged: <resourcesPath>/sample/blinker-555.kicad_pcb (via extraResources).
+   */
+  ipcMain.handle('circsim:getSampleProjectPath', () => {
+    if (app.isPackaged) {
+      return join(process.resourcesPath, 'sample', 'blinker-555.kicad_pcb')
+    }
+    return join(app.getAppPath(), 'resources', 'sample', 'blinker-555.kicad_pcb')
+  })
+
+  /**
+   * Open the "what circsim can tell you" fidelity doc.
+   * In packaged builds, open the bundled docs/what-circsim-can-tell-you.md
+   * via shell.openPath (rendered as plain text). In dev, open it from the
+   * project root. If the file is not found, fall back to a no-op (graceful).
+   * Task 28 — Spec §16 risk 7, §12.
+   */
+  ipcMain.handle('circsim:openDocs', async () => {
+    const docPath = app.isPackaged
+      ? join(process.resourcesPath, 'docs', 'what-circsim-can-tell-you.md')
+      : join(app.getAppPath(), 'docs', 'what-circsim-can-tell-you.md')
+    try {
+      await shell.openPath(docPath)
+    } catch {
+      // Non-fatal: if the doc isn't present (CI runner without a display),
+      // the promise still resolves so the UI doesn't stall.
     }
   })
 }

@@ -156,5 +156,22 @@ contextBridge.exposeInMainWorld('circsim', {
    */
   platformPaths: (): Promise<PlatformPaths> => {
     return ipcRenderer.invoke('circsim:platformPaths') as Promise<PlatformPaths>
-  }
+  },
+
+  /**
+   * Return the absolute path to the bundled sample project's .kicad_pcb file.
+   * Used by the "Open sample project" empty-state button (Spec §11, Task 26).
+   */
+  getSampleProjectPath: (): Promise<string> => {
+    return ipcRenderer.invoke('circsim:getSampleProjectPath') as Promise<string>
+  },
+
+  /**
+   * Open the "what circsim can tell you" fidelity documentation in the
+   * system browser. Used by the fidelity banner and About panel (Task 28).
+   * Returns a promise that resolves once the open is dispatched.
+   */
+  openDocs: (): Promise<void> => {
+    return ipcRenderer.invoke('circsim:openDocs') as Promise<void>
+  },
 })

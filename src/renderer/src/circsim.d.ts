@@ -37,6 +37,12 @@ declare global {
       getSimPort(): Promise<MessagePort>
       onSimhostCrashed(cb: (payload: CircsimCrashedPayload) => void): () => void
       platformPaths(): Promise<CircsimPlatformPaths>
+      getSampleProjectPath(): Promise<string>
+      /**
+       * Open the "what circsim can tell you" fidelity doc in the system viewer.
+       * Wired from the fidelity banner and About panel (Task 28, Spec §12, §16 risk 7).
+       */
+      openDocs(): Promise<void>
     }
   }
 }

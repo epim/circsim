@@ -98,9 +98,25 @@ export default function WarningsBar(): React.ReactElement | null {
             </span>
           ))}
           .{' '}
-          {/* The doc page + the contextBridge opener land in Task 28; the banner
-              already carries the link affordance so the wording is in place. */}
-          <span style={linkStyle} title="What this simulation can and can't tell you (docs)">
+          {/* Task 28: wire the docs link via window.circsim.openDocs. */}
+          <span
+            style={linkStyle}
+            title="What this simulation can and can't tell you (docs)"
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              if (typeof window !== 'undefined' && window.circsim?.openDocs) {
+                void window.circsim.openDocs()
+              }
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                if (typeof window !== 'undefined' && window.circsim?.openDocs) {
+                  void window.circsim.openDocs()
+                }
+              }
+            }}
+          >
             What can circsim tell you?
           </span>
         </div>

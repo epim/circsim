@@ -702,6 +702,11 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         // Guided empty-state (Spec §12): nothing to power on.
         return null
       }
+      // Guided empty-state: zero resolved sources → no-op (Spec §12).
+      const hasSource = instruments.some(
+        i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
+      )
+      if (!hasSource) return null
 
       const deckLines = generateDeck({
         circuit,
@@ -742,6 +747,11 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         // Guided empty-state (Spec §12): no ground → Run is a no-op, not a dead button.
         return
       }
+      // Guided empty-state: zero resolved sources → no-op (Spec §12).
+      const hasSource = instruments.some(
+        i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
+      )
+      if (!hasSource) return
 
       // Resume-from-pause with a clean deck: do NOT reload, just resume.
       if (simState === 'paused' && !deckDirty) {
