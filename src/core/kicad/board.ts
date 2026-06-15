@@ -14,6 +14,7 @@
  */
 
 import { parseSexpr, findAll, find, atom, SExpr } from '../sexpr/parse'
+import { stitchOutline } from './outline'
 import type {
   BoardModel,
   Footprint,
@@ -23,7 +24,6 @@ import type {
   Zone,
   BoardText,
   EdgePrimitive,
-  OutlineGeometry,
   Vec2,
 } from './types'
 
@@ -491,13 +491,8 @@ export function parseBoard(text: string): BoardModel {
     }
   }
 
-  // --- outline (stub — Task 4 will implement stitching) ---
-  // For now, produce a minimal OutlineGeometry with a bounding-box fallback.
-  const outline: OutlineGeometry = {
-    outer: [],
-    holes: [],
-    warnings: ['outline stitching not yet implemented (Task 4)'],
-  }
+  // --- outline (Task 4 — real stitching via stitchOutline) ---
+  const outline = stitchOutline(edgeCuts)
 
   return {
     netById,
