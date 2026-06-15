@@ -1,0 +1,9 @@
+* circsim deck — subckt-ammeter-test
+* U1: tier 1 (schematic Sim.*)
+vpsu_1 vpsu_1_int 0 DC 5
+rpsu_1 vpsu_1_int vin 0.1
+vamm_probe1 vamm_probe1_n vin DC 0
+x_u1 vamm_probe1_n 0 ne555
+.save all
+.save @vamm_probe1[i]
+.end

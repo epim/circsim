@@ -1,0 +1,8 @@
+* circsim deck — fixture-rc
+* R1: tier 2 (primitive) | R2: tier 2 (primitive)
+vpsu_1 vpsu_1_int 0 DC 5
+rpsu_1 vpsu_1_int vin 0.1
+r_r1 vin out 10000
+r_r2 out 0 10000
+.save all
+.end
