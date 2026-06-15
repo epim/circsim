@@ -8,17 +8,23 @@
  * shell leaves room (right/bottom docks) for them.
  */
 
-import React, { useCallback } from 'react'
+import React, { useCallback, useState } from 'react'
 import Viewport from './viewport/Viewport'
 import PartsPanel from './panels/PartsPanel'
 import ModelDoctor from './panels/ModelDoctor'
 import GroundSetup from './panels/GroundSetup'
 import InstrumentRack from './panels/InstrumentRack'
+import Toolbar from './panels/Toolbar'
+import WarningsBar from './panels/WarningsBar'
+import SimLog from './panels/SimLog'
+import Scope from './panels/Scope'
 import { AppStoreProvider, useApp, useAppStoreApi } from './store/storeContext'
 import type { AppStore } from './store/appStore'
 import { resolutionSummary } from './store/appStore'
 import { openProjectFromPath } from './ipc/fileOpen'
 import type { PickEvent } from './viewport/picking'
+import type { SceneManager } from './viewport/scene'
+import type { OverlayMode } from './viewport/overlay'
 
 export default function App({ store }: { store: AppStore }): React.ReactElement {
   return (
@@ -39,6 +45,27 @@ function Shell(): React.ReactElement {
   const resolutions = useApp(s => s.resolutions)
 
   const summary = resolutionSummary(resolutions)
+
+  // Overlay mode: App owns the UI selection; the scene is imperative. Defaults to
+  // voltage once an op result is in, so the primary scenario lights up the copper.
+  const [overlay, setOverlay] = useState<OverlayMode>('realistic')
+
+  // When an op result first arrives, snap the overlay to voltage (Spec §4 step 4).
+  // Intentionally keyed only on opVoltages so manual overlay changes stick after.
+  const overlayRef = React.useRef(overlay)
+  overlayRef.current = overlay
+  React.useEffect(() => {
+    if (opVoltages && overlayRef.current === 'realistic') setOverlay('voltage')
+  }, [opVoltages])
+
+  // Wire the store's imperative BoardHooks to the live SceneManager so transient
+  // samples tint copper without re-rendering React at sample rate (Task 24).
+  const handleSceneReady = useCallback(
+    (scene: SceneManager | null) => {
+      store.getState().setBoardHooks(scene)
+    },
+    [store],
+  )
 
   const handleOpen = useCallback(async () => {
     const res = await window.circsim.openFileDialog({
@@ -157,6 +184,9 @@ function Shell(): React.ReactElement {
         )}
       </header>
 
+      {/* Simulation toolbar: Power On · Run/Pause · pace · overlay (Spec §11). */}
+      <Toolbar overlay={overlay} onOverlay={setOverlay} />
+
       {parseError && (
         <div style={errorCardStyle}>
           <strong>Could not parse {parseError.fileName ?? 'board'}.</strong>{' '}
@@ -170,6 +200,9 @@ function Shell(): React.ReactElement {
         </div>
       )}
 
+      {/* Honesty surfaces: fidelity banner + convergence card + bench/crash toasts. */}
+      <WarningsBar />
+
       <main style={mainStyle}>
         <aside style={leftDockStyle}>
           <div style={{ flex: 1, minHeight: 0 }}>
@@ -177,21 +210,35 @@ function Shell(): React.ReactElement {
           </div>
           <ModelDoctor />
         </aside>
-        <div style={{ flex: 1, position: 'relative' }}>
-          {board ? (
-            <Viewport
-              board={board}
-              onPick={handlePick}
-              onNetDrop={handleNetDrop}
-              netVoltages={opVoltages ?? undefined}
-              voltageRange={voltageRange}
-              overlay={opVoltages ? 'voltage' : 'realistic'}
-            />
-          ) : (
-            <EmptyState onOpen={handleOpen} />
-          )}
-          {selectedRef && (
-            <div style={selectionBadge}>Selected: {selectedRef}</div>
+        <div style={centerColStyle}>
+          <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+            {board ? (
+              <Viewport
+                board={board}
+                onPick={handlePick}
+                onNetDrop={handleNetDrop}
+                onSceneReady={handleSceneReady}
+                netVoltages={opVoltages ?? undefined}
+                voltageRange={voltageRange}
+                overlay={overlay}
+              />
+            ) : (
+              <EmptyState onOpen={handleOpen} />
+            )}
+            {selectedRef && (
+              <div style={selectionBadge}>Selected: {selectedRef}</div>
+            )}
+          </div>
+          {/* Bottom dock: Oscilloscope + Sim log (Spec §11). */}
+          {board && (
+            <div style={bottomDockStyle}>
+              <div style={{ flex: 2, minWidth: 0, borderRight: '1px solid #2a2a3a' }}>
+                <Scope />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <SimLog />
+              </div>
+            </div>
           )}
         </div>
         {/* Right dock: GroundSetup + InstrumentRack */}
@@ -261,6 +308,20 @@ const mainStyle: React.CSSProperties = {
   flex: 1,
   display: 'flex',
   overflow: 'hidden',
+  minHeight: 0,
+}
+const centerColStyle: React.CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  minWidth: 0,
+  minHeight: 0,
+}
+const bottomDockStyle: React.CSSProperties = {
+  height: 260,
+  display: 'flex',
+  borderTop: '1px solid #2a2a3a',
+  minHeight: 0,
 }
 const leftDockStyle: React.CSSProperties = {
   width: 260,

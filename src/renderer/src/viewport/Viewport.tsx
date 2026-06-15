@@ -44,6 +44,13 @@ interface ViewportProps {
    * @param kind   The instrument kind from the drag payload.
    */
   onNetDrop?: (netId: number, kind: string) => void
+  /**
+   * Task 24: Called once the SceneManager is mounted (and again with null on
+   * unmount). Lets the store wire its imperative BoardHooks to the live scene so
+   * transient samples can drive the copper tint without re-rendering React at
+   * sample rate.
+   */
+  onSceneReady?: (scene: SceneManager | null) => void
 }
 
 export default function Viewport({
@@ -54,6 +61,7 @@ export default function Viewport({
   netVoltages,
   voltageRange,
   onNetDrop,
+  onSceneReady,
 }: ViewportProps): React.ReactElement {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<SceneManager | null>(null)
@@ -61,6 +69,8 @@ export default function Viewport({
   onPickRef.current = onPick
   const onNetDropRef = useRef<typeof onNetDrop>(onNetDrop)
   onNetDropRef.current = onNetDrop
+  const onSceneReadyRef = useRef<typeof onSceneReady>(onSceneReady)
+  onSceneReadyRef.current = onSceneReady
 
   // Mount / unmount the scene manager
   useEffect(() => {
@@ -72,6 +82,7 @@ export default function Viewport({
     manager.mount(canvas, {
       onPickEvent: event => onPickRef.current?.(event),
     })
+    onSceneReadyRef.current?.(manager)
 
     // ResizeObserver keeps the canvas filling its parent
     const ro = new ResizeObserver(entries => {
@@ -86,6 +97,7 @@ export default function Viewport({
 
     return () => {
       ro.disconnect()
+      onSceneReadyRef.current?.(null)
       manager.dispose()
       sceneRef.current = null
     }

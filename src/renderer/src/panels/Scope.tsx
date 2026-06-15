@@ -29,6 +29,7 @@ import { useApp, useAppStoreApi } from '../store/storeContext'
 import type { AppState } from '../store/appStore'
 import type { Instrument } from '../../../core/spicegen/instruments'
 import { createRingBuffer, feedSamples, type RingBuffer } from '../scope/ringBuffer'
+import { scopeSamplesEmitter } from '../scope/sampleEmitter'
 import {
   minMaxDecimate,
   measureVpp,
@@ -496,20 +497,12 @@ const Scope: React.FC = () => {
 
 // ─── Module-level samples event emitter ──────────────────────────────────────
 //
-// App.tsx (or wherever the simClient is wired) must forward 'samples' SimEvents
-// by dispatching on this emitter:
-//
-//   import { scopeSamplesEmitter } from './panels/Scope'
-//   simClient.onEvent(event => {
-//     if (event.type === 'samples') {
-//       scopeSamplesEmitter.dispatchEvent(new CustomEvent('samples', { detail: event }))
-//     }
-//   })
-//
-// This avoids coupling Scope.tsx to the simClient directly while keeping the
-// ring-buffer feed path efficient (no React re-renders for each sample batch).
+// As of Task 24 the store's `ingestSamples` dispatches raw 'samples' batches on
+// this emitter; the Scope subscribes (see the effect above). The emitter now
+// lives in its own React-free module so the store can import it without pulling
+// React into the store core. Re-exported here for existing import sites.
 
-export const scopeSamplesEmitter = new EventTarget()
+export { scopeSamplesEmitter } from '../scope/sampleEmitter'
 
 // ─── styles ───────────────────────────────────────────────────────────────────
 

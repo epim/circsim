@@ -41,6 +41,8 @@ import type { BoardModel } from '../../../core/kicad/types'
 
 import type { SimClient } from '../ipc/simClient'
 import type { SimCommand, SimEvent } from '../../../simhost/protocol'
+import { createRingBuffer, feedSamples, type RingBuffer } from '../scope/ringBuffer'
+import { scopeSamplesEmitter } from '../scope/sampleEmitter'
 
 // ─── derived helpers (pure, exported for the UI + tests) ─────────────────────────
 
@@ -68,6 +70,79 @@ export function statusBadge(r: Resolution): StatusBadge {
   if (r.status === 'ok') return 'ok'
   if (r.status === 'stubbed') return 'amber'
   return 'red'
+}
+
+// ─── fidelity banner (Spec §8.6, §12) ───────────────────────────────────────────
+
+export interface FidelityBannerItem {
+  ref: string
+  /** Plain-language mode, e.g. "stubbed (open)" or "unresolved". */
+  mode: string
+}
+
+/**
+ * Build the persistent fidelity-banner list (Spec §8.6 / §12): one entry per part
+ * whose `status !== 'ok'`, in resolution order, naming the ref + the stub mode.
+ * Empty list ⇒ banner hidden (the simulation is fully resolved).
+ */
+export function fidelityBannerItems(resolutions: Resolution[]): FidelityBannerItem[] {
+  const items: FidelityBannerItem[] = []
+  for (const r of resolutions) {
+    if (r.status === 'ok') continue
+    let mode: string
+    if (r.status === 'stubbed') {
+      const stubMode = r.model?.kind === 'stub' ? r.model.mode : 'open'
+      mode = `stubbed (${stubMode})`
+    } else {
+      mode = 'unresolved'
+    }
+    items.push({ ref: r.ref, mode })
+  }
+  return items
+}
+
+/** True when any resolution is an xspice-digital part (sequential-logic caveat). */
+export function hasDigitalParts(resolutions: Resolution[]): boolean {
+  return resolutions.some(r => r.model?.kind === 'xspice-digital')
+}
+
+// ─── transient analysis defaults (Spec §7.5) ─────────────────────────────────────
+
+/** Default bench window in sim-seconds (Spec §7.5). NEVER unbounded. */
+export const BENCH_WINDOW_SECONDS = 30
+
+/** Hard cap on the transient time-step (Spec §7.5 / Task 24). */
+export const MAX_TSTEP_SECONDS = 10e-6
+
+/**
+ * Compute the transient time-step from the fastest function-gen present:
+ *   tstep = min( 1 / (200 · fmax), 10 µs )
+ * When there is no function-gen, fmax is undefined and tstep falls back to the
+ * 10 µs cap (Spec §7.5, Task 24).
+ */
+export function computeTstep(instruments: Instrument[]): number {
+  let fmax = 0
+  for (const inst of instruments) {
+    if (inst.kind === 'function-gen' && inst.freqHz > fmax) fmax = inst.freqHz
+  }
+  if (fmax <= 0) return MAX_TSTEP_SECONDS
+  return Math.min(1 / (200 * fmax), MAX_TSTEP_SECONDS)
+}
+
+// ─── board hooks (imperative viewport seam — Spec §10.2, §11) ─────────────────────
+
+/**
+ * The narrow imperative seam the orchestration slice uses to push results onto
+ * the 3D board. In production these forward to the SceneManager
+ * (`scene.applyNetVoltages` / `scene.showOpAnnotations`); unit tests inject a spy.
+ * Kept optional so the store works headless (tests that don't care about the
+ * viewport simply omit it).
+ */
+export interface BoardHooks {
+  /** Tint copper by per-net voltage (op result or latest transient sample). */
+  applyNetVoltages(voltages: Map<number, number>, minVolts: number, maxVolts: number): void
+  /** Show floating net-voltage labels from an op result. */
+  showOpAnnotations(voltages: Map<number, number>): void
 }
 
 // ─── store shape ─────────────────────────────────────────────────────────────
@@ -115,6 +190,14 @@ export interface AppState {
   /** Min/max voltage across the latest op result (for the voltage legend). */
   voltageRange: { min: number; max: number } | null
   ngspiceVersion: string | null
+  /** Real-time pacing factor (0.1× / 1× / 'max'). */
+  paceFactor: number | 'max'
+  /** Achieved real-time factor from the latest `status` event (UI readout). */
+  achievedRealtimeFactor: number | null
+  /** Current sim-time (seconds) from the latest `status` event. */
+  simTimeSeconds: number
+  /** Vector names from the latest run (`vectors` event) — drives sample routing. */
+  vectorNames: string[]
 
   // ── error / honesty state (Spec §12) ─────────────────────────────────────────
   parseError: ParseErrorInfo | null
@@ -129,6 +212,27 @@ export interface AppState {
   logLines: { level: 'info' | 'warn' | 'error'; text: string }[]
   lastBenchRestart: { reason: 'window-elapsed' | 'memory'; at: number } | null
   crashNotice: { willRespawn: boolean; at: number } | null
+
+  // ── transient run honesty surfaces (Spec §7.5, §12) ───────────────────────────
+  /**
+   * Brief "bench restarted" toast (Spec §7.5). `sequentialLogicCaveat` is true
+   * when digital parts are present (their state is lost across a restart).
+   */
+  benchRestartToast: {
+    reason: 'window-elapsed' | 'memory'
+    sequentialLogicCaveat: boolean
+    at: number
+  } | null
+  /**
+   * Plain-language convergence-failure card (Spec §12): friendly explanation +
+   * the retry-ladder note + the raw ngspice log for the expandable section.
+   */
+  convergenceCard: {
+    plainLanguage: string
+    retryLadderNote: string
+    rawDetail: string
+    at: number
+  } | null
 
   // ── actions ────────────────────────────────────────────────────────────────
   /** Parse + extract + resolve a board from raw .kicad_pcb text. */
@@ -161,9 +265,39 @@ export interface AppState {
   /** Update an instrument; routes through alterPlan (alter-safe vs reload). */
   updateInstrument(id: string, next: Instrument): void
 
-  // sim orchestration (subset — Task 24 expands Run/Pause)
+  // sim orchestration (Task 24)
+  /**
+   * Provide the imperative board hooks (viewport seam). The renderer entrypoint
+   * wires these to the SceneManager; tests inject a spy. Optional + replaceable.
+   */
+  setBoardHooks(hooks: BoardHooks | null): void
+
   /** Generate deck → loadCircuit → runOp; resolves with the op voltages. */
   powerOn(): Promise<Map<number, number> | null>
+
+  /**
+   * Start (or resume) the live transient bench (Spec §4 step 5, §7.5).
+   *   - If paused with a clean deck → resume.
+   *   - Otherwise (re)load the deck when dirty, reset the ring buffers, and issue
+   *     a BOUNDED `runTransient` (tstep = min(1/(200·fmax),10µs), tstop = 30 s).
+   */
+  run(): void
+
+  /** Pause the running transient (user-owner `halt`). */
+  pause(): void
+
+  /** Set the real-time pacing factor (0.1× / 1× / 'max') → `setPace`. */
+  setPace(factor: number | 'max'): void
+
+  /** Read the ring buffer for a voltage probe (scope reads this). */
+  getProbeRingBuffer(probeId: string): RingBuffer | null
+
+  /** Dismiss the bench-restart toast. */
+  dismissBenchRestartToast(): void
+
+  /** Dismiss the convergence-failure card. */
+  dismissConvergenceCard(): void
+
   /** Mark deck dirty (any deck-affecting change). */
   markDeckDirty(): void
 
@@ -198,6 +332,32 @@ export type AppStore = StoreApi<AppState>
 export function createAppStore(options: CreateAppStoreOptions): AppStore {
   const { simClient } = options
 
+  // ── non-reactive closure state ───────────────────────────────────────────────
+  // Board hooks (viewport seam) + per-probe ring buffers live OUTSIDE the reactive
+  // store: they are imperative sinks (the scene + the scope), not render inputs.
+  let boardHooks: BoardHooks | null = null
+  const ringBuffers = new Map<string /* probe id */, RingBuffer>()
+
+  /** Ensure a ring buffer exists for every current voltage-probe; prune the rest. */
+  function syncRingBuffers(instruments: Instrument[]): void {
+    const liveIds = new Set<string>()
+    for (const inst of instruments) {
+      if (inst.kind === 'voltage-probe') {
+        liveIds.add(inst.id)
+        if (!ringBuffers.has(inst.id)) ringBuffers.set(inst.id, createRingBuffer())
+      }
+    }
+    for (const id of [...ringBuffers.keys()]) {
+      if (!liveIds.has(id)) ringBuffers.delete(id)
+    }
+  }
+
+  /** Reset (clear) all ring buffers at the start of a fresh transient run. */
+  function resetRingBuffers(instruments: Instrument[]): void {
+    ringBuffers.clear()
+    syncRingBuffers(instruments)
+  }
+
   const store = createStore<AppState>((set, get) => ({
     // ── initial state ──────────────────────────────────────────────────────────
     project: { boardFileName: null, boardText: null, schematicFileName: null },
@@ -217,6 +377,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     opVoltages: null,
     voltageRange: null,
     ngspiceVersion: null,
+    paceFactor: 1,
+    achievedRealtimeFactor: null,
+    simTimeSeconds: 0,
+    vectorNames: [],
     parseError: null,
     viewerOnly: false,
     selectedRef: null,
@@ -224,10 +388,13 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     logLines: [],
     lastBenchRestart: null,
     crashNotice: null,
+    benchRestartToast: null,
+    convergenceCard: null,
 
     // ── open flow ────────────────────────────────────────────────────────────
     openBoardFromText(boardText, fileName, opts) {
       // Reset everything that depends on the old project.
+      ringBuffers.clear()
       set({
         parseError: null,
         viewerOnly: false,
@@ -241,6 +408,11 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         selectedRef: null,
         selectedNetId: null,
         logLines: [],
+        benchRestartToast: null,
+        convergenceCard: null,
+        vectorNames: [],
+        simTimeSeconds: 0,
+        achievedRealtimeFactor: null,
       })
 
       let board: BoardModel
@@ -405,6 +577,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     // ── instruments ──────────────────────────────────────────────────────────
     addInstrument(inst) {
       set(s => ({ instruments: [...s.instruments, inst] }))
+      syncRingBuffers(get().instruments)
       get().markDeckDirty()
     },
 
@@ -412,6 +585,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       set(s => ({
         instruments: s.instruments.filter(i => !('id' in i) || i.id !== id),
       }))
+      syncRingBuffers(get().instruments)
       get().markDeckDirty()
     },
 
@@ -442,6 +616,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     },
 
     // ── sim orchestration ──────────────────────────────────────────────────────
+    setBoardHooks(hooks) {
+      boardHooks = hooks
+    },
+
     async powerOn() {
       const { circuit, resolutions, instruments, groundNetId } = get()
       if (!circuit || groundNetId === null) {
@@ -457,7 +635,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         title: get().project.boardFileName ?? undefined,
       })
 
-      set({ simState: 'op' })
+      set({ simState: 'op', convergenceCard: null })
       simClient.send({ type: 'loadCircuit', deckLines })
       simClient.send({ type: 'runOp' })
 
@@ -465,7 +643,9 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       try {
         result = await simClient.waitFor('opResult', 30_000)
       } catch {
-        set({ simState: 'idle' })
+        // A timeout drops us back to idle; a convergenceFailure event (ingested
+        // separately) already surfaces the plain-language card.
+        if (get().simState === 'op') set({ simState: 'idle' })
         return null
       }
 
@@ -474,7 +654,73 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       const voltageRange = computeVoltageRange(opVoltages)
 
       set({ opVoltages, voltageRange, deckDirty: false, simState: 'idle' })
+
+      // Push onto the 3D board: floating voltage labels + copper voltage tint.
+      applyOpToBoard(boardHooks, opVoltages, voltageRange)
       return opVoltages
+    },
+
+    run() {
+      const { circuit, resolutions, instruments, groundNetId, simState, deckDirty } = get()
+      if (!circuit || groundNetId === null) {
+        // Guided empty-state (Spec §12): no ground → Run is a no-op, not a dead button.
+        return
+      }
+
+      // Resume-from-pause with a clean deck: do NOT reload, just resume.
+      if (simState === 'paused' && !deckDirty) {
+        simClient.send({ type: 'resume' })
+        set({ simState: 'running' })
+        return
+      }
+
+      // Fresh start (or restart after a deck-dirtying edit): reload the deck +
+      // reset ring buffers so the scope starts clean.
+      const deckLines = generateDeck({
+        circuit,
+        resolutions,
+        instruments,
+        groundNetId,
+        title: get().project.boardFileName ?? undefined,
+      })
+      resetRingBuffers(instruments)
+
+      const tstepSeconds = computeTstep(instruments)
+      const tstopSeconds = BENCH_WINDOW_SECONDS
+
+      simClient.send({ type: 'loadCircuit', deckLines })
+      simClient.send({ type: 'setPace', realtimeFactor: get().paceFactor })
+      simClient.send({ type: 'runTransient', tstepSeconds, tstopSeconds })
+      set({
+        simState: 'running',
+        deckDirty: false,
+        convergenceCard: null,
+        vectorNames: [],
+        simTimeSeconds: 0,
+      })
+    },
+
+    pause() {
+      // user-owner halt (Spec §7.4.3): only the user resume clears it.
+      simClient.send({ type: 'halt' })
+      set({ simState: 'paused' })
+    },
+
+    setPace(factor) {
+      set({ paceFactor: factor })
+      simClient.send({ type: 'setPace', realtimeFactor: factor })
+    },
+
+    getProbeRingBuffer(probeId) {
+      return ringBuffers.get(probeId) ?? null
+    },
+
+    dismissBenchRestartToast() {
+      set({ benchRestartToast: null })
+    },
+
+    dismissConvergenceCard() {
+      set({ convergenceCard: null })
     },
 
     markDeckDirty() {
@@ -487,9 +733,12 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     },
 
     replayAfterCrash() {
-      const { circuit, resolutions, instruments, groundNetId, simState } = get()
+      const { circuit, resolutions, instruments, groundNetId, simState, paceFactor } = get()
       if (!circuit || groundNetId === null) return
 
+      // Re-send the full deck. All instrument state (including live-altered supply
+      // voltages) lives in the store, so the regenerated deck already reflects it
+      // — nothing extra to re-apply (Spec §6.1).
       const deckLines = generateDeck({
         circuit,
         resolutions,
@@ -499,12 +748,19 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       })
       simClient.send({ type: 'loadCircuit', deckLines })
 
-      // Re-apply running state: if we were running, resume the transient; if op,
-      // re-run op. Pace/instrument live-alters are folded into the deck already.
+      // Re-establish the run state on the fresh process.
       if (simState === 'running') {
-        // Task 24 owns the full tran restart; here we just re-issue op as a
-        // baseline so the board annotations are correct after recovery.
-        simClient.send({ type: 'runOp' })
+        // Restart the bounded transient from t=0 (the circuit settles again from
+        // initial conditions — acceptable per Spec §7.5; scope ring buffers keep
+        // their history). Re-apply the pace so the fresh process honours it.
+        resetRingBuffers(instruments)
+        simClient.send({ type: 'setPace', realtimeFactor: paceFactor })
+        simClient.send({
+          type: 'runTransient',
+          tstepSeconds: computeTstep(instruments),
+          tstopSeconds: BENCH_WINDOW_SECONDS,
+        })
+        set({ vectorNames: [], simTimeSeconds: 0 })
       } else if (simState === 'op') {
         simClient.send({ type: 'runOp' })
       }
@@ -525,17 +781,63 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           const circuit = get().circuit
           if (!circuit) break
           const opVoltages = mapOpResultToNetVoltages(event.values, circuit)
-          set({ opVoltages, voltageRange: computeVoltageRange(opVoltages) })
+          const voltageRange = computeVoltageRange(opVoltages)
+          set({ opVoltages, voltageRange })
+          // Keep the board in sync after a replayed/standalone op too.
+          applyOpToBoard(boardHooks, opVoltages, voltageRange)
+          break
+        }
+        case 'vectors':
+          set({ vectorNames: event.names })
+          break
+        case 'samples': {
+          // Feed each probed net's samples into its ring buffer (the scope reads
+          // these), forward the raw batch to the scope emitter, and drive the live
+          // copper overlay off the LATEST sample per probed net (Spec §4 step 5).
+          ingestSamples(event, get, boardHooks, ringBuffers)
           break
         }
         case 'benchRestarted':
-          set({ lastBenchRestart: { reason: event.reason, at: Date.now() } })
+          set({
+            lastBenchRestart: { reason: event.reason, at: Date.now() },
+            benchRestartToast: {
+              reason: event.reason,
+              sequentialLogicCaveat: hasDigitalParts(get().resolutions),
+              at: Date.now(),
+            },
+          })
+          break
+        case 'convergenceFailure':
+          set({
+            simState: 'idle',
+            convergenceCard: {
+              plainLanguage:
+                "The simulator couldn't find a stable solution for this circuit. " +
+                'Common causes: a missing or wrong model, a floating node with no DC path ' +
+                'to ground, or component values that are far apart in scale.',
+              retryLadderNote:
+                'circsim already retried with gmin-stepping and source-stepping before reporting this.',
+              rawDetail: event.detail,
+              at: Date.now(),
+            },
+          })
           break
         case 'status':
-          set({ simState: event.running ? 'running' : get().simState === 'running' ? 'paused' : get().simState })
+          set({
+            achievedRealtimeFactor: event.realtimeFactor,
+            simTimeSeconds: event.simTimeSeconds,
+            // A `status{running:false}` while we believe we're running means the
+            // engine self-halted (window end / pacing). Reflect it as paused, but
+            // never override an explicit user pause/idle.
+            simState: event.running
+              ? 'running'
+              : get().simState === 'running'
+                ? 'paused'
+                : get().simState,
+          })
           break
         default:
-          // vectors / samples / acResult / convergenceFailure handled by Task 23/24.
+          // acResult handled by the future AC/Bode panel (Spec §17).
           break
       }
     },
@@ -613,6 +915,90 @@ export function computeVoltageRange(
     if (v > max) max = v
   }
   return { min, max }
+}
+
+// ─── board-hook drivers (Task 24) ────────────────────────────────────────────────
+
+/**
+ * Push an op result onto the 3D board: floating net-voltage labels
+ * (`showOpAnnotations`) + per-net copper tint (`applyNetVoltages`). No-op when no
+ * board hooks are wired (headless tests, viewer before mount).
+ */
+function applyOpToBoard(
+  hooks: BoardHooks | null,
+  voltages: Map<number, number>,
+  range: { min: number; max: number } | null,
+): void {
+  if (!hooks) return
+  hooks.showOpAnnotations(voltages)
+  if (range) hooks.applyNetVoltages(voltages, range.min, range.max)
+}
+
+/**
+ * Ingest a `samples` batch:
+ *   1. route each vector's column into its probe ring buffer (the scope reads these),
+ *   2. forward the raw batch to the scope emitter (decoupled, no React churn),
+ *   3. drive the live copper overlay from the LATEST sample per probed net,
+ *      keeping un-probed nets on their op tint.
+ *
+ * Exported for unit testing of the sample → ring-buffer → overlay path.
+ */
+export function ingestSamples(
+  event: Extract<SimEvent, { type: 'samples' }>,
+  get: () => AppState,
+  hooks: BoardHooks | null,
+  ringBuffers: Map<string, RingBuffer>,
+): void {
+  const state = get()
+  const circuit = state.circuit
+  if (!circuit) return
+
+  // spiceNode → netId, and netId → voltage-probe(s).
+  const nodeToNet = new Map<string, number>()
+  for (const net of circuit.nets) nodeToNet.set(net.spiceNode, net.id)
+
+  const probesByNet = new Map<number, { id: string }[]>()
+  for (const inst of state.instruments) {
+    if (inst.kind !== 'voltage-probe') continue
+    const list = probesByNet.get(inst.netId) ?? []
+    list.push(inst)
+    probesByNet.set(inst.netId, list)
+  }
+
+  // Start from the op tint so un-probed nets keep their op voltage, then overlay
+  // the latest probed-net samples on top.
+  const liveVoltages = new Map<number, number>(state.opVoltages ?? [])
+
+  for (let ci = 0; ci < event.vectorNames.length; ci++) {
+    const vecName = event.vectorNames[ci]
+    const column = event.columns[ci]
+    if (!column) continue
+    const netId = nodeToNet.get(vecName) ?? nodeToNet.get(vecName.toLowerCase())
+    if (netId === undefined) continue
+
+    // Feed every probe on this net.
+    const probes = probesByNet.get(netId)
+    if (probes) {
+      for (const probe of probes) {
+        const ring = ringBuffers.get(probe.id)
+        if (ring) feedSamples(ring, event.simTime, column)
+      }
+    }
+
+    // Latest value for the live overlay.
+    if (column.length > 0) {
+      liveVoltages.set(netId, column[column.length - 1])
+    }
+  }
+
+  // Forward the raw batch to the scope (module-level emitter; see Scope.tsx).
+  scopeSamplesEmitter.dispatchEvent(new CustomEvent('samples', { detail: event }))
+
+  // Live copper tint off the latest samples.
+  if (hooks && liveVoltages.size > 0) {
+    const range = computeVoltageRange(liveVoltages)
+    if (range) hooks.applyNetVoltages(liveVoltages, range.min, range.max)
+  }
 }
 
 // ─── React binding ───────────────────────────────────────────────────────────
