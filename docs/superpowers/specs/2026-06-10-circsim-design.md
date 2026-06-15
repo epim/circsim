@@ -170,17 +170,19 @@ type SimEvent =
 
 XSPICE digital primitives (`d_and`, `d_ff`, `d_lut`, `d_state`, `adc_bridge`, `dac_bridge`, …) live in `.cm` plugin files (`digital.cm`, `analog.cm`, `spice2poly.cm`, `xtradev.cm`, `xtraevt.cm`). **Shipping the bare DLL without the `.cm` files silently breaks every digital model.** The bundle must ship the full `lib/ngspice/` tree alongside the library.
 
-**Path resolution is a packaging trap.** ngspice locates `.cm` files via the `spinit` init script, whose relative `codemodel` paths resolve against the *calling process executable* — in a packaged app that's the Electron binary, not our resources directory, so the stock spinit will fail to find the `.cm` files in production while working in dev. Required approach: at startup, **SimHost generates a `spinit` file in a temp/app-data directory containing `codemodel <absolute path>/digital.cm` lines** (absolute paths computed from `process.resourcesPath` or the dev layout), sets `process.env.SPICE_SCRIPTS` to that directory **before** `ngSpice_Init`, and then verifies `.cm` loading with the smoke deck below. CI must include a test that runs SimHost against the *packaged* resources layout, not just the repo layout — this failure mode is invisible in dev.
+**Path resolution is a packaging trap.** ngspice locates `.cm` files via the `spinit` init script, whose relative `codemodel` paths resolve against the *calling process executable* — in a packaged app that's the Electron binary, not our resources directory, so the stock spinit will fail to find the `.cm` files in production while working in dev. Approach (Phase 2 verified): SimHost generates a `spinit` in a temp/app-data dir with absolute `codemodel` paths and sets `SPICE_SCRIPTS` before `ngSpice_Init` **AND** — because ngspice's native `getenv` does not reliably observe a Node-mutated `process.env` on Windows — **also issues explicit `ngSpice_Command("codemodel <absolute>/<file>.cm")` for each bundled `.cm` right after `ngSpice_Init`.** The explicit `codemodel` commands are the environment-independent belt-and-suspenders that actually guarantee loading; the spinit/env path remains for packaging correctness. Verify with the smoke deck below.
+
+**Verified ngspice-46 specifics (Phase 2):** the inverter primitive is `d_inverter` (not `d_inv`); transient runs that must charge from initial conditions need the `uic` flag (`bg_tran <tstep> <tstop> uic`); libngspice is a process-global singleton (one `ngSpice_Init` per process — the reason SimHost is its own utilityProcess, and why integration tests use a forked/isolated pool).
 
 Startup smoke deck (run at init; on failure emit a loud structured error naming `.cm` files):
 
 ```
-* cm smoke: 0V in -> adc -> d_inv -> dac -> expect ~5V out
+* cm smoke: 0V in -> adc -> d_inverter -> dac -> expect ~5V out
 v1 in 0 dc 0
 abr_in [in] [din] adcm
 .model adcm adc_bridge(in_low=1.0 in_high=2.0)
 ainv din dout invm
-.model invm d_inv(rise_delay=1n fall_delay=1n)
+.model invm d_inverter(rise_delay=1n fall_delay=1n)
 abr_out [dout] [out] dacm
 .model dacm dac_bridge(out_low=0 out_high=5)
 .tran 1n 20n
@@ -479,7 +481,7 @@ Parse + first render of a 5 MB board ≤ 2 s on a mid-range laptop; 60 fps orbit
 
 - **Unit (Vitest):** sexpr parser (quoting, escapes, junk tolerance); board parsing against hand-authored fixtures; Edge.Cuts stitching (arcs, cutouts, broken loops); value parser (`4k7`, `100n`, `2.2Meg`); netlist extraction; model resolution tiers + pin maps; deck generation (golden-file decks); BOM column mapping.
 - **Fixtures:** authored from scratch in-repo (small KiCad projects we own): `fixture-rc.kicad_pcb` (RC divider), `fixture-555.kicad_pcb` + `.kicad_sch` (a *complete* minimal 555 astable — NE555, two resistors, two capacitors, LED + series resistor — so end-to-end acceptance tests can actually oscillate), `fixture-mixed` (74HC + MCU stub), `fixture-arcs` (curved outline + cutout). No third-party board files in the repo.
-- **SimHost integration (Node, real libngspice):** load RC deck → op → assert node voltage ±1%; transient RC charge curve vs analytic e^(−t/RC) within tolerance; alter mid-run changes steady state; kill/respawn replay; digital smoke test (`d_inv` via bridges) proving `.cm` loading.
+- **SimHost integration (Node, real libngspice):** load RC deck → op → assert node voltage ±1%; transient RC charge curve vs analytic e^(−t/RC) within tolerance; alter mid-run changes steady state; kill/respawn replay; digital smoke test (`d_inverter` via bridges) proving `.cm` loading.
 - **E2E (Playwright, one path):** open fixture-555 → power on → op annotations appear → run → scope draws ≥ N samples → alter supply voltage → annotation changes.
 - **CI gates:** unit + simhost-integration on all three OS runners; E2E on Linux runner (xvfb).
 
@@ -516,7 +518,7 @@ Parse + first render of a 5 MB board ≤ 2 s on a mid-range laptop; 60 fps orbit
 | 3 | ngspice convergence failures on realistic boards | Retry ladder (gmin/source stepping); structured plain-language errors; watchdog respawn |
 | 4 | FFI instability on some platform | Process isolation (SimHost), state replay on respawn; pipe-mode adapter as designed fallback |
 | 5 | Edge.Cuts stitching breaks on real boards | Dedicated utility + heavy test coverage; bounding-box fallback with warning |
-| 6 | `.cm` files missing next to library → digital silently broken | Startup `d_inv` smoke test; packaging test in CI |
+| 6 | `.cm` files missing next to library → digital silently broken | Startup `d_inverter` smoke test; packaging test in CI |
 | 7 | Users over-trust results (no parasitics, behavioral models) | Persistent fidelity messaging; "what this simulation can/can't tell you" doc page linked from banner |
 | 8 | KiCad format drift (v10+) | Tolerant parser (ignore-unknown); fixtures regenerated per KiCad release; format quirks isolated in `core/kicad` |
 

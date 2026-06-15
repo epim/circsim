@@ -256,12 +256,12 @@ bool ngSpice_running(void);
 - [ ] Startup self-check: run this exact smoke deck once at init (XSPICE `a` elements are event-driven — `.tran`, never `.op`); pass = final `v(out)` ≥ 4.5; on failure emit `log{level:'error'}` naming the `.cm` files (Spec §7.2):
 
 ```
-* cm smoke: 0V in -> adc -> d_inv -> dac -> expect ~5V out
+* cm smoke: 0V in -> adc -> d_inverter -> dac -> expect ~5V out
 v1 in 0 dc 0
 abr_in [in] [din] adcm
 .model adcm adc_bridge(in_low=1.0 in_high=2.0)
 ainv din dout invm
-.model invm d_inv(rise_delay=1n fall_delay=1n)
+.model invm d_inverter(rise_delay=1n fall_delay=1n)
 abr_out [dout] [out] dacm
 .model dacm dac_bridge(out_low=0 out_high=5)
 .tran 1n 20n
@@ -371,7 +371,8 @@ Spec §8.5.
 - [ ] Behavioral op-amp macromodel (single subckt, parameterized: Aol, GBW, slew, Vsat from rails) instantiated for LM358, LM324, TL072, LM393 (comparator variant: open-collector output stage).
 - [ ] Behavioral LDO/linear-regulator macromodel (Vout param, dropout, current limit) for 78xx family + AMS1117-3.3/5 (write from datasheet params — research confirmed no redistributable vendor model exists).
 - [ ] NE555: write an in-house behavioral subckt from the datasheet block diagram (two comparators + RS latch via XSPICE `d_srlatch` or a B-source latch + discharge switch + 5k/5k/5k divider). There is NO `special_models` directory in the ngspice distribution; its example netlists (`examples/p-to-n-examples/555-timer-*.cir`) may be consulted for structure but their text must not be copied (provenance unstated — Spec §8.5).
-- [ ] `logic74hc.json`: XSPICE digital templates (Spec §8.5 `xspice-digital`) for 74HC00/04/08/14/32/74/86/164/595 — gate-level using `d_nand`/`d_inv`/etc. with datasheet-typical delays, schmitt (HC14) via `d_inv` + hysteresis on the `adc_bridge` thresholds; per-package pinMaps (DIP-14/SOIC-14 etc. from datasheet pinouts).
+- [ ] `logic74hc.json`: XSPICE digital templates (Spec §8.5 `xspice-digital`) for 74HC00/04/08/14/32/74/86/164/595 — gate-level with datasheet-typical delays, schmitt (HC14) via the inverter primitive + hysteresis on the `adc_bridge` thresholds; per-package pinMaps (DIP-14/SOIC-14 etc. from datasheet pinouts).
+  - **VERIFIED ngspice-46 primitive names (Phase 2 finding — the plan's earlier `d_inv` was WRONG):** the inverter is **`d_inverter`** and the buffer is **`d_buffer`** — `d_inv`/`d_buf` do NOT exist in ngspice 46's digital.cm. Other gates are `d_and`/`d_nand`/`d_or`/`d_nor`/`d_xor`/`d_xnor`; flip-flops `d_dff`/`d_jkff`/`d_srff`/`d_tff`; latches `d_dlatch`/`d_srlatch`; plus `d_tristate`, `d_pullup`, `d_pulldown`, `d_state`, `d_source`, `d_lut`. **Before authoring any template, the agent MUST confirm each primitive name and its parameter list against the installed ngspice** (run a tiny `.tran` deck per primitive through SimHost, or check ngspice's `devhelp`), because a wrong model name fails the netlist silently. The Phase 2 SimHost startup smoke deck already uses `d_inverter` successfully — copy its `adc_bridge`/`d_inverter`/`dac_bridge` pattern.
 - [ ] Integration tests: LM358 voltage-follower deck → op → out ≈ in; 555 astable fixture deck → transient → oscillation period within 20 % of RC formula; 74HC00 NAND truth table via **one `.tran` run stepping the four input states with PWL sources** (e.g. hold each state 1 µs, sample mid-state; inputs 00/01/10/11 → out high/high/high/low). XSPICE digital elements are event-driven and do NOT propagate in `.op` — never test digital logic with operating-point analysis.
 - [ ] Acceptance: tests pass.
 
