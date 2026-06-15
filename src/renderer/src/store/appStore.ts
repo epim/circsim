@@ -208,6 +208,20 @@ export interface AppState {
   selectedRef: string | null
   selectedNetId: number | null
 
+  // ── Task 25: user models (llm-generated + user-import, in-memory) ────────────
+  /**
+   * In-memory user model store: ref → { subcktText, subcktName, pinMap, provenance }.
+   * These are applied at tier 4 in resolveAll (via the library seam injected in
+   * reResolve). Persisted externally by the caller via platformPaths.
+   */
+  userModels: Map<string /* ref */, {
+    mpn: string
+    subcktText: string
+    subcktName: string
+    pinMap: PinMap
+    provenance: 'llm-generated' | 'user-import'
+  }>
+
   // ── log stream ────────────────────────────────────────────────────────────────
   logLines: { level: 'info' | 'warn' | 'error'; text: string }[]
   lastBenchRestart: { reason: 'window-elapsed' | 'memory'; at: number } | null
@@ -309,6 +323,44 @@ export interface AppState {
 
   // internal: ingest a SimEvent (wired to the client's onEvent in setup)
   ingestEvent(event: SimEvent): void
+
+  // ── Task 25: LLM-assist + user .lib import ────────────────────────────────
+
+  /**
+   * Validate a pasted .subckt block by sending a minimal test deck to SimHost.
+   * The test deck wraps the subckt with dummy sources so ngspice can load it.
+   * Returns { ok: true } when ngspice accepts the deck; { ok: false, error }
+   * when it rejects with an error message.
+   *
+   * Injected simClient is used (no separate IPC needed).
+   */
+  validateSubckt(
+    subcktText: string,
+    subcktName: string,
+    nodeCount: number,
+  ): Promise<{ ok: true } | { ok: false; error: string }>
+
+  /**
+   * Save a validated LLM-generated subckt to the in-memory user library store
+   * and flag the part as resolved (tier 4, provenance 'llm-generated').
+   * The actual .lib file write is handled externally via platformPaths; this
+   * keeps the resolution state in sync and re-resolves.
+   *
+   * @param ref          Part reference (e.g. 'U1').
+   * @param mpn          Part identifier string (MPN or value).
+   * @param subcktText   The validated .subckt text.
+   * @param subcktName   The .subckt name.
+   * @param pinMap       User-verified pad → terminal map.
+   * @param provenance   'llm-generated' or 'user-import'.
+   */
+  saveUserModel(
+    ref: string,
+    mpn: string,
+    subcktText: string,
+    subcktName: string,
+    pinMap: PinMap,
+    provenance: 'llm-generated' | 'user-import',
+  ): void
 }
 
 export interface OpenOpts {
@@ -385,6 +437,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     viewerOnly: false,
     selectedRef: null,
     selectedNetId: null,
+    userModels: new Map(),
     logLines: [],
     lastBenchRestart: null,
     crashNotice: null,
@@ -509,16 +562,39 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     // ── resolution ──────────────────────────────────────────────────────────
     reResolve() {
-      const { circuit, schematicSimData, bom, library, stubOverrides } = get()
+      const { circuit, schematicSimData, bom, library, stubOverrides, userModels } = get()
       if (!circuit) {
         set({ resolutions: [] })
         return
       }
+
+      // Convert in-memory user models → LibraryEntry objects for tier 3/4 matching.
+      // These are injected ahead of the bundled library so user models win.
+      const userModelEntries: LibraryEntry[] = []
+      for (const [_ref, um] of userModels) {
+        userModelEntries.push({
+          id: `user-model-${um.mpn}`,
+          match: { mpn: [um.mpn] },
+          model: {
+            type: 'subckt',
+            // Use an in-memory virtual path: the spicegen reads this via the
+            // library entry; the actual text is stored in um.subcktText and
+            // injected by the spicegen when generating the deck.
+            file: `__user_model__:${um.mpn}`,
+            name: um.subcktName,
+          },
+          pinMaps: { '.*': um.pinMap },
+          defaultPinMap: um.pinMap,
+          provenance: um.provenance,
+        })
+      }
+
+      const effectiveLibrary = [...userModelEntries, ...library]
       const resolutions = resolveAll(
         circuit,
         schematicSimData ?? undefined,
         bom ?? undefined,
-        library.length > 0 ? library : undefined,
+        effectiveLibrary.length > 0 ? effectiveLibrary : undefined,
         stubOverrides.size > 0 ? stubOverrides : undefined,
       )
       set({ resolutions })
@@ -764,6 +840,86 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       } else if (simState === 'op') {
         simClient.send({ type: 'runOp' })
       }
+    },
+
+    // ── Task 25: LLM-assist + user .lib import ───────────────────────────────
+
+    async validateSubckt(subcktText, subcktName, nodeCount) {
+      // Build a minimal test deck: the pasted subckt + one dummy instance +
+      // enough dummy sources/ground so ngspice can parse it without error.
+      // We don't care about simulation convergence — only that ngspice PARSES
+      // the subckt definition without emitting a fatal error (loadCircuit).
+      // We use nodeCount dummy nodes (n1, n2, ...) tied to ground via 1G resistors
+      // so the deck has a DC path and won't hit the "no DC path to ground" trap.
+      const dummyNodes = Array.from({ length: nodeCount }, (_, i) => `_tst${i + 1}`)
+      const dummyNodeStr = dummyNodes.join(' ')
+      const dummyRs = dummyNodes
+        .map((n, i) => `r_chk_${i + 1} ${n} 0 1000meg`)
+        .join('\n')
+
+      const testDeck = [
+        `* circsim subckt validation test for ${subcktName}`,
+        subcktText.trim(),
+        `x_test ${dummyNodeStr} ${subcktName}`,
+        dummyRs,
+        `v_test _tst1 0 dc 0`,
+        `.op`,
+        `.end`,
+      ]
+
+      // Collect log lines during the load to detect errors.
+      const errorLines: string[] = []
+      let errorDetected = false
+
+      const unsub = simClient.onEvent(event => {
+        if (event.type === 'log' && event.level === 'error') {
+          errorLines.push(event.text)
+          errorDetected = true
+        }
+      })
+
+      try {
+        simClient.send({ type: 'loadCircuit', deckLines: testDeck })
+        // Give SimHost up to 8 seconds to respond with opResult or an error.
+        // If it loads cleanly we get an opResult (even a failed .op produces
+        // one; what matters is that ngspice accepted the deck structure).
+        // A parse/load error produces log{level:'error'} lines.
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 8000)
+          const innerUnsub = simClient.onEvent(evt => {
+            if (evt.type === 'opResult' || evt.type === 'convergenceFailure') {
+              clearTimeout(timer)
+              innerUnsub()
+              resolve()
+            }
+          })
+          // Also resolve immediately if we already detected a hard error
+          // (some errors fire before opResult).
+          if (errorDetected) {
+            clearTimeout(timer)
+            innerUnsub()
+            resolve()
+          }
+        })
+      } finally {
+        unsub()
+      }
+
+      if (errorDetected) {
+        return { ok: false, error: errorLines.join('\n') }
+      }
+      return { ok: true }
+    },
+
+    saveUserModel(ref, mpn, subcktText, subcktName, pinMap, provenance) {
+      set(s => {
+        const next = new Map(s.userModels)
+        next.set(ref, { mpn, subcktText, subcktName, pinMap, provenance })
+        return { userModels: next }
+      })
+      // Re-resolve: the new model will be picked up as a tier-4 entry.
+      get().reResolve()
+      get().markDeckDirty()
     },
 
     // ── event ingestion ──────────────────────────────────────────────────────

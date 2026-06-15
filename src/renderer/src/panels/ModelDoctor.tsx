@@ -1,5 +1,5 @@
 /**
- * renderer/panels/ModelDoctor.tsx — Task 21
+ * renderer/panels/ModelDoctor.tsx — Task 21 + Task 25
  *
  * Docked drawer (NEVER a blocking modal — Spec §8.6) listing every part whose
  * resolution status ≠ ok. Per part:
@@ -10,9 +10,8 @@
  * Every change re-runs resolveAll via the store and flags `deckDirty`
  * (the store actions handle both — see stubPart / setPinMap).
  *
- * [Import .lib…] and [Ask your LLM] are wired to store hooks that Task 25
- * fills in; here they invoke callbacks the parent supplies (so the drawer is
- * self-contained and testable). When no handler is supplied they are inert.
+ * Task 25 adds inline LlmAssist and LibImport panels wired to the store's
+ * validateSubckt + saveUserModel actions.
  *
  * Pure React over the store; validated by build + Phase 6 E2E.
  */
@@ -21,6 +20,11 @@ import React, { useMemo, useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
 import type { Resolution, PinMap } from '../../../core/models/types'
 import type { Part } from '../../../core/netlist/extract'
+import LlmAssist from './LlmAssist'
+import LibImport from './LibImport'
+import type { PadInfo } from '../../../core/models/llmPrompt'
+import type { LlmAssistProps } from './LlmAssist'
+import type { LibImportProps } from './LibImport'
 
 export interface ModelDoctorHandlers {
   /** Open the .lib import flow for a part (Task 25). */
@@ -67,9 +71,103 @@ function DoctorRow({
   onAskLlm,
 }: { res: Resolution; part: Part } & ModelDoctorHandlers): React.ReactElement {
   const store = useAppStoreApi()
+  const schematicSimData = useApp(s => s.schematicSimData)
   const [pinEditorOpen, setPinEditorOpen] = useState(false)
+  const [showLlmAssist, setShowLlmAssist] = useState(false)
+  const [showLibImport, setShowLibImport] = useState(false)
+  const [forcePinMapOpen, setForcePinMapOpen] = useState(false)
 
   const isStubbed = res.status === 'stubbed'
+
+  // Build padList from part.padNet + schematic pin names for LlmAssist/LibImport.
+  const padList: PadInfo[] = useMemo(() => {
+    const padNums = [...part.padNet.keys()].sort(sortPads)
+    const simInfo = schematicSimData?.get(part.ref)
+    return padNums.map(num => {
+      const pinName = simInfo?.pins.find(p => p.number === num)?.name
+      return { number: num, name: pinName }
+    })
+  }, [part, schematicSimData])
+
+  // Number of nodes for the subckt validation test deck.
+  const nodeCount = padList.length
+
+  // LlmAssist validateSubckt: wrap the store action (which uses the live simClient).
+  const handleValidateSubckt: LlmAssistProps['validateSubckt'] = async (subcktText, _part) => {
+    const subcktNameMatch = subcktText.match(/^\s*\.subckt\s+(\S+)/im)
+    const subcktName = subcktNameMatch ? subcktNameMatch[1] : 'UNKNOWN'
+    return store.getState().validateSubckt(subcktText, subcktName, nodeCount)
+  }
+
+  // LlmAssist onSave: persist + force pin-map review.
+  const handleLlmSave: LlmAssistProps['onSave'] = (mpn, subcktText, suggestedPinMap) => {
+    const subcktNameMatch = subcktText.match(/^\s*\.subckt\s+(\S+)/im)
+    const subcktName = subcktNameMatch ? subcktNameMatch[1] : mpn
+    store.getState().saveUserModel(
+      res.ref,
+      mpn,
+      subcktText,
+      subcktName,
+      suggestedPinMap,
+      'llm-generated',
+    )
+    setShowLlmAssist(false)
+    // Force-open the pin-map editor (Spec §8.7: never auto-trust LLM pin order).
+    setForcePinMapOpen(true)
+    setPinEditorOpen(true)
+  }
+
+  // LibImport: open a file picker via window.circsim.openFileDialog if available.
+  const handlePickFile: LibImportProps['openFilePicker'] = async () => {
+    // In Electron: use the preload's openFileDialog for .lib/.sub files.
+    // In tests / browser: falls back to null (file picker not available).
+    if (typeof window !== 'undefined' && window.circsim?.openFileDialog) {
+      const result = await window.circsim.openFileDialog({
+        filters: [{ name: 'SPICE library', extensions: ['lib', 'sub'] }],
+      })
+      const chosenPath = result.filePaths[0]
+      if (!chosenPath) return null
+
+      // Read the file text via readFile from the preload.
+      const text = window.circsim.readFile ? await window.circsim.readFile(chosenPath) : ''
+      return { path: chosenPath, text }
+    }
+    return null
+  }
+
+  // LibImport onSave: persist binding.
+  const handleLibSave: LibImportProps['onSave'] = (mpn, filePath, subcktName, pinMap) => {
+    // For user-import, the subckt text comes from the file; we store the filePath reference.
+    // We use the filePath as the "text" stub so spicegen can include it.
+    store.getState().saveUserModel(
+      res.ref,
+      mpn,
+      `* user-import from ${filePath}`,
+      subcktName,
+      pinMap,
+      'user-import',
+    )
+    setShowLibImport(false)
+    setPinEditorOpen(true)
+  }
+
+  const handleAskLlm = () => {
+    if (onAskLlm) {
+      onAskLlm(res.ref)
+    } else {
+      setShowLibImport(false)
+      setShowLlmAssist(o => !o)
+    }
+  }
+
+  const handleImportLib = () => {
+    if (onImportLib) {
+      onImportLib(res.ref)
+    } else {
+      setShowLlmAssist(false)
+      setShowLibImport(o => !o)
+    }
+  }
 
   return (
     <div style={rowStyle} data-ref={res.ref}>
@@ -103,13 +201,16 @@ function DoctorRow({
         >
           Interactive pins
         </button>
-        <button style={btnStyle} onClick={() => onImportLib?.(res.ref)} disabled={!onImportLib}>
+        <button style={btnStyle} onClick={handleImportLib}>
           Import .lib…
         </button>
-        <button style={btnStyle} onClick={() => onAskLlm?.(res.ref)} disabled={!onAskLlm}>
+        <button style={btnStyle} onClick={handleAskLlm}>
           Ask your LLM
         </button>
-        <button style={btnStyle} onClick={() => setPinEditorOpen(o => !o)}>
+        <button
+          style={{ ...btnStyle, background: (pinEditorOpen || forcePinMapOpen) ? '#2c4a2c' : undefined }}
+          onClick={() => { setPinEditorOpen(o => !o); setForcePinMapOpen(false) }}
+        >
           {pinEditorOpen ? 'Hide pin map' : 'Pin map'}
         </button>
         {(isStubbed || res.tier === 6) && (
@@ -118,6 +219,31 @@ function DoctorRow({
           </button>
         )}
       </div>
+
+      {/* Task 25: inline LLM-assist panel */}
+      {showLlmAssist && (
+        <div style={{ marginTop: 8 }}>
+          <LlmAssist
+            part={part}
+            padList={padList}
+            validateSubckt={handleValidateSubckt}
+            onSave={handleLlmSave}
+            onClose={() => setShowLlmAssist(false)}
+          />
+        </div>
+      )}
+
+      {/* Task 25: inline lib-import panel */}
+      {showLibImport && (
+        <div style={{ marginTop: 8 }}>
+          <LibImport
+            part={part}
+            openFilePicker={handlePickFile}
+            onSave={handleLibSave}
+            onClose={() => setShowLibImport(false)}
+          />
+        </div>
+      )}
 
       {pinEditorOpen && <PinMapEditor part={part} res={res} />}
     </div>
