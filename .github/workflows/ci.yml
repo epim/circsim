@@ -32,8 +32,79 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # -----------------------------------------------------------------------
+      # ngspice binary acquisition (cached per version)
+      # -----------------------------------------------------------------------
+      - name: Read ngspice version
+        id: ngspice-version
+        shell: bash
+        run: |
+          VERSION="$(node -e "console.log(require('./package.json').config?.circsim?.ngspiceVersion ?? '46')")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ngspice binaries (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        id: cache-ngspice-win
+        with:
+          path: resources/ngspice/win32-x64
+          key: ngspice-win32-x64-v${{ steps.ngspice-version.outputs.version }}
+
+      - name: Cache ngspice binaries (macOS x64)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        uses: actions/cache@v4
+        id: cache-ngspice-darwin-x64
+        with:
+          path: resources/ngspice/darwin-x64
+          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}
+
+      - name: Cache ngspice binaries (macOS arm64)
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        uses: actions/cache@v4
+        id: cache-ngspice-darwin-arm64
+        with:
+          path: resources/ngspice/darwin-arm64
+          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}
+
+      - name: Cache ngspice binaries (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        id: cache-ngspice-linux
+        with:
+          path: resources/ngspice/linux-x64
+          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}
+
+      # macOS build prerequisites
+      - name: Install macOS build tools (macOS only)
+        if: runner.os == 'macOS' && (steps.cache-ngspice-darwin-x64.outputs.cache-hit != 'true' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true')
+        run: brew install autoconf automake libtool
+
+      # Linux build prerequisites
+      - name: Install Linux build tools (Linux only)
+        if: runner.os == 'Linux' && steps.cache-ngspice-linux.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y autoconf automake libtool libfftw3-dev bison flex
+
+      # Fetch / build ngspice
+      - name: Fetch ngspice DLL (Windows)
+        if: runner.os == 'Windows' && steps.cache-ngspice-win.outputs.cache-hit != 'true'
+        run: npm run fetch:ngspice
+
+      - name: Build ngspice from source (macOS / Linux)
+        if: runner.os != 'Windows' && (steps.cache-ngspice-darwin-x64.outputs.cache-hit != 'true' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true' && steps.cache-ngspice-linux.outputs.cache-hit != 'true')
+        shell: bash
+        run: bash scripts/build-ngspice.sh
+
+      # -----------------------------------------------------------------------
+      # Build + Test
+      # -----------------------------------------------------------------------
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
+      - name: Test (unit + ngspice resources)
         run: npm test
+
+      - name: Test integration (requires ngspice resources)
+        run: npm run test:integration
+        continue-on-error: false

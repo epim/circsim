@@ -7,7 +7,7 @@
   "license": "MIT",
   "config": {
     "circsim": {
-      "ngspiceVersion": "43"
+      "ngspiceVersion": "46"
     }
   },
   "scripts": {
@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:integration": "vitest run --reporter=verbose src/simhost/__tests__"
+    "fetch:ngspice": "node scripts/fetch-ngspice.mjs",
+    "test:integration": "vitest run --reporter=verbose **/*.integration.test.ts"
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
@@ -38,6 +39,7 @@
     "@typescript-eslint/parser": "^7.7.1",
     "@vitejs/plugin-react": "^4.7.0",
     "@vitest/coverage-v8": "^1.5.0",
+    "7zip-min": "^3.0.1",
     "electron": "^30.0.1",
     "electron-builder": "^24.13.3",
     "electron-vite": "^2.1.0",
