@@ -1,4 +1,5 @@
 import React from 'react'
+import Viewport from './viewport/Viewport'
 
 export default function App(): React.ReactElement {
   return (
@@ -7,10 +8,8 @@ export default function App(): React.ReactElement {
         <strong>circsim</strong>
         <span style={{ fontSize: 12, color: '#888' }}>v0.1.0</span>
       </header>
-      <main style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666' }}>
-        <div style={{ textAlign: 'center' }}>
-          <p>Open a <code>.kicad_pcb</code> file to begin</p>
-        </div>
+      <main style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        <Viewport style={{ flex: 1 }} />
       </main>
     </div>
   )
