@@ -1,0 +1,218 @@
+{
+  "$provenance": "Provenance: written for circsim from 74HC-family datasheet pinouts and typical propagation delays, MIT. These are XSPICE behavioral templates (adc_bridge -> ngspice digital primitive(s) -> dac_bridge). No third-party proprietary 74xx model text is copied; only the datasheet pinouts (which pin is which gate's input/output) and datasheet-typical propagation delays (tpd) inform the templates. Verified against ngspice-46 digital.cm: the inverter primitive is d_inverter and the buffer is d_buffer (NOT d_inv/d_buf); gates are d_and/d_nand/d_or/d_nor/d_xor/d_xnor; the D flip-flop is d_dff with terminal order (data clk set reset | q qbar). The Schmitt-trigger HC14 uses adc_bridge hysteresis (in_low<in_high) ahead of d_inverter.",
+  "$schema": {
+    "description": "Each template expands to: one adc_bridge per logic-input pin, the listed digital primitive instances wired on internal d_* nodes, and one dac_bridge per logic-output pin. ADC/DAC thresholds and rails come from the chosen logic family rail (vHigh). Pin roles are by package-independent SIGNAL name; pinMaps translate package pad numbers to signal names.",
+    "gate.prim": "ngspice digital primitive name (d_inverter|d_buffer|d_and|d_nand|d_or|d_nor|d_xor|d_xnor|d_dff)",
+    "gate.in": "array of signal names feeding this gate's input(s)",
+    "gate.out": "signal name produced (also a chip output pin if listed in outputs)",
+    "delaysNs": "rise_delay/fall_delay applied to every gate (datasheet-typical tpd at 5 V)"
+  },
+  "family": {
+    "name": "74HC",
+    "vHighDefault": 5.0,
+    "adc": { "inLowFrac": 0.3, "inHighFrac": 0.7 },
+    "schmittAdc": { "inLowFrac": 0.28, "inHighFrac": 0.55 }
+  },
+  "templates": {
+    "74HC00": {
+      "desc": "Quad 2-input NAND",
+      "gates": [
+        { "prim": "d_nand", "in": ["1A", "1B"], "out": "1Y" },
+        { "prim": "d_nand", "in": ["2A", "2B"], "out": "2Y" },
+        { "prim": "d_nand", "in": ["3A", "3B"], "out": "3Y" },
+        { "prim": "d_nand", "in": ["4A", "4B"], "out": "4Y" }
+      ],
+      "inputs": ["1A", "1B", "2A", "2B", "3A", "3B", "4A", "4B"],
+      "outputs": ["1Y", "2Y", "3Y", "4Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 9,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y",
+          "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A",
+          "13": "4B", "14": "VCC"
+        }
+      }
+    },
+    "74HC04": {
+      "desc": "Hex inverter",
+      "gates": [
+        { "prim": "d_inverter", "in": ["1A"], "out": "1Y" },
+        { "prim": "d_inverter", "in": ["2A"], "out": "2Y" },
+        { "prim": "d_inverter", "in": ["3A"], "out": "3Y" },
+        { "prim": "d_inverter", "in": ["4A"], "out": "4Y" },
+        { "prim": "d_inverter", "in": ["5A"], "out": "5Y" },
+        { "prim": "d_inverter", "in": ["6A"], "out": "6Y" }
+      ],
+      "inputs": ["1A", "2A", "3A", "4A", "5A", "6A"],
+      "outputs": ["1Y", "2Y", "3Y", "4Y", "5Y", "6Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 8,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1A", "2": "1Y", "3": "2A", "4": "2Y", "5": "3A", "6": "3Y",
+          "7": "GND", "8": "4Y", "9": "4A", "10": "5Y", "11": "5A", "12": "6Y",
+          "13": "6A", "14": "VCC"
+        }
+      }
+    },
+    "74HC08": {
+      "desc": "Quad 2-input AND",
+      "gates": [
+        { "prim": "d_and", "in": ["1A", "1B"], "out": "1Y" },
+        { "prim": "d_and", "in": ["2A", "2B"], "out": "2Y" },
+        { "prim": "d_and", "in": ["3A", "3B"], "out": "3Y" },
+        { "prim": "d_and", "in": ["4A", "4B"], "out": "4Y" }
+      ],
+      "inputs": ["1A", "1B", "2A", "2B", "3A", "3B", "4A", "4B"],
+      "outputs": ["1Y", "2Y", "3Y", "4Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 10,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y",
+          "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A",
+          "13": "4B", "14": "VCC"
+        }
+      }
+    },
+    "74HC14": {
+      "desc": "Hex inverting Schmitt trigger (hysteresis via adc_bridge thresholds)",
+      "schmitt": true,
+      "gates": [
+        { "prim": "d_inverter", "in": ["1A"], "out": "1Y" },
+        { "prim": "d_inverter", "in": ["2A"], "out": "2Y" },
+        { "prim": "d_inverter", "in": ["3A"], "out": "3Y" },
+        { "prim": "d_inverter", "in": ["4A"], "out": "4Y" },
+        { "prim": "d_inverter", "in": ["5A"], "out": "5Y" },
+        { "prim": "d_inverter", "in": ["6A"], "out": "6Y" }
+      ],
+      "inputs": ["1A", "2A", "3A", "4A", "5A", "6A"],
+      "outputs": ["1Y", "2Y", "3Y", "4Y", "5Y", "6Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 14,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1A", "2": "1Y", "3": "2A", "4": "2Y", "5": "3A", "6": "3Y",
+          "7": "GND", "8": "4Y", "9": "4A", "10": "5Y", "11": "5A", "12": "6Y",
+          "13": "6A", "14": "VCC"
+        }
+      }
+    },
+    "74HC32": {
+      "desc": "Quad 2-input OR",
+      "gates": [
+        { "prim": "d_or", "in": ["1A", "1B"], "out": "1Y" },
+        { "prim": "d_or", "in": ["2A", "2B"], "out": "2Y" },
+        { "prim": "d_or", "in": ["3A", "3B"], "out": "3Y" },
+        { "prim": "d_or", "in": ["4A", "4B"], "out": "4Y" }
+      ],
+      "inputs": ["1A", "1B", "2A", "2B", "3A", "3B", "4A", "4B"],
+      "outputs": ["1Y", "2Y", "3Y", "4Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 11,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y",
+          "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A",
+          "13": "4B", "14": "VCC"
+        }
+      }
+    },
+    "74HC74": {
+      "desc": "Dual D flip-flop with set/reset (positive-edge)",
+      "gates": [
+        { "prim": "d_dff", "data": "1D", "clk": "1CLK", "set": "1PRE_N", "reset": "1CLR_N", "q": "1Q", "qbar": "1Q_N" },
+        { "prim": "d_dff", "data": "2D", "clk": "2CLK", "set": "2PRE_N", "reset": "2CLR_N", "q": "2Q", "qbar": "2Q_N" }
+      ],
+      "inputs": ["1D", "1CLK", "1PRE_N", "1CLR_N", "2D", "2CLK", "2PRE_N", "2CLR_N"],
+      "outputs": ["1Q", "1Q_N", "2Q", "2Q_N"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 18,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1CLR_N", "2": "1D", "3": "1CLK", "4": "1PRE_N", "5": "1Q", "6": "1Q_N",
+          "7": "GND", "8": "2Q_N", "9": "2Q", "10": "2PRE_N", "11": "2CLK", "12": "2D",
+          "13": "2CLR_N", "14": "VCC"
+        }
+      }
+    },
+    "74HC86": {
+      "desc": "Quad 2-input XOR",
+      "gates": [
+        { "prim": "d_xor", "in": ["1A", "1B"], "out": "1Y" },
+        { "prim": "d_xor", "in": ["2A", "2B"], "out": "2Y" },
+        { "prim": "d_xor", "in": ["3A", "3B"], "out": "3Y" },
+        { "prim": "d_xor", "in": ["4A", "4B"], "out": "4Y" }
+      ],
+      "inputs": ["1A", "1B", "2A", "2B", "3A", "3B", "4A", "4B"],
+      "outputs": ["1Y", "2Y", "3Y", "4Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 12,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y",
+          "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A",
+          "13": "4B", "14": "VCC"
+        }
+      }
+    },
+    "74HC164": {
+      "desc": "8-bit serial-in parallel-out shift register (positive-edge clock, AND-gated serial input A&B, active-low clear)",
+      "gates": [
+        { "prim": "d_and", "in": ["A", "B"], "out": "DSER" },
+        { "prim": "d_dff", "data": "DSER", "clk": "CLK", "set": "NC_SET", "reset": "CLR_N", "q": "Q0", "qbar": "Q0_N" },
+        { "prim": "d_dff", "data": "Q0", "clk": "CLK", "set": "NC_SET", "reset": "CLR_N", "q": "Q1", "qbar": "Q1_N" },
+        { "prim": "d_dff", "data": "Q1", "clk": "CLK", "set": "NC_SET", "reset": "CLR_N", "q": "Q2", "qbar": "Q2_N" },
+        { "prim": "d_dff", "data": "Q2", "clk": "CLK", "set": "NC_SET", "reset": "CLR_N", "q": "Q3", "qbar": "Q3_N" },
+        { "prim": "d_dff", "data": "Q3", "clk": "CLK", "set": "NC_SET", "reset": "CLR_N", "q": "Q4", "qbar": "Q4_N" },
+        { "prim": "d_dff", "data": "Q4", "clk": "CLK", "set": "NC_SET", "reset": "CLR_N", "q": "Q5", "qbar": "Q5_N" },
+        { "prim": "d_dff", "data": "Q5", "clk": "CLK", "set": "NC_SET", "reset": "CLR_N", "q": "Q6", "qbar": "Q6_N" },
+        { "prim": "d_dff", "data": "Q6", "clk": "CLK", "set": "NC_SET", "reset": "CLR_N", "q": "Q7", "qbar": "Q7_N" }
+      ],
+      "inputs": ["A", "B", "CLK", "CLR_N"],
+      "outputs": ["Q0", "Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 21,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "A", "2": "B", "3": "Q0", "4": "Q1", "5": "Q2", "6": "Q3",
+          "7": "GND", "8": "CLK", "9": "CLR_N", "10": "Q4", "11": "Q5", "12": "Q6",
+          "13": "Q7", "14": "VCC"
+        }
+      }
+    },
+    "74HC595": {
+      "desc": "8-bit serial-in shift register with output latch (SH_CP shift clock, ST_CP storage clock, active-low MR clear). The storage-register stage is modeled as a second rank of D flip-flops clocked by ST_CP; OE (output enable) gates the parallel outputs.",
+      "gates": [
+        { "prim": "d_dff", "data": "DS", "clk": "SHCP", "set": "NC_SET", "reset": "MR_N", "q": "S0", "qbar": "S0_N" },
+        { "prim": "d_dff", "data": "S0", "clk": "SHCP", "set": "NC_SET", "reset": "MR_N", "q": "S1", "qbar": "S1_N" },
+        { "prim": "d_dff", "data": "S1", "clk": "SHCP", "set": "NC_SET", "reset": "MR_N", "q": "S2", "qbar": "S2_N" },
+        { "prim": "d_dff", "data": "S2", "clk": "SHCP", "set": "NC_SET", "reset": "MR_N", "q": "S3", "qbar": "S3_N" },
+        { "prim": "d_dff", "data": "S3", "clk": "SHCP", "set": "NC_SET", "reset": "MR_N", "q": "S4", "qbar": "S4_N" },
+        { "prim": "d_dff", "data": "S4", "clk": "SHCP", "set": "NC_SET", "reset": "MR_N", "q": "S5", "qbar": "S5_N" },
+        { "prim": "d_dff", "data": "S5", "clk": "SHCP", "set": "NC_SET", "reset": "MR_N", "q": "S6", "qbar": "Q7S" },
+        { "prim": "d_dff", "data": "S6", "clk": "SHCP", "set": "NC_SET", "reset": "MR_N", "q": "S7", "qbar": "S7_N" },
+        { "prim": "d_dff", "data": "S0", "clk": "STCP", "set": "NC_SET", "reset": "NC_RST", "q": "Q0", "qbar": "Q0_N" },
+        { "prim": "d_dff", "data": "S1", "clk": "STCP", "set": "NC_SET", "reset": "NC_RST", "q": "Q1", "qbar": "Q1_N" },
+        { "prim": "d_dff", "data": "S2", "clk": "STCP", "set": "NC_SET", "reset": "NC_RST", "q": "Q2", "qbar": "Q2_N" },
+        { "prim": "d_dff", "data": "S3", "clk": "STCP", "set": "NC_SET", "reset": "NC_RST", "q": "Q3", "qbar": "Q3_N" },
+        { "prim": "d_dff", "data": "S4", "clk": "STCP", "set": "NC_SET", "reset": "NC_RST", "q": "Q4", "qbar": "Q4_N" },
+        { "prim": "d_dff", "data": "S5", "clk": "STCP", "set": "NC_SET", "reset": "NC_RST", "q": "Q5", "qbar": "Q5_N" },
+        { "prim": "d_dff", "data": "S6", "clk": "STCP", "set": "NC_SET", "reset": "NC_RST", "q": "Q6", "qbar": "Q6_N" },
+        { "prim": "d_dff", "data": "S7", "clk": "STCP", "set": "NC_SET", "reset": "NC_RST", "q": "Q7", "qbar": "Q7_N" }
+      ],
+      "inputs": ["DS", "SHCP", "STCP", "MR_N", "OE_N"],
+      "outputs": ["Q0", "Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q7S"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 24,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?16.*": {
+          "1": "Q1", "2": "Q2", "3": "Q3", "4": "Q4", "5": "Q5", "6": "Q6", "7": "Q7",
+          "8": "GND", "9": "Q7S", "10": "MR_N", "11": "SHCP", "12": "STCP", "13": "OE_N",
+          "14": "DS", "15": "Q0", "16": "VCC"
+        }
+      }
+    }
+  }
+}

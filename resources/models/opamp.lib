@@ -1,0 +1,98 @@
+* Provenance: written for circsim from manufacturer datasheet parameters, MIT.
+* In-house BEHAVIORAL op-amp / comparator macromodels. No vendor model text is
+* copied: the topology below is a textbook three-block behavioral op-amp (input
+* stage -> single dominant pole with finite open-loop gain -> slew-limited,
+* rail-clamped output buffer), and the per-part .subckt wrappers simply pass the
+* DATASHEET numbers (open-loop gain Aol, gain-bandwidth GBW, slew rate, output
+* swing relative to the rails) as parameters. Datasheet electrical
+* characteristics are facts, not copyrightable expression.
+*
+* ---------------------------------------------------------------------------
+* GENERIC PARAMETERIZED OP-AMP CORE
+* ---------------------------------------------------------------------------
+* Nodes:  inp inn out vcc vee
+* Params:
+*   aol   open-loop DC gain (V/V)              gbw   gain-bandwidth product (Hz)
+*   slew  slew rate (V/s)                      vos   input offset voltage (V)
+*   rout  open-loop output resistance (ohm)    vsathi headroom from +rail (V)
+*   vsatlo headroom from -rail (V)             ibias not modeled (hi-Z inputs)
+*
+* How it works:
+*   1. Ein senses (inp-inn+vos) into a high-impedance node 'e'.
+*   2. The dominant pole is realized by Gm into Rp||Cp; we set Rp so the DC gain
+*      across it is aol, and Cp so the pole is at fp = gbw/aol  (Cp = 1/(2*pi*Rp*fp)).
+*      Node 'vpole' therefore holds aol*(inp-inn) rolled off at fp -> unity gain at gbw.
+*   3. Slew limiting: the current into Cp is clipped to +/- (slew*Cp), so dV/dt on
+*      vpole cannot exceed the datasheet slew rate.
+*   4. The output buffer Bout copies vpole but clamps to [vee+vsatlo, vcc-vsathi]
+*      and drives through rout.
+.subckt opamp_core inp inn out vcc vee
++ params: aol=100k gbw=1e6 slew=0.5e6 vos=0 rout=75 vsathi=1.5 vsatlo=0.0
+* input sense (high-Z): e = (inp - inn) + offset
+bin e 0 v = v(inp) - v(inn) + vos
+* dominant-pole network. Rp chosen for DC gain = aol; Cp for pole at gbw/aol.
+* A transconductance gm=1 drives Rp||Cp, so V(vpole) = gm*V(e)*Rp at DC and the
+* pole sits at fp = 1/(2*pi*Rp*Cp). Set Rp=aol (gm=1 -> DC gain=aol) and
+* Cp = 1/(2*pi*Rp*fp) with fp = gbw/aol -> unity-gain crossing at gbw.
+.param rp = {aol}
+.param cp = {1/(6.283185307*rp*(gbw/aol))}
+* transconductance with slew-rate current clamp. The current delivered into the
+* pole node is gm*v(e) (gm=1) but limited to +/- imax = slew*Cp so the maximum
+* dV/dt on Cp equals the datasheet slew rate.
+.param imax = {slew*cp}
+bg 0 vpole i = (abs(v(e)) > imax) ? (imax*sgn(v(e))) : v(e)
+rp vpole 0 {rp}
+cp vpole 0 {cp}
+* output buffer: follow vpole, clamp to the supply rails minus headroom, drive
+* through rout. Clamp limits computed live from the actual rail nodes.
+bout obuf 0 v = (v(vpole) > (v(vcc)-vsathi)) ? (v(vcc)-vsathi) :
++ ((v(vpole) < (v(vee)+vsatlo)) ? (v(vee)+vsatlo) : v(vpole))
+rout obuf out {rout}
+.ends opamp_core
+
+* ---------------------------------------------------------------------------
+* LM358 / LM2904 dual op-amp (single-supply, ground-sensing input).
+* Datasheet typ: Aol=100 dB (100k V/V), GBW=1.1 MHz, SR=0.5 V/us, Vos=2 mV,
+* output swings to within ~1.5 V of V+ (no rail-to-rail), down to ~20 mV of V-.
+.subckt LM358 inp inn out vcc vee
+xa inp inn out vcc vee opamp_core
++ params: aol=100k gbw=1.1e6 slew=0.5e6 vos=2e-3 rout=100 vsathi=1.5 vsatlo=0.02
+.ends LM358
+
+* ---------------------------------------------------------------------------
+* LM324 quad op-amp — same single-supply core as LM358.
+* Datasheet typ: Aol=100k, GBW=1.2 MHz, SR=0.5 V/us, Vos=2 mV, swing as LM358.
+.subckt LM324 inp inn out vcc vee
+xa inp inn out vcc vee opamp_core
++ params: aol=100k gbw=1.2e6 slew=0.5e6 vos=2e-3 rout=100 vsathi=1.5 vsatlo=0.02
+.ends LM324
+
+* ---------------------------------------------------------------------------
+* TL072 / TL071 / TL074 JFET-input dual op-amp.
+* Datasheet typ: Aol=200 V/mV (200k), GBW=3 MHz, SR=13 V/us, Vos=3 mV,
+* output swing within ~1.5 V of either rail.
+.subckt TL072 inp inn out vcc vee
+xa inp inn out vcc vee opamp_core
++ params: aol=200k gbw=3e6 slew=13e6 vos=3e-3 rout=120 vsathi=1.5 vsatlo=1.5
+.ends TL072
+
+* ---------------------------------------------------------------------------
+* LM393 / LM339 COMPARATOR — open-collector output variant.
+* The input stage + high gain is reused, but the output is an open-collector
+* NPN to V- (off = high-Z, on = pulled to V-). The user must add an external
+* pull-up; with no pull-up the output node floats (correct OC behavior).
+* Datasheet typ: large-signal gain ~200 V/mV, response time ~1.3 us
+* (modeled via a finite GBW so the comparator is not infinitely fast),
+* Vol(sat) ~ 250 mV @ 4 mA.
+* Nodes: inp inn out vcc vee  (out is the open-collector pin)
+.subckt LM393 inp inn out vcc vee
+* high-gain decision node 'dec' relative to vee (single supply friendly)
+xc inp inn dec vcc vee opamp_core
++ params: aol=200k gbw=0.8e6 slew=10e6 vos=1e-3 rout=50 vsathi=0.3 vsatlo=0.2
+* open-collector pulldown: when dec is HIGH (>mid) the output transistor is OFF
+* (high-Z); when dec is LOW the transistor pulls 'out' toward vee through Ron.
+* Model as a voltage-controlled resistance from out to vee.
+* gatev ~ 1 when output should be LOW (dec low), ~0 when output high-Z.
+bsw out vee i = (v(dec) < ((v(vcc)+v(vee))/2)) ?
++ ((v(out)-v(vee))/40) : ((v(out)-v(vee))/1e9)
+.ends LM393

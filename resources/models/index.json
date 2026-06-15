@@ -240,6 +240,244 @@
       },
       "defaultPinMap": { "1": "2", "2": "3", "3": "1" },
       "provenance": "Written for circsim from generic logic-level P-MOSFET (AO3401/DMP-class) datasheet parameters, VDMOS PMOS. SOT-23 pinout pin1=Gate, pin2=Source, pin3=Drain, MIT."
+    },
+    {
+      "id": "opamp-lm358",
+      "match": {
+        "mpn": ["LM358", "LM2904", "LM358A", "LM358N", "LM358D"],
+        "refdesPrefix": ["U", "IC"],
+        "footprintRegex": "(SOIC-8|DIP-8|MSOP-8|TSSOP-8|SOT-23-5)"
+      },
+      "model": { "type": "subckt", "file": "opamp.lib", "name": "LM358" },
+      "$comment": "Subckt node order: inp inn out vcc vee (1=non-inv in, 2=inv in, 3=out, 4=V+, 5=V-). DIP-8/SOIC-8 dual: channel A pads 3(+in)/2(-in)/1(out), 8=V+, 4=V-.",
+      "pinMaps": {
+        "(SOIC|DIP|MSOP|TSSOP)-?8.*": { "3": "inp", "2": "inn", "1": "out", "8": "vcc", "4": "vee" }
+      },
+      "defaultPinMap": { "3": "inp", "2": "inn", "1": "out", "8": "vcc", "4": "vee" },
+      "provenance": "Behavioral op-amp written for circsim from LM358 datasheet (Aol=100dB, GBW=1.1MHz, SR=0.5V/us, single-supply ground-sensing), MIT."
+    },
+    {
+      "id": "opamp-lm324",
+      "match": {
+        "mpn": ["LM324", "LM2902", "LM324A", "LM324N", "LM324D"],
+        "refdesPrefix": ["U", "IC"],
+        "footprintRegex": "(SOIC-14|DIP-14|TSSOP-14)"
+      },
+      "model": { "type": "subckt", "file": "opamp.lib", "name": "LM324" },
+      "$comment": "Quad op-amp, channel A on a DIP-14/SOIC-14: 3(+in)/2(-in)/1(out), 4=V+, 11=V-.",
+      "pinMaps": {
+        "(SOIC|DIP|TSSOP)-?14.*": { "3": "inp", "2": "inn", "1": "out", "4": "vcc", "11": "vee" }
+      },
+      "defaultPinMap": { "3": "inp", "2": "inn", "1": "out", "4": "vcc", "11": "vee" },
+      "provenance": "Behavioral op-amp written for circsim from LM324 datasheet (Aol=100dB, GBW=1.2MHz, SR=0.5V/us), MIT."
+    },
+    {
+      "id": "opamp-tl072",
+      "match": {
+        "mpn": ["TL072", "TL071", "TL072C", "TL072CP", "TL082"],
+        "refdesPrefix": ["U", "IC"],
+        "footprintRegex": "(SOIC-8|DIP-8|MSOP-8|TSSOP-8)"
+      },
+      "model": { "type": "subckt", "file": "opamp.lib", "name": "TL072" },
+      "$comment": "JFET-input dual, channel A on DIP-8/SOIC-8: 3(+in)/2(-in)/1(out), 8=V+, 4=V-.",
+      "pinMaps": {
+        "(SOIC|DIP|MSOP|TSSOP)-?8.*": { "3": "inp", "2": "inn", "1": "out", "8": "vcc", "4": "vee" }
+      },
+      "defaultPinMap": { "3": "inp", "2": "inn", "1": "out", "8": "vcc", "4": "vee" },
+      "provenance": "Behavioral op-amp written for circsim from TL072 datasheet (Aol=200k, GBW=3MHz, SR=13V/us, JFET input), MIT."
+    },
+    {
+      "id": "comparator-lm393",
+      "match": {
+        "mpn": ["LM393", "LM393A", "LM2903", "LM393D", "LM393N"],
+        "refdesPrefix": ["U", "IC"],
+        "footprintRegex": "(SOIC-8|DIP-8|MSOP-8|TSSOP-8)"
+      },
+      "model": { "type": "subckt", "file": "opamp.lib", "name": "LM393" },
+      "$comment": "Open-collector dual comparator. Subckt order inp inn out vcc vee. DIP-8/SOIC-8 channel A: 3(+in)/2(-in)/1(out, open-collector), 8=V+, 4=V-. External pull-up required.",
+      "pinMaps": {
+        "(SOIC|DIP|MSOP|TSSOP)-?8.*": { "3": "inp", "2": "inn", "1": "out", "8": "vcc", "4": "vee" }
+      },
+      "defaultPinMap": { "3": "inp", "2": "inn", "1": "out", "8": "vcc", "4": "vee" },
+      "provenance": "Behavioral comparator written for circsim from LM393 datasheet (open-collector output, response time ~1.3us), MIT."
+    },
+    {
+      "id": "reg-7805",
+      "match": {
+        "mpn": ["7805", "LM7805", "L7805", "MC7805", "78M05", "L78M05"],
+        "refdesPrefix": ["U", "VR", "IC", "REG"],
+        "footprintRegex": "(TO-220|SOT-223|DPAK|TO-252|TO-263)"
+      },
+      "model": { "type": "subckt", "file": "regulators.lib", "name": "7805" },
+      "$comment": "78xx node order vin gnd vout. Standard 78xx TO-220 pinout pin1=Vin, pin2=GND, pin3=Vout. SOT-223: pin1=Vin? varies — pinmap-unverified for SOT-223, default to TO-220 order.",
+      "pinMaps": {
+        "TO-220.*": { "1": "vin", "2": "gnd", "3": "vout" },
+        "(SOT-223|DPAK|TO-252|TO-263).*": { "1": "vin", "2": "gnd", "3": "vout" }
+      },
+      "defaultPinMap": { "1": "vin", "2": "gnd", "3": "vout" },
+      "provenance": "Behavioral linear regulator written for circsim from 7805 datasheet (Vout=5V, dropout~2V@1A, Iq~5mA, current limit), MIT."
+    },
+    {
+      "id": "reg-7812",
+      "match": {
+        "mpn": ["7812", "LM7812", "L7812", "MC7812", "78M12"],
+        "refdesPrefix": ["U", "VR", "IC", "REG"],
+        "footprintRegex": "(TO-220|SOT-223|DPAK|TO-252)"
+      },
+      "model": { "type": "subckt", "file": "regulators.lib", "name": "7812" },
+      "pinMaps": {
+        "TO-220.*": { "1": "vin", "2": "gnd", "3": "vout" },
+        "(SOT-223|DPAK|TO-252).*": { "1": "vin", "2": "gnd", "3": "vout" }
+      },
+      "defaultPinMap": { "1": "vin", "2": "gnd", "3": "vout" },
+      "provenance": "Behavioral linear regulator written for circsim from 7812 datasheet (Vout=12V, dropout~2V), MIT."
+    },
+    {
+      "id": "reg-7833",
+      "match": {
+        "mpn": ["7833", "78M33", "LM7833", "L78M33"],
+        "refdesPrefix": ["U", "VR", "IC", "REG"],
+        "footprintRegex": "(TO-220|SOT-223|DPAK|TO-252)"
+      },
+      "model": { "type": "subckt", "file": "regulators.lib", "name": "7833" },
+      "pinMaps": {
+        "TO-220.*": { "1": "vin", "2": "gnd", "3": "vout" },
+        "(SOT-223|DPAK|TO-252).*": { "1": "vin", "2": "gnd", "3": "vout" }
+      },
+      "defaultPinMap": { "1": "vin", "2": "gnd", "3": "vout" },
+      "provenance": "Behavioral linear regulator written for circsim from 78xx 3.3V datasheet (Vout=3.3V, dropout~1.7V), MIT."
+    },
+    {
+      "id": "reg-ams1117-3v3",
+      "match": {
+        "mpn": ["AMS1117-3.3", "AMS1117-3V3", "AMS1117"],
+        "valueRegex": "(?i)^ams1117[-_]?3\\.?3$",
+        "refdesPrefix": ["U", "VR", "IC", "REG"],
+        "footprintRegex": "(SOT-223|SOT-89)"
+      },
+      "model": { "type": "subckt", "file": "regulators.lib", "name": "AMS1117-3.3" },
+      "$comment": "AMS1117 SOT-223 pinout pin1=ADJ/GND, pin2=Vout, pin3=Vin (tab=Vout). Fixed version pin1=GND.",
+      "pinMaps": {
+        "SOT-223.*": { "1": "gnd", "2": "vout", "3": "vin" }
+      },
+      "defaultPinMap": { "1": "gnd", "2": "vout", "3": "vin" },
+      "provenance": "Behavioral LDO written for circsim from AMS1117-3.3 datasheet (Vout=3.3V, dropout~1.3V@1A, Iq~6mA), MIT."
+    },
+    {
+      "id": "reg-ams1117-5v0",
+      "match": {
+        "mpn": ["AMS1117-5.0", "AMS1117-5V0", "AMS1117-5"],
+        "valueRegex": "(?i)^ams1117[-_]?5(\\.0)?$",
+        "refdesPrefix": ["U", "VR", "IC", "REG"],
+        "footprintRegex": "(SOT-223|SOT-89)"
+      },
+      "model": { "type": "subckt", "file": "regulators.lib", "name": "AMS1117-5.0" },
+      "pinMaps": {
+        "SOT-223.*": { "1": "gnd", "2": "vout", "3": "vin" }
+      },
+      "defaultPinMap": { "1": "gnd", "2": "vout", "3": "vin" },
+      "provenance": "Behavioral LDO written for circsim from AMS1117-5.0 datasheet (Vout=5V, dropout~1.3V@1A), MIT."
+    },
+    {
+      "id": "timer-ne555",
+      "match": {
+        "mpn": ["NE555", "NE555P", "NE555N", "LM555", "TLC555", "ICM7555", "555"],
+        "valueRegex": "(?i)^(ne)?555$",
+        "refdesPrefix": ["U", "IC"],
+        "footprintRegex": "(DIP-8|SOIC-8|MSOP-8|SO-8)"
+      },
+      "model": { "type": "subckt", "file": "timer555.lib", "name": "NE555" },
+      "$comment": "Subckt node order: gnd trig out reset ctrl thres disch vcc (pins 1 2 3 4 5 6 7 8). DIP-8/SOIC-8 pad numbers ARE the 555 pin numbers, so the pinMap is identity by terminal position.",
+      "pinMaps": {
+        "(DIP|SOIC|MSOP|SO)-?8.*": {
+          "1": "gnd", "2": "trig", "3": "out", "4": "reset", "5": "ctrl", "6": "thres", "7": "disch", "8": "vcc"
+        }
+      },
+      "defaultPinMap": {
+        "1": "gnd", "2": "trig", "3": "out", "4": "reset", "5": "ctrl", "6": "thres", "7": "disch", "8": "vcc"
+      },
+      "provenance": "Behavioral NE555 written for circsim from the datasheet block diagram (two comparators + RS latch + 5k/5k/5k divider + discharge switch), MIT."
+    },
+    {
+      "id": "logic-74hc00",
+      "match": { "mpn": ["74HC00", "74HCT00", "SN74HC00", "74LS00", "74HC00D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC00" },
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y", "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
+      },
+      "provenance": "XSPICE behavioral 74HC00 quad NAND written for circsim from datasheet pinout + typical tpd (d_nand), MIT."
+    },
+    {
+      "id": "logic-74hc04",
+      "match": { "mpn": ["74HC04", "74HCT04", "SN74HC04", "74HC04D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC04" },
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1A", "2": "1Y", "3": "2A", "4": "2Y", "5": "3A", "6": "3Y", "7": "GND", "8": "4Y", "9": "4A", "10": "5Y", "11": "5A", "12": "6Y", "13": "6A", "14": "VCC" }
+      },
+      "provenance": "XSPICE behavioral 74HC04 hex inverter written for circsim from datasheet pinout + typical tpd (d_inverter), MIT."
+    },
+    {
+      "id": "logic-74hc08",
+      "match": { "mpn": ["74HC08", "74HCT08", "SN74HC08", "74HC08D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC08" },
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y", "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
+      },
+      "provenance": "XSPICE behavioral 74HC08 quad AND written for circsim from datasheet pinout + typical tpd (d_and), MIT."
+    },
+    {
+      "id": "logic-74hc14",
+      "match": { "mpn": ["74HC14", "74HCT14", "SN74HC14", "74HC14D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC14" },
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1A", "2": "1Y", "3": "2A", "4": "2Y", "5": "3A", "6": "3Y", "7": "GND", "8": "4Y", "9": "4A", "10": "5Y", "11": "5A", "12": "6Y", "13": "6A", "14": "VCC" }
+      },
+      "provenance": "XSPICE behavioral 74HC14 hex inverting Schmitt trigger written for circsim from datasheet pinout; hysteresis via adc_bridge in_low/in_high band, MIT."
+    },
+    {
+      "id": "logic-74hc32",
+      "match": { "mpn": ["74HC32", "74HCT32", "SN74HC32", "74HC32D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC32" },
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y", "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
+      },
+      "provenance": "XSPICE behavioral 74HC32 quad OR written for circsim from datasheet pinout + typical tpd (d_or), MIT."
+    },
+    {
+      "id": "logic-74hc74",
+      "match": { "mpn": ["74HC74", "74HCT74", "SN74HC74", "74HC74D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC74" },
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1CLR_N", "2": "1D", "3": "1CLK", "4": "1PRE_N", "5": "1Q", "6": "1Q_N", "7": "GND", "8": "2Q_N", "9": "2Q", "10": "2PRE_N", "11": "2CLK", "12": "2D", "13": "2CLR_N", "14": "VCC" }
+      },
+      "provenance": "XSPICE behavioral 74HC74 dual D flip-flop written for circsim from datasheet pinout (d_dff, positive edge, async set/reset), MIT."
+    },
+    {
+      "id": "logic-74hc86",
+      "match": { "mpn": ["74HC86", "74HCT86", "SN74HC86", "74HC86D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC86" },
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y", "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
+      },
+      "provenance": "XSPICE behavioral 74HC86 quad XOR written for circsim from datasheet pinout + typical tpd (d_xor), MIT."
+    },
+    {
+      "id": "logic-74hc164",
+      "match": { "mpn": ["74HC164", "74HCT164", "SN74HC164", "74HC164D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC164" },
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "A", "2": "B", "3": "Q0", "4": "Q1", "5": "Q2", "6": "Q3", "7": "GND", "8": "CLK", "9": "CLR_N", "10": "Q4", "11": "Q5", "12": "Q6", "13": "Q7", "14": "VCC" }
+      },
+      "provenance": "XSPICE behavioral 74HC164 8-bit SIPO shift register written for circsim from datasheet pinout (d_dff chain, AND-gated serial in, active-low clear), MIT."
+    },
+    {
+      "id": "logic-74hc595",
+      "match": { "mpn": ["74HC595", "74HCT595", "SN74HC595", "74HC595D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?16" },
+      "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC595" },
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?16.*": { "1": "Q1", "2": "Q2", "3": "Q3", "4": "Q4", "5": "Q5", "6": "Q6", "7": "Q7", "8": "GND", "9": "Q7S", "10": "MR_N", "11": "SHCP", "12": "STCP", "13": "OE_N", "14": "DS", "15": "Q0", "16": "VCC" }
+      },
+      "provenance": "XSPICE behavioral 74HC595 8-bit shift register with output latch written for circsim from datasheet pinout (two-rank d_dff: shift + storage), MIT."
     }
   ]
 }

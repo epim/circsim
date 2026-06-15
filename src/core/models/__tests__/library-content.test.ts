@@ -41,8 +41,14 @@ function modelFiles(): string[] {
  */
 function definedNames(file: string): Set<string> {
   const text = readFileSync(join(MODELS_DIR, file), 'utf8')
-  const joined = text.replace(/\r?\n\+/g, ' ')
   const names = new Set<string>()
+  if (file.endsWith('.json')) {
+    // xspice-digital template library: names are the keys of `templates`.
+    const j = JSON.parse(text) as { templates?: Record<string, unknown> }
+    for (const k of Object.keys(j.templates ?? {})) names.add(k.toUpperCase())
+    return names
+  }
+  const joined = text.replace(/\r?\n\+/g, ' ')
   for (const m of joined.matchAll(/^\s*\.model\s+(\S+)\s+\w+/gim)) names.add(m[1].toUpperCase())
   for (const m of joined.matchAll(/^\s*\.subckt\s+(\S+)/gim)) names.add(m[1].toUpperCase())
   return names
@@ -149,6 +155,150 @@ describe('bundled model library — licensing hygiene (Spec §8.5 never-bundle l
     for (const file of modelFiles()) {
       const text = readFileSync(join(MODELS_DIR, file), 'utf8')
       expect(text, `${file} should declare MIT provenance`).toMatch(/MIT/)
+    }
+  })
+})
+
+// ─── Task 14b: ICs (op-amp/comparator/regulator/555) + digital (74HC) ─────────
+
+describe('bundled model library — Task 14b IC + digital entries (Spec §8.5)', () => {
+  const index = readIndex()
+
+  it('includes the op-amp / comparator / regulator / 555 subckt entries', () => {
+    const subcktIds = index.entries.filter((e) => e.model.type === 'subckt').map((e) => e.id)
+    for (const id of [
+      'opamp-lm358',
+      'opamp-lm324',
+      'opamp-tl072',
+      'comparator-lm393',
+      'reg-7805',
+      'reg-ams1117-3v3',
+      'reg-ams1117-5v0',
+      'timer-ne555'
+    ]) {
+      expect(subcktIds, `missing subckt entry ${id}`).toContain(id)
+    }
+  })
+
+  it('includes all nine 74HC xspice-digital entries', () => {
+    const digIds = index.entries.filter((e) => e.model.type === 'xspice-digital').map((e) => e.id)
+    for (const part of ['00', '04', '08', '14', '32', '74', '86', '164', '595']) {
+      expect(digIds, `missing 74HC${part}`).toContain(`logic-74hc${part}`)
+    }
+    expect(digIds.length).toBe(9)
+  })
+
+  it('every subckt entry references a .subckt that exists in opamp/regulators/555 files', () => {
+    for (const e of index.entries.filter((x) => x.model.type === 'subckt')) {
+      const names = definedNames(e.model.file as string)
+      expect(names.has(e.model.name.toUpperCase()), `${e.id}: ${e.model.name} not in ${e.model.file}`).toBe(true)
+    }
+  })
+
+  it('every xspice-digital entry references a template that exists in logic74hc.json', () => {
+    for (const e of index.entries.filter((x) => x.model.type === 'xspice-digital')) {
+      expect(e.model.file).toBe('logic74hc.json')
+      const names = definedNames('logic74hc.json')
+      expect(names.has(e.model.name.toUpperCase()), `${e.id}: template ${e.model.name} missing`).toBe(true)
+    }
+  })
+})
+
+describe('logic74hc.json — XSPICE template structure (Spec §8.5)', () => {
+  const j = JSON.parse(readFileSync(join(MODELS_DIR, 'logic74hc.json'), 'utf8')) as {
+    templates: Record<
+      string,
+      {
+        gates: Array<Record<string, unknown> & { prim: string }>
+        inputs: string[]
+        outputs: string[]
+        power: { vcc: string; gnd: string }
+        pinMaps: Record<string, Record<string, string>>
+        delaysNs: number
+        schmitt?: boolean
+      }
+    >
+  }
+
+  // The set of digital primitives VERIFIED to exist in ngspice-46 digital.cm
+  // (probed live during Task 14b). d_inv / d_buf do NOT exist.
+  const VERIFIED_PRIMS = new Set([
+    'd_inverter',
+    'd_buffer',
+    'd_and',
+    'd_nand',
+    'd_or',
+    'd_nor',
+    'd_xor',
+    'd_xnor',
+    'd_dff'
+  ])
+
+  it('every gate uses a primitive name verified to exist in ngspice-46', () => {
+    for (const [id, tpl] of Object.entries(j.templates)) {
+      for (const g of tpl.gates) {
+        expect(VERIFIED_PRIMS.has(g.prim), `${id}: gate prim "${g.prim}" is not a verified ngspice-46 primitive`).toBe(
+          true
+        )
+        // The plan calls out the d_inv/d_buf trap explicitly.
+        expect(g.prim).not.toBe('d_inv')
+        expect(g.prim).not.toBe('d_buf')
+      }
+    }
+  })
+
+  it('74HC00 is four 2-input NANDs; 74HC04 is six inverters; 74HC14 is a schmitt', () => {
+    expect(j.templates['74HC00'].gates.every((g) => g.prim === 'd_nand')).toBe(true)
+    expect(j.templates['74HC00'].gates.length).toBe(4)
+    expect(j.templates['74HC04'].gates.every((g) => g.prim === 'd_inverter')).toBe(true)
+    expect(j.templates['74HC04'].gates.length).toBe(6)
+    expect(j.templates['74HC14'].schmitt).toBe(true)
+    expect(j.templates['74HC14'].gates.every((g) => g.prim === 'd_inverter')).toBe(true)
+  })
+
+  it('every template has power pins, inputs, outputs and at least one pinMap', () => {
+    for (const [id, tpl] of Object.entries(j.templates)) {
+      expect(tpl.power.vcc, `${id} power.vcc`).toBeTruthy()
+      expect(tpl.power.gnd, `${id} power.gnd`).toBeTruthy()
+      expect(tpl.inputs.length, `${id} inputs`).toBeGreaterThan(0)
+      expect(tpl.outputs.length, `${id} outputs`).toBeGreaterThan(0)
+      expect(Object.keys(tpl.pinMaps).length, `${id} pinMaps`).toBeGreaterThan(0)
+      expect(typeof tpl.delaysNs).toBe('number')
+    }
+  })
+
+  it('each 14-pin pinMap maps exactly pads 1..14 and includes VCC+GND', () => {
+    for (const id of ['74HC00', '74HC04', '74HC08', '74HC14', '74HC32', '74HC74', '74HC86', '74HC164']) {
+      const tpl = j.templates[id]
+      const key = Object.keys(tpl.pinMaps).find((k) => /14/.test(k))!
+      const map = tpl.pinMaps[key]
+      const pads = Object.keys(map).map(Number).sort((a, b) => a - b)
+      expect(pads, `${id} pads`).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
+      const signals = Object.values(map)
+      expect(signals, `${id} VCC`).toContain('VCC')
+      expect(signals, `${id} GND`).toContain('GND')
+    }
+  })
+
+  it('74HC595 pinMap covers pads 1..16 with VCC+GND', () => {
+    const tpl = j.templates['74HC595']
+    const key = Object.keys(tpl.pinMaps).find((k) => /16/.test(k))!
+    const map = tpl.pinMaps[key]
+    const pads = Object.keys(map).map(Number).sort((a, b) => a - b)
+    expect(pads.length).toBe(16)
+    expect(Object.values(map)).toContain('VCC')
+    expect(Object.values(map)).toContain('GND')
+  })
+
+  it('d_dff gates carry data/clk/q terminal roles (verified pin order data clk set reset | q qbar)', () => {
+    for (const [, tpl] of Object.entries(j.templates)) {
+      for (const g of tpl.gates) {
+        if (g.prim === 'd_dff') {
+          expect(g['data'], 'dff data').toBeTruthy()
+          expect(g['clk'], 'dff clk').toBeTruthy()
+          expect(g['q'], 'dff q').toBeTruthy()
+        }
+      }
     }
   })
 })

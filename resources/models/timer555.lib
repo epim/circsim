@@ -1,0 +1,66 @@
+* Provenance: written for circsim from the NE555 datasheet BLOCK DIAGRAM, MIT.
+* This is an in-house behavioral NE555 built directly from the functional block
+* diagram in the datasheet — two comparators, an internal 5k/5k/5k divider, an
+* RS (set-reset) latch, an output buffer, and the open-collector discharge
+* transistor. No ngspice example-netlist text and no vendor model text is
+* copied; only the datasheet topology (which blocks connect to which pins) and
+* its threshold ratios (2/3 Vcc, 1/3 Vcc) inform the implementation.
+*
+* NE555 pinout (standard):
+*   1 GND   2 TRIG   3 OUT   4 RESET   5 CTRL   6 THRES   7 DISCH   8 VCC
+*
+* ---------------------------------------------------------------------------
+* Subckt node order (matches the pinMap in index.json):
+*   gnd trig out reset ctrl thres disch vcc   (pins 1 2 3 4 5 6 7 8)
+* ---------------------------------------------------------------------------
+.subckt NE555 gnd trig out reset ctrl thres disch vcc
+*
+* ---- internal 5k / 5k / 5k resistor divider ----
+* VCC --[5k]-- ctrl(=2/3 Vcc) --[5k]-- ntrig(=1/3 Vcc) --[5k]-- GND
+* The CTRL pin is brought out at the 2/3 node (so an external cap/voltage on
+* CTRL shifts the upper threshold, per the datasheet).
+rdiv_a vcc ctrl 5k
+rdiv_b ctrl n13 5k
+rdiv_c n13 gnd 5k
+*
+* ---- upper (threshold) comparator ----
+* output high when THRES > CTRL (2/3 Vcc). Drives the latch RESET input.
+bcomphi chi gnd v = ( v(thres) > v(ctrl) ) ? 1 : 0
+*
+* ---- lower (trigger) comparator ----
+* output high when TRIG < 1/3 Vcc (node n13). Drives the latch SET input.
+bcomplo clo gnd v = ( v(trig) < v(n13) ) ? 1 : 0
+*
+* ---- RS latch with active-low RESET pin override ----
+* State node 'q' is the latch output and holds in [0,1]. It is realized as a
+* capacitor integrated by a push/pull current:
+*   - SET   (clo high, lower comparator): push q up toward 1
+*   - RESET (chi high, upper comparator) OR external RESET pin low: push q down
+*   - otherwise HOLD (no current -> the cap retains its value = memory)
+* The push currents only act while q is moving toward the target (gated by the
+* target so q parks cleanly at 0 or 1), and a strong clamp keeps q in [0,1].
+* RESET is made dominant over SET (datasheet: reset/threshold wins).
+.param islew = 100m
+blatch 0 q i =
++ ( (v(reset) < 1) || (v(chi) > 0.5) ) ? ( (v(q) > 0.0) ? (-islew) : 0 ) :
++ ( (v(clo) > 0.5) ? ( (v(q) < 1.0) ? (islew) : 0 ) : 0 )
+cq q 0 1n ic=0
+* hard clamp: strong restoring current if q leaves [0,1].
+bclamp 0 q i = (v(q) > 1) ? (-(v(q)-1)*10) : ( (v(q) < 0) ? (-v(q)*10) : 0 )
+* read the latch state through a clean 0/1 decision (mid-point threshold).
+bq qd gnd v = ( v(q) > 0.5 ) ? 1 : 0
+*
+* ---- output buffer (pin 3) ----
+* OUT is HIGH (≈Vcc) when the latch is SET, LOW (≈0) when reset. Push-pull
+* through a small output resistance; clamp to the rails. RESET low forces low.
+bout obuf gnd v = ( v(reset) < 1 ) ? 0 :
++ ( ( v(qd) > 0.5 ) ? (v(vcc)-0.5) : 0.1 )
+rout obuf out 10
+*
+* ---- discharge transistor (pin 7, open collector to GND) ----
+* The discharge transistor is ON (DISCH pulled to GND) when the output is LOW
+* (latch reset), and OFF (high-Z) when the output is HIGH. Modeled as a
+* voltage-controlled resistance from DISCH to GND.
+bdisch disch gnd i = ( (v(qd) < 0.5) || (v(reset) < 1) ) ?
++ ( (v(disch)-v(gnd))/15 ) : ( (v(disch)-v(gnd))/1e9 )
+.ends NE555
