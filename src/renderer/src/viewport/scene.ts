@@ -24,6 +24,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { BoardModel } from '../../../core/kicad/types'
 import { buildSubstrate } from './boardGeometry'
+import { buildCopper, buildViaInstances, makeCopperMaterial } from './copperGeometry'
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -74,6 +75,7 @@ export function createSceneManager(): SceneManager {
 
   // Scene objects (can be replaced on board reload)
   let substrateGroup: THREE.Group | null = null
+  let copperGroup: THREE.Group | null = null
 
   function getActiveCamera(): THREE.Camera {
     return useOrtho ? orthoCamera! : perspCamera!
@@ -182,6 +184,17 @@ export function createSceneManager(): SceneManager {
         })
       }
 
+      // Remove previous copper
+      if (copperGroup) {
+        scene.remove(copperGroup)
+        copperGroup.traverse(obj => {
+          if (obj instanceof THREE.Mesh || obj instanceof THREE.InstancedMesh) {
+            obj.geometry.dispose()
+            if (obj.material instanceof THREE.Material) obj.material.dispose()
+          }
+        })
+      }
+
       substrateGroup = new THREE.Group()
 
       const substGeo = buildSubstrate(board.outline, board.boardThicknessMm)
@@ -201,6 +214,38 @@ export function createSceneManager(): SceneManager {
 
       substrateGroup.add(substMesh)
       scene.add(substrateGroup)
+
+      // ── Copper geometry ──
+      copperGroup = new THREE.Group()
+      // Copper sits on top of the substrate (Z = boardThickness)
+      const copperZ = board.boardThicknessMm
+      copperGroup.position.set(-cx, -cy, copperZ)
+
+      const copperMap = buildCopper(board)
+      for (const [, entry] of copperMap) {
+        const mat = makeCopperMaterial()
+        if (entry.F) {
+          const mesh = new THREE.Mesh(entry.F, mat.clone())
+          copperGroup.add(mesh)
+        }
+        if (entry.B) {
+          // B-side copper is flipped below the board
+          const bMat = makeCopperMaterial()
+          const mesh = new THREE.Mesh(entry.B, bMat)
+          mesh.position.z = -copperZ  // offset to the back face
+          copperGroup.add(mesh)
+        }
+      }
+
+      // Vias
+      if (board.vias.length > 0) {
+        const viaResult = buildViaInstances(board)
+        // Offset vias to board center
+        viaResult.mesh.position.set(-cx, -cy, 0)
+        scene.add(viaResult.mesh)
+      }
+
+      scene.add(copperGroup)
 
       // Fit perspective camera to board
       if (perspCamera) {
