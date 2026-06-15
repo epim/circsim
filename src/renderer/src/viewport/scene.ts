@@ -25,11 +25,13 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { BoardModel } from '../../../core/kicad/types'
-import { buildSubstrate } from './boardGeometry'
+import { buildSubstrate, kicadToWorld } from './boardGeometry'
 import { buildCopper, buildViaInstances, makeCopperMaterial } from './copperGeometry'
 import { buildComponentBoxes } from './componentGeometry'
 import { buildSilkscreenEntries, createSilkscreenTexts } from './silkscreen'
 import { createPicker, type PickCallback } from './picking'
+import { createOverlayController, type OverlayController, type OverlayMode, type LegendData } from './overlay'
+import { createMarkerController, type MarkerController, type AnnotationLabel, type ProbeMarker, type ProbeMarkerOpts } from './markers'
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -60,6 +62,59 @@ export interface SceneManager {
   invalidate(): void
   /** Programmatically clear hover state (e.g. before board reload or on mouse leave). */
   clearHover(): void
+
+  // ── Task 20: Overlay modes ─────────────────────────────────────────────────
+
+  /**
+   * Switch the copper overlay mode.
+   * 'realistic'  — standard copper color
+   * 'voltage'    — per-net color lerp blue→red
+   * 'highlight'  — picking highlight only (realistic colors)
+   */
+  setOverlay(mode: OverlayMode): void
+
+  /** Current overlay mode. */
+  getOverlayMode(): OverlayMode
+
+  /**
+   * Apply per-net voltage tinting (only has visual effect in 'voltage' mode).
+   * Call after a runOp result or live transient samples.
+   */
+  applyNetVoltages(voltages: Map<number, number>, minVolts: number, maxVolts: number): void
+
+  /**
+   * Return legend data for UI display, or null when not in voltage mode.
+   */
+  getVoltageLegend(): LegendData | null
+
+  // ── Task 20: Probe markers ─────────────────────────────────────────────────
+
+  /** Add a probe flag / instrument badge sprite. Returns the marker id. */
+  addProbeMarker(opts: ProbeMarkerOpts): string
+
+  /** Remove a probe marker by id. */
+  removeProbeMarker(id: string): void
+
+  /** Remove all probe markers. */
+  clearProbeMarkers(): void
+
+  /** Return all registered probe markers. */
+  getProbeMarkers(): ProbeMarker[]
+
+  /**
+   * Display net voltage labels from an op result.
+   * Declutters automatically: labels < 24 px apart at current zoom are hidden.
+   *
+   * @param voltages      Map<netId, volts> from opResult.values
+   * @param netPositions  Map<netId, worldPos> — scene.ts computes this from copper geometry
+   */
+  showOpAnnotations(voltages: Map<number, number>, netPositions?: Map<number, THREE.Vector3>): void
+
+  /** Remove all op annotation labels. */
+  clearOpAnnotations(): void
+
+  /** Return visible annotation labels after declutter (for UI rendering). */
+  getVisibleAnnotations(): AnnotationLabel[]
 }
 
 // ─── FR4 material ─────────────────────────────────────────────────────────────
@@ -90,6 +145,16 @@ export function createSceneManager(): SceneManager {
   let copperGroup: THREE.Group | null = null
   let componentGroup: THREE.Group | null = null
   let silkscreenGroup: THREE.Group | null = null
+
+  // ── Task 20: Overlay + markers ──────────────────────────────────────────────
+  // Net materials map: netId → MeshStandardMaterial (built in loadBoard, reused here)
+  let netMaterialsMap = new Map<number, THREE.MeshStandardMaterial>()
+  let overlayController: OverlayController = createOverlayController(netMaterialsMap)
+  const markerController: MarkerController = createMarkerController()
+
+  // Net positions for op annotations: netId → world position (centroid of copper)
+  // Populated in loadBoard from pad positions.
+  let netPositionsMap = new Map<number, THREE.Vector3>()
 
   // ── Picking controller (Task 19) ────────────────────────────────────────────
   const picker = createPicker(
@@ -299,18 +364,40 @@ export function createSceneManager(): SceneManager {
       const copperZ = board.boardThicknessMm
       copperGroup.position.set(-cx, -cy, copperZ)
 
+      // Rebuild net materials + overlay controller for the new board
+      // (dispose old materials first to free GPU memory)
+      for (const mat of netMaterialsMap.values()) mat.dispose()
+      netMaterialsMap = new Map<number, THREE.MeshStandardMaterial>()
+      overlayController = createOverlayController(netMaterialsMap)
+
+      // Compute net positions (world-space position of first pad per net)
+      // Used for op annotation label placement.
+      netPositionsMap = new Map<number, THREE.Vector3>()
+      for (const fp of board.footprints) {
+        for (const pad of fp.pads) {
+          if (pad.netId === undefined || pad.netId === 0) continue
+          if (!netPositionsMap.has(pad.netId)) {
+            const world = kicadToWorld(fp.at.x + pad.at.x, fp.at.y + pad.at.y)
+            // Apply the same board-centering offset used for the copper group
+            netPositionsMap.set(pad.netId, new THREE.Vector3(world.x - cx, world.y - cy, copperZ))
+          }
+        }
+      }
+
       const copperMap = buildCopper(board)
       for (const [netId, entry] of copperMap) {
+        // One shared material per net (both F and B sides share so tinting is consistent)
         const mat = makeCopperMaterial()
+        netMaterialsMap.set(netId, mat)
+
         if (entry.F) {
-          const mesh = new THREE.Mesh(entry.F, mat.clone())
+          const mesh = new THREE.Mesh(entry.F, mat)
           copperGroup.add(mesh)
           picker.registerCopperMesh(mesh, netId)
         }
         if (entry.B) {
           // B-side copper is flipped below the board
-          const bMat = makeCopperMaterial()
-          const mesh = new THREE.Mesh(entry.B, bMat)
+          const mesh = new THREE.Mesh(entry.B, mat)
           mesh.position.z = -copperZ  // offset to the back face
           copperGroup.add(mesh)
           picker.registerCopperMesh(mesh, netId)
@@ -415,6 +502,65 @@ export function createSceneManager(): SceneManager {
 
     clearHover(): void {
       picker.clearHover()
+    },
+
+    // ── Task 20: Overlay modes ─────────────────────────────────────────────────
+
+    setOverlay(mode: OverlayMode): void {
+      overlayController.setOverlay(mode)
+      dirty = true
+    },
+
+    getOverlayMode(): OverlayMode {
+      return overlayController.getMode()
+    },
+
+    applyNetVoltages(voltages: Map<number, number>, minVolts: number, maxVolts: number): void {
+      overlayController.applyNetVoltages(voltages, minVolts, maxVolts)
+      dirty = true
+    },
+
+    getVoltageLegend(): LegendData | null {
+      return overlayController.getLegend()
+    },
+
+    // ── Task 20: Probe markers ─────────────────────────────────────────────────
+
+    addProbeMarker(opts: ProbeMarkerOpts): string {
+      return markerController.addProbeMarker(opts)
+    },
+
+    removeProbeMarker(id: string): void {
+      markerController.removeProbeMarker(id)
+    },
+
+    clearProbeMarkers(): void {
+      markerController.clearProbeMarkers()
+    },
+
+    getProbeMarkers(): ProbeMarker[] {
+      return markerController.getProbeMarkers()
+    },
+
+    showOpAnnotations(
+      voltages: Map<number, number>,
+      netPositions?: Map<number, THREE.Vector3>
+    ): void {
+      // Use provided positions, or fall back to auto-computed pad positions
+      const positions = netPositions ?? netPositionsMap
+      markerController.showOpAnnotations(voltages, positions)
+      dirty = true
+    },
+
+    clearOpAnnotations(): void {
+      markerController.clearOpAnnotations()
+    },
+
+    getVisibleAnnotations(): AnnotationLabel[] {
+      const cam = getActiveCamera()
+      // If renderer is available, use its pixel size; otherwise fall back to 800×600
+      const size = renderer ? renderer.getSize(new THREE.Vector2()) : new THREE.Vector2(800, 600)
+      return markerController.getVisibleAnnotations(cam, size.x, size.y)
     },
   }
 }
