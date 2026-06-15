@@ -17,6 +17,15 @@ import { join } from 'path'
 import { readFile } from 'fs/promises'
 import { createProductionSupervisor, unwrapPort } from './simhostSupervisor'
 
+/** Shape of resources/models/index.json (only the fields we read here). */
+interface ModelIndex {
+  entries: {
+    id: string
+    model?: { type?: string; file?: string; name?: string }
+    [k: string]: unknown
+  }[]
+}
+
 // ─── Globals ──────────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null
@@ -167,6 +176,62 @@ function registerIpcHandlers(): void {
         'onsemi) or Micro-Cap/Intusoft model text is included. The GPL-encumbered ' +
         'ngspice "table.cm" code model is excluded from every platform bundle.'
     }
+  })
+
+  /**
+   * Return the bundled model library (tier-3 resolution + deck-gen inputs).
+   *
+   *  - `entries`: the parsed `resources/models/index.json` entries (the
+   *    LibraryEntry list the renderer feeds to `setLibrary` for tier-3 matching).
+   *  - `texts`:   filename → file contents for every `.lib`/`.json` referenced by
+   *    an entry's `model.file`. The deck generator inlines the matching
+   *    `.subckt`/`.model` block (subckts/model-cards) and expands the
+   *    xspice-digital templates from these texts (ngspice loads decks from memory,
+   *    so definitions are inlined — never `.include`d by path).
+   *
+   * Resources are resolved the SAME way as the other handlers (resourcePath):
+   * packaged → process.resourcesPath; dev/Playwright → <repoRoot>/resources.
+   * Every read is best-effort; a missing file is omitted rather than rejecting,
+   * so the renderer always gets at least the entries it can match on.
+   */
+  ipcMain.handle('circsim:getModelLibrary', async () => {
+    const tryRead = async (p: string): Promise<string | null> => {
+      try {
+        return (await readFile(p)).toString('utf8')
+      } catch {
+        return null
+      }
+    }
+
+    const indexText = await tryRead(resourcePath('models', 'index.json'))
+    if (!indexText) return { entries: [], texts: {} }
+
+    let parsed: ModelIndex
+    try {
+      parsed = JSON.parse(indexText) as ModelIndex
+    } catch {
+      return { entries: [], texts: {} }
+    }
+
+    const entries = Array.isArray(parsed.entries) ? parsed.entries : []
+
+    // Collect the unique set of files referenced by entry.model.file and read
+    // each once (a single .lib/.json backs many entries).
+    const fileNames = new Set<string>()
+    for (const e of entries) {
+      const f = e.model?.file
+      if (typeof f === 'string' && f.length > 0) fileNames.add(f)
+    }
+
+    const texts: Record<string, string> = {}
+    await Promise.all(
+      [...fileNames].map(async (name) => {
+        const content = await tryRead(resourcePath('models', name))
+        if (content !== null) texts[name] = content
+      })
+    )
+
+    return { entries, texts }
   })
 }
 

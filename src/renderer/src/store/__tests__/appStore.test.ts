@@ -18,7 +18,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { createAppStore, resolutionSummary, parseAlterCommand } from '../appStore'
+import { createAppStore, resolutionSummary, parseAlterCommand, AUTO_SUPPLY_ID } from '../appStore'
 import { createMockSimClient } from '../../ipc/simClient'
 
 const fixturesDir = join(__dirname, '../../../../../fixtures')
@@ -80,6 +80,48 @@ describe('appStore — open flow (fixture-rc)', () => {
   it('starts clean (deckDirty false) right after load', () => {
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     expect(store.getState().deckDirty).toBe(false)
+  })
+})
+
+describe('appStore — auto-attaches a DC supply on open (Spec §4 "60 seconds")', () => {
+  let store: ReturnType<typeof createAppStore>
+
+  beforeEach(() => {
+    store = createAppStore({ simClient: createMockSimClient() })
+  })
+
+  it('attaches a 5 V / 0.1 Ω dc-supply on the top suggested supply net (fixture-555 VCC)', () => {
+    store.getState().openBoardFromText(readFixture('fixture-555.kicad_pcb'), 'fixture-555.kicad_pcb')
+    const s = store.getState()
+
+    // VCC is the suggested supply net; the supply must be attached there.
+    const vcc = s.circuit!.nets.find(n => n.kicadName === 'VCC')!
+    expect(s.suggestedSupplyNetIds).toContain(vcc.id)
+
+    const supplies = s.instruments.filter(i => i.kind === 'dc-supply')
+    expect(supplies).toHaveLength(1)
+    const supply = supplies[0] as Extract<typeof supplies[number], { kind: 'dc-supply' }>
+    expect(supply.id).toBe(AUTO_SUPPLY_ID)
+    expect(supply.netId).toBe(vcc.id)
+    expect(supply.volts).toBe(5)
+    expect(supply.seriesOhms).toBe(0.1)
+
+    // The auto-attached supply is NOT on the ground net.
+    expect(supply.netId).not.toBe(s.groundNetId)
+  })
+
+  it('does NOT auto-attach a supply when no supply net is suggested (fixture-rc)', () => {
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+    const s = store.getState()
+    expect(s.suggestedSupplyNetIds).toEqual([])
+    expect(s.instruments.filter(i => i.kind === 'dc-supply')).toHaveLength(0)
+  })
+
+  it('re-opening a board replaces the auto supply (no accumulation)', () => {
+    store.getState().openBoardFromText(readFixture('fixture-555.kicad_pcb'), 'fixture-555.kicad_pcb')
+    expect(store.getState().instruments.filter(i => i.kind === 'dc-supply')).toHaveLength(1)
+    store.getState().openBoardFromText(readFixture('fixture-555.kicad_pcb'), 'fixture-555.kicad_pcb')
+    expect(store.getState().instruments.filter(i => i.kind === 'dc-supply')).toHaveLength(1)
   })
 })
 

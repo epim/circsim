@@ -37,6 +37,13 @@ interface CircsimLicenseTexts {
   modelProvenance: string
 }
 
+interface CircsimModelLibrary {
+  /** Parsed resources/models/index.json entries (LibraryEntry[] for tier-3). */
+  entries: import('../../core/models/types').LibraryEntry[]
+  /** filename → file contents for every referenced .lib / .json model file. */
+  texts: Record<string, string>
+}
+
 declare global {
   interface Window {
     circsim: {
@@ -56,6 +63,12 @@ declare global {
        * verbatim ngspice COPYING, model-library provenance, docs/licensing.md.
        */
       getLicenseTexts(): Promise<CircsimLicenseTexts>
+      /**
+       * Bundled model library (tier-3 resolution + deck-gen definitions). The
+       * store calls this at boot, feeds `entries` to setLibrary, and keeps
+       * `texts` for the deck generator to inline .subckt/.model definitions.
+       */
+      getModelLibrary(): Promise<CircsimModelLibrary>
     }
   }
 }

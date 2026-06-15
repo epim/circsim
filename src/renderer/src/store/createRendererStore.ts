@@ -20,28 +20,50 @@ export function createRendererStore(): AppStore {
   const client = createPortSimClient()
   const store = createAppStore({ simClient: client })
 
-  // Crash recovery: when SimHost dies, the old port is gone. After respawn the
-  // supervisor re-runs the handshake and getSimPort() resolves with a new port.
-  window.circsim.onSimhostCrashed(async ({ willRespawn }) => {
-    store.getState().noteCrash(willRespawn)
-    if (!willRespawn) return
-    const newPort = await window.circsim.getSimPort()
-    client.attachPort(newPort)
-    store.getState().replayAfterCrash()
+  // The live SimHost MessagePort is delivered to the MAIN world by the preload
+  // via `window.postMessage('circsim:simhost-port', '*', [port])` — the canonical
+  // Electron pattern that reliably transfers a MessagePort across the
+  // contextIsolation boundary (returning one from a contextBridge function does
+  // NOT reliably transfer the live port). This listener runs in the main world,
+  // so the port it receives is a real, fully-functional MessagePort.
+  //
+  // It fires once at initial load AND again after each SimHost respawn (the
+  // supervisor re-runs the handshake → preload re-forwards a fresh port). On the
+  // FIRST port we just attach; on SUBSEQUENT ports (a respawn) we attach + replay
+  // the deck/instrument state (Spec §6.1).
+  let attachedOnce = false
+  window.addEventListener('message', (e: MessageEvent) => {
+    if (e.data !== 'circsim:simhost-port') return
+    const port = e.ports?.[0]
+    if (!port) return
+    client.attachPort(port)
+    if (attachedOnce) {
+      // A respawn delivered a fresh port — replay so the bench resumes.
+      store.getState().replayAfterCrash()
+    }
+    attachedOnce = true
   })
 
-  // Initial handshake runs in the BACKGROUND — the UI must render immediately
-  // (empty state, file-open, 3D view all work without the simulator). Blocking
-  // boot on the port handshake meant any SimHost hiccup blanked the whole app.
-  // Sim actions (Power On / Run) await client readiness on their own.
+  // Crash recovery notice: when SimHost dies, surface the toast. The fresh port
+  // arrives via the window 'message' listener above (which also replays), so we
+  // only record the crash notice here.
+  window.circsim.onSimhostCrashed(({ willRespawn }) => {
+    store.getState().noteCrash(willRespawn)
+  })
+
+  // Load the bundled model library in the BACKGROUND too (tier-3 resolution +
+  // deck-gen definitions). Without this, tier-3 parts (e.g. the sample's LED)
+  // show "unresolved" and subckt/model-card/digital definitions never get
+  // inlined into the deck. setModelLibrary re-resolves, so any board already
+  // open picks up the new tier-3 matches. Best-effort: a failure leaves the
+  // store with no library (tiers 1/2/6 still work).
   void window.circsim
-    .getSimPort()
-    .then((port) => {
-      client.attachPort(port)
+    .getModelLibrary()
+    .then(({ entries, texts }) => {
+      store.getState().setModelLibrary(entries, texts)
     })
     .catch(() => {
-      // Leave the client portless; the UI stays usable and sim commands no-op
-      // until a port arrives (the store re-sends on crash recovery).
+      // No bundled library available — tier-3 stays disabled; UI still works.
     })
 
   return store

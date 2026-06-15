@@ -89,8 +89,9 @@ export function createPortSimClient(initialPort?: MessagePort): PortSimClient {
     }
     port = newPort
     port.onmessage = handleMessage
-    // MessagePorts transferred via Electron are already started by the preload,
-    // but calling start() again is idempotent and safe.
+    // The preload delivers the port to the main world via window.postMessage and
+    // does NOT start it (starting it in the preload world races the entanglement);
+    // the main-world consumer starts it here, in the world that uses it.
     port.start?.()
   }
 

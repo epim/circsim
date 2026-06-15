@@ -107,6 +107,15 @@ export class SimHost {
   private currentDeck: string[] = []
   private deckLoaded = false
 
+  /**
+   * True while the op retry ladder is running. Suppresses live convergence
+   * pattern-matching on SendChar text: ngspice's own internal gmin/source
+   * stepping prints "no convergence" chatter even on a run that ultimately
+   * converges, which would otherwise emit spurious convergenceFailure events.
+   * The ladder emits its own structured failure only after all rungs fail.
+   */
+  private opInFlight = false
+
   /** Halt-ownership state machine (Spec §7.4.3). */
   private halt: HaltCoordinator
 
@@ -331,20 +340,32 @@ export class SimHost {
       { cmd: 'op', label: 'op (source-step)', options: 'set srcsteps=10' }
     ]
     let lastValues: Record<string, number> = {}
-    for (let rung = 0; rung < ladder.length; rung++) {
-      const step = ladder[rung]
-      if (step.options) {
-        await this.engine.command(step.options, false)
+    // Suppress live convergence-pattern detection WHILE the op ladder runs: as
+    // ngspice applies its OWN internal gmin/source stepping it prints
+    // "no convergence"/"gmin stepping" chatter on SendChar EVEN WHEN it ultimately
+    // converges. Treating that chatter as a hard failure spammed the renderer with
+    // false convergenceFailure events (and a misleading "didn't converge" card)
+    // for a circuit that actually solved fine (e.g. the bundled NE555). The ladder
+    // emits its OWN structured failure below only if every rung truly fails.
+    this.opInFlight = true
+    try {
+      for (let rung = 0; rung < ladder.length; rung++) {
+        const step = ladder[rung]
+        if (step.options) {
+          await this.engine.command(step.options, false)
+        }
+        // op is potentially-blocking → async FFI (Spec §7.4 #4).
+        await this.engine.command('op', true)
+        lastValues = this.readPlotValues()
+        // A converged op yields finite node voltages.
+        const finite = Object.values(lastValues).some((v) => Number.isFinite(v))
+        if (finite && Object.keys(lastValues).length > 0) {
+          this.emit({ type: 'opResult', values: lastValues })
+          return lastValues
+        }
       }
-      // op is potentially-blocking → async FFI (Spec §7.4 #4).
-      await this.engine.command('op', true)
-      lastValues = this.readPlotValues()
-      // A converged op yields finite node voltages.
-      const finite = Object.values(lastValues).some((v) => Number.isFinite(v))
-      if (finite && Object.keys(lastValues).length > 0) {
-        this.emit({ type: 'opResult', values: lastValues })
-        return lastValues
-      }
+    } finally {
+      this.opInFlight = false
     }
     this.emit({
       type: 'convergenceFailure',
@@ -550,6 +571,10 @@ export class SimHost {
   // ── convergence detection (Spec §7.4.6) ────────────────────────────────────
 
   private detectConvergence(text: string): void {
+    // While the op retry ladder runs, ngspice's internal gmin/source-stepping
+    // emits "no convergence"-style chatter even when it ultimately solves. The
+    // ladder reports its own structured failure; don't double-report from chatter.
+    if (this.opInFlight) return
     for (const re of CONVERGENCE_PATTERNS) {
       if (re.test(text)) {
         this.emit({ type: 'convergenceFailure', detail: text.trim() })
@@ -842,9 +867,9 @@ function bootstrapUtilityProcess(): void {
   parentPort.once('message', (e: any) => {
     const port = e?.ports?.[0]
     if (!port) return
-    port.start()
 
     if (!ngspiceResourcesAvailable()) {
+      port.start()
       try {
         port.postMessage({
           type: 'log',
@@ -856,6 +881,14 @@ function bootstrapUtilityProcess(): void {
       }
       return
     }
+
+    // Buffer commands that arrive BEFORE host.start() finishes the startup smoke
+    // check. handleCommand only enqueues (it doesn't run ngspice synchronously),
+    // so a command received mid-startup would otherwise be enqueued and could
+    // drain concurrently with the smoke check's engine calls (a re-entrant FFI
+    // race). We gate intake until start() resolves, then flush in arrival order.
+    let started = false
+    const pending: SimCommand[] = []
 
     const host = new SimHost({
       emit: (ev: SimEvent) => {
@@ -870,9 +903,9 @@ function bootstrapUtilityProcess(): void {
       }
     })
 
-    port.on('message', (msg: { data: SimCommand }) => {
+    const dispatch = (cmd: SimCommand): void => {
       try {
-        host.handleCommand(msg.data)
+        host.handleCommand(cmd)
       } catch (err) {
         try {
           port.postMessage({
@@ -884,19 +917,43 @@ function bootstrapUtilityProcess(): void {
           /* ignore */
         }
       }
-    })
+    }
 
-    host.start().catch((err) => {
-      try {
-        port.postMessage({
-          type: 'log',
-          level: 'error',
-          text: `SimHost start failed: ${(err as Error).message}`
-        } satisfies SimEvent)
-      } catch {
-        /* ignore */
-      }
+    // CRITICAL (Electron MessagePortMain): register the 'message' listener BEFORE
+    // start(). start() flushes any already-queued messages synchronously; a
+    // listener attached after start() misses everything delivered in between
+    // (this dropped renderer→SimHost commands intermittently). Listen, then start.
+    port.on('message', (msg: { data: SimCommand }) => {
+      const cmd = msg?.data
+      if (!cmd) return
+      if (started) dispatch(cmd)
+      else pending.push(cmd)
     })
+    port.start()
+
+    host
+      .start()
+      .then(() => {
+        started = true
+        for (const cmd of pending) dispatch(cmd)
+        pending.length = 0
+      })
+      .catch((err) => {
+        // Even on a failed start, flush so the renderer isn't left hanging — the
+        // commands will surface their own errors via the queue's error path.
+        started = true
+        for (const cmd of pending) dispatch(cmd)
+        pending.length = 0
+        try {
+          port.postMessage({
+            type: 'log',
+            level: 'error',
+            text: `SimHost start failed: ${(err as Error).message}`
+          } satisfies SimEvent)
+        } catch {
+          /* ignore */
+        }
+      })
   })
 }
 

@@ -43,6 +43,136 @@ export interface GenerateOptions {
   }
   /** Title for the deck's first comment line (e.g. circuit/board name) */
   title?: string
+  /**
+   * OPTIONAL model-library texts: filename → file contents for every referenced
+   * .lib / .json model file (from the bundled library + user models).
+   *
+   * When provided, generateDeck inlines the matching `.subckt … .ends` block or
+   * `.model …` card for every subckt / model-card part (deduplicated), and
+   * expands xspice-digital templates from the matching logic74hc.json — ngspice
+   * loads decks from memory, so definitions are inlined, NEVER `.include`d by
+   * path. When OMITTED the generator emits primitives + subckt instantiations
+   * only (the existing golden-deck behaviour is unchanged).
+   *
+   * The lookup key is the resolution's `model.libFile` (subckt/model-card) or
+   * the digital template's source file (logic74hc.json).
+   */
+  modelTexts?: Record<string, string>
+}
+
+// ─── Model-definition parsing (inline from .lib texts) ───────────────────────
+
+/**
+ * Join SPICE continuation lines: any line whose first non-blank char is '+' is a
+ * continuation of the previous logical line. Returns logical lines (no '+'),
+ * carrying the original text spliced with a single space. Comments ('*') and
+ * blanks are preserved as their own logical lines (a '+' never continues a
+ * comment in our libs). CRLF is normalised away by the split caller.
+ */
+function joinContinuations(rawLines: string[]): string[] {
+  const out: string[] = []
+  for (const raw of rawLines) {
+    const line = raw.replace(/\r$/, '')
+    const trimmed = line.trimStart()
+    if (trimmed.startsWith('+') && out.length > 0) {
+      // Append the continuation (minus the leading '+') to the previous line.
+      out[out.length - 1] = out[out.length - 1] + ' ' + trimmed.slice(1).trim()
+    } else {
+      out.push(line)
+    }
+  }
+  return out
+}
+
+/**
+ * A parsed .subckt definition: its declared terminal order plus the full text
+ * (the `.subckt … .ends` block, continuations joined into single lines).
+ */
+interface SubcktDef {
+  name: string
+  /** Terminal node names in declared order (lowercased). */
+  terminals: string[]
+  /** The full definition text (one entry per logical line). */
+  lines: string[]
+}
+
+/**
+ * Index every `.subckt NAME t1 t2 … .ends` block in a lib text, keyed by the
+ * lowercased subckt name. Subckt names can collide across files but we index per
+ * file text; the caller picks the file via the resolution's libFile.
+ */
+function parseSubckts(text: string): Map<string, SubcktDef> {
+  const map = new Map<string, SubcktDef>()
+  const lines = joinContinuations(text.split('\n'))
+  let current: SubcktDef | null = null
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const startMatch = /^\.subckt\s+(\S+)\s*(.*)$/i.exec(trimmed)
+    if (startMatch && !current) {
+      const name = startMatch[1]
+      // Terminals are the whitespace-separated tokens after the name, excluding
+      // any `PARAMS:`/`params:` tail (none in our libs, but be defensive).
+      const rest = startMatch[2]
+      const paramIdx = rest.search(/\bparams:/i)
+      const termPart = paramIdx >= 0 ? rest.slice(0, paramIdx) : rest
+      const terminals = termPart.trim().length > 0 ? termPart.trim().split(/\s+/).map(t => t.toLowerCase()) : []
+      current = { name: name.toLowerCase(), terminals, lines: [line] }
+      continue
+    }
+    if (current) {
+      current.lines.push(line)
+      if (/^\.ends\b/i.test(trimmed)) {
+        map.set(current.name, current)
+        current = null
+      }
+    }
+  }
+  return map
+}
+
+/**
+ * Index every `.model NAME …` card in a lib text, keyed by the lowercased model
+ * name. Continuations are joined so a multi-line .model card is a single string.
+ */
+function parseModelCards(text: string): Map<string, string> {
+  const map = new Map<string, string>()
+  const lines = joinContinuations(text.split('\n'))
+  for (const line of lines) {
+    const m = /^\s*\.model\s+(\S+)\b/i.exec(line)
+    if (m) map.set(m[1].toLowerCase(), line.trimEnd())
+  }
+  return map
+}
+
+/** Lazily-parsed per-file caches so repeated lookups don't re-scan the text. */
+interface ModelTextIndex {
+  subcktsByFile: Map<string, Map<string, SubcktDef>>
+  modelsByFile: Map<string, Map<string, string>>
+  texts: Record<string, string>
+}
+
+function makeModelTextIndex(texts: Record<string, string> | undefined): ModelTextIndex {
+  return {
+    subcktsByFile: new Map(),
+    modelsByFile: new Map(),
+    texts: texts ?? {},
+  }
+}
+
+function getSubcktDef(idx: ModelTextIndex, file: string, name: string): SubcktDef | undefined {
+  if (!idx.subcktsByFile.has(file)) {
+    const text = idx.texts[file]
+    idx.subcktsByFile.set(file, text ? parseSubckts(text) : new Map())
+  }
+  return idx.subcktsByFile.get(file)!.get(name.toLowerCase())
+}
+
+function getModelCard(idx: ModelTextIndex, file: string, name: string): string | undefined {
+  if (!idx.modelsByFile.has(file)) {
+    const text = idx.texts[file]
+    idx.modelsByFile.set(file, text ? parseModelCards(text) : new Map())
+  }
+  return idx.modelsByFile.get(file)!.get(name.toLowerCase())
 }
 
 // ─── Numeric emission ─────────────────────────────────────────────────────────
@@ -128,6 +258,30 @@ function intNode(baseName: string): string {
   return `${baseName}_int`
 }
 
+// ─── Refdes / device-letter helpers (model-card path) ─────────────────────────
+
+/** Refdes prefix (leading letters): "D1" → "D", "Q12" → "Q", "U3" → "U". */
+function refdesPrefix(ref: string): string {
+  const m = ref.match(/^([A-Za-z]+)/)
+  return m ? m[1].toUpperCase() : ''
+}
+
+/**
+ * Refdes prefix → SPICE device letter for model-card parts (a .model reference
+ * is a top-level primitive device, e.g. an LED is a diode `d_d1 a k LED_RED`).
+ * Covers the prefixes the bundled model-card library actually targets: diodes
+ * (D), BJTs (Q), MOSFETs (Q/M/T). Falls back to 'x' (handled by the caller).
+ */
+const PRIMITIVE_PREFIX_TO_LETTER: Record<string, string> = {
+  D: 'd',
+  Z: 'd',
+  ZD: 'd',
+  LED: 'd',
+  Q: 'q',
+  M: 'm',
+  T: 'm',
+}
+
 // ─── Wave source card builders ────────────────────────────────────────────────
 
 /**
@@ -184,23 +338,174 @@ function isSubckt(res: Resolution): boolean {
 
 // ─── XSPICE digital template expansion ───────────────────────────────────────
 
+/** Shape of a logic74hc.json template (only the fields the expander reads). */
+interface Logic74Gate {
+  prim: string
+  in?: string[]
+  out?: string
+  data?: string
+  clk?: string
+  set?: string
+  reset?: string
+  q?: string
+  qbar?: string
+}
+interface Logic74Template {
+  schmitt?: boolean
+  gates: Logic74Gate[]
+  inputs: string[]
+  outputs: string[]
+  power: { vcc: string; gnd: string }
+  delaysNs: number
+}
+interface Logic74File {
+  family: {
+    vHighDefault: number
+    adc: { inLowFrac: number; inHighFrac: number }
+    schmittAdc: { inLowFrac: number; inHighFrac: number }
+  }
+  templates: Record<string, Logic74Template>
+}
+
+/** Per-file cache of parsed logic74hc JSON so we parse each text once. */
+const logic74Cache = new WeakMap<Record<string, string>, Map<string, Logic74File | null>>()
+
+function parseLogic74(idx: ModelTextIndex, file: string): Logic74File | null {
+  let cache = logic74Cache.get(idx.texts)
+  if (!cache) {
+    cache = new Map()
+    logic74Cache.set(idx.texts, cache)
+  }
+  if (cache.has(file)) return cache.get(file)!
+  const text = idx.texts[file]
+  let parsed: Logic74File | null = null
+  if (text) {
+    try {
+      parsed = JSON.parse(text) as Logic74File
+    } catch {
+      parsed = null
+    }
+  }
+  cache.set(file, parsed)
+  return parsed
+}
+
 /**
- * Expand an xspice-digital resolution into deck lines.
- * Pattern: adc_bridge → logic gates → dac_bridge (spec §8.8).
+ * Expand an xspice-digital resolution into deck lines (Spec §8.8 pattern:
+ * adc_bridge → ngspice digital primitive(s) → dac_bridge).
  *
- * For Task 13 scope we emit a placeholder comment; full expansion is Task 14b.
- * But we do emit the correct wrapper structure so tests can verify the pattern.
+ * The expansion mirrors the VERIFIED-against-ngspice-46 expander exercised by
+ * src/simhost/__tests__/library-ic.integration.test.ts (d_inverter/d_buffer/
+ * d_and/d_nand/d_or/d_nor/d_xor/d_xnor/d_dff — NOT d_inv/d_buf). Each chip
+ * signal (1A, 1Y, …) becomes a per-instance analog node; the chip's package
+ * pads are wired to those analog nodes via the pinMap so the surrounding deck
+ * connects to the real board nets. adc/dac rails come from the family vHigh.
+ *
+ * When the template file text is not available (modelTexts omitted, e.g. the
+ * existing golden tests), we fall back to the comment-only placeholder so those
+ * primitives-only decks stay byte-for-byte unchanged.
+ *
+ * @param ref         part ref (e.g. 'U1')
+ * @param model       xspice-digital resolved model (templateId + pinMap)
+ * @param part        the circuit part (pad → netId)
+ * @param netIdToNode netId → spiceNode
+ * @param idx         parsed model-text index
+ * @param templateFile the logic74hc.json filename (from the library entry)
  */
 function expandXspiceDigital(
   ref: string,
   model: { kind: 'xspice-digital'; templateId: string; pinMap: Record<string, string> },
-  _netIdToNode: Map<number, string>,
-  _circuit: Circuit,
+  part: { padNet: Map<string, number> },
+  netIdToNode: Map<number, string>,
+  idx: ModelTextIndex,
+  templateFile: string | undefined,
 ): string[] {
-  return [
-    `* xspice-digital template: ${ref} (${model.templateId})`,
-    `* adc_bridge/gates/dac_bridge expansion — see Task 14b`,
-  ]
+  const logic = templateFile ? parseLogic74(idx, templateFile) : null
+  const tpl = logic?.templates?.[model.templateId]
+  if (!logic || !tpl) {
+    // No template text available — keep the historic placeholder (golden tests).
+    return [
+      `* xspice-digital template: ${ref} (${model.templateId})`,
+      `* adc_bridge/gates/dac_bridge expansion — template text unavailable`,
+    ]
+  }
+
+  const vHigh = logic.family.vHighDefault
+  const refLc = ref.toLowerCase()
+
+  // Map each chip SIGNAL name (e.g. "1A", "VCC") → the analog node it lives on.
+  //  - signals wired to a package pad → that pad's board net spiceNode
+  //  - unconnected signals → a per-instance internal node (won't disturb the board)
+  // pinMap is pad → signal (uppercase signal names, per index.json).
+  const signalToNode = new Map<string, string>()
+  for (const [pad, sig] of Object.entries(model.pinMap)) {
+    const netId = part.padNet.get(pad)
+    if (netId === undefined) continue
+    const node = netIdToNode.get(netId)
+    if (node !== undefined) signalToNode.set(sig.toUpperCase(), node)
+  }
+  /** Analog node for a chip signal (internal per-instance node when unconnected). */
+  const aNode = (sig: string): string =>
+    signalToNode.get(sig.toUpperCase()) ?? `${refLc}_${sig.toLowerCase()}`
+  /** Digital (event) node for a chip signal — always per-instance. */
+  const dNode = (sig: string): string => `${refLc}_d_${sig.toLowerCase()}`
+
+  const lines: string[] = []
+  lines.push(`* xspice-digital ${ref} (${model.templateId})`)
+
+  const adc = tpl.schmitt ? logic.family.schmittAdc : logic.family.adc
+  const inLow = (adc.inLowFrac * vHigh).toFixed(4)
+  const inHigh = (adc.inHighFrac * vHigh).toFixed(4)
+  const rd = `${tpl.delaysNs}n`
+
+  // Per-instance adc/dac model cards (names are ref-scoped to avoid collisions
+  // when several digital chips share a deck).
+  const adcModel = `adcm_${refLc}`
+  const dacModel = `dacm_${refLc}`
+  lines.push(`.model ${adcModel} adc_bridge(in_low=${inLow} in_high=${inHigh})`)
+  lines.push(`.model ${dacModel} dac_bridge(out_low=0 out_high=${vHigh.toFixed(4)})`)
+
+  // One adc_bridge per input signal: analog board node → digital event node.
+  for (const sig of tpl.inputs) {
+    lines.push(`abr_${refLc}_${sig.toLowerCase()} [${aNode(sig)}] [${dNode(sig)}] ${adcModel}`)
+  }
+
+  // Gates on digital event nodes.
+  let gi = 0
+  for (const g of tpl.gates) {
+    gi++
+    const inst = `a_${refLc}_${gi}`
+    if (g.prim === 'd_dff') {
+      // d_dff terminals: data clk set reset | q qbar. set/reset that are not real
+      // chip inputs get tied off to a per-instance (floating-high) node.
+      const set = g.set && tpl.inputs.includes(g.set) ? dNode(g.set) : `${inst}_nset`
+      const reset = g.reset && tpl.inputs.includes(g.reset) ? dNode(g.reset) : `${inst}_nrst`
+      lines.push(
+        `.model ${inst}_m d_dff(clk_delay=${rd} set_delay=${rd} reset_delay=${rd} ` +
+          `rise_delay=${rd} fall_delay=${rd})`,
+      )
+      lines.push(
+        `${inst} ${dNode(g.data as string)} ${dNode(g.clk as string)} ${set} ${reset} ` +
+          `${dNode(g.q as string)} ${dNode(g.qbar as string)} ${inst}_m`,
+      )
+    } else if (g.in && g.in.length === 1) {
+      // unary (inverter / buffer)
+      lines.push(`.model ${inst}_m ${g.prim}(rise_delay=${rd} fall_delay=${rd})`)
+      lines.push(`${inst} ${dNode(g.in[0])} ${dNode(g.out as string)} ${inst}_m`)
+    } else {
+      // multi-input gate: bracket vector input form
+      const ins = (g.in ?? []).map(dNode).join(' ')
+      lines.push(`.model ${inst}_m ${g.prim}(rise_delay=${rd} fall_delay=${rd})`)
+      lines.push(`${inst} [${ins}] ${dNode(g.out as string)} ${inst}_m`)
+    }
+  }
+
+  // One dac_bridge per output signal: digital event node → analog board node.
+  for (const sig of tpl.outputs) {
+    lines.push(`abr_${refLc}_out_${sig.toLowerCase()} [${dNode(sig)}] [${aNode(sig)}] ${dacModel}`)
+  }
+
+  return lines
 }
 
 // ─── Main deck generator ──────────────────────────────────────────────────────
@@ -215,13 +520,29 @@ function expandXspiceDigital(
  * No .tran/.op card is included — the SimHost issues the analysis command.
  */
 export function generateDeck(opts: GenerateOptions): string[] {
-  const { circuit, resolutions, instruments, title } = opts
+  const { circuit, resolutions, instruments, title, modelTexts } = opts
   // groundNetId is used by the caller to build the circuit (node "0" assignment);
   // the deck generator relies on circuit.nets[].spiceNode already being "0" for ground.
   // (opts.groundNetId is intentionally unused here — circuit.nets already have spiceNode="0")
 
   const lines: string[] = []
   const netIdToNode = buildNetIdToNode(circuit)
+
+  // Model-definition inlining (only when lib texts are supplied). Definitions are
+  // collected per-deck and deduplicated, then appended once before .save (ngspice
+  // loads decks from memory, so we inline — never .include by path). `defKeys`
+  // tracks which definitions are already queued so a part type used by several
+  // refs contributes its .subckt/.model exactly once.
+  const modelIndex = makeModelTextIndex(modelTexts)
+  const haveModelTexts = !!modelTexts && Object.keys(modelTexts).length > 0
+  const modelDefLines: string[] = []
+  const emittedDefKeys = new Set<string>()
+  /** Queue a definition block once, keyed by file:name. */
+  const queueDef = (key: string, defLines: string[]): void => {
+    if (emittedDefKeys.has(key)) return
+    emittedDefKeys.add(key)
+    modelDefLines.push(...defLines)
+  }
 
   // ── Line 0: title (SPICE requires first line to be a title comment) ────────
   lines.push(`* circsim deck${title ? ` — ${title}` : ''}`)
@@ -361,10 +682,33 @@ export function generateDeck(opts: GenerateOptions): string[] {
     }
 
     if (model.kind === 'subckt') {
-      // .subckt instantiation: x_<ref> <nodes> <subcktName>
-      // Node order from pinMap (pad → subckt terminal name/position)
+      // A tier-3 'subckt'-kind resolution is EITHER a true .subckt (NE555, op-amps,
+      // regulators → instantiate with x_<ref>) OR a model-card (LED/diode/BJT/
+      // MOSFET → a top-level primitive device referencing a .model). The
+      // ResolvedModel doesn't carry that distinction, so when lib texts are
+      // available we disambiguate by what the libFile actually defines: a matching
+      // `.subckt NAME` → subckt instantiation; a matching `.model NAME` → device.
       const pinMap = model.pinMap
+      const libFile = model.libFile
+      const subcktDef = haveModelTexts ? getSubcktDef(modelIndex, libFile, model.subcktName) : undefined
+      const modelCard =
+        haveModelTexts && !subcktDef ? getModelCard(modelIndex, libFile, model.subcktName) : undefined
 
+      // ── model-card path: emit a primitive device + inline its .model ─────────
+      if (modelCard) {
+        // Device letter from the refdes prefix (D→d, Q→q, M→m …); node order is
+        // the pinMap value order (1-based terminal positions, per index.json).
+        // model-card devices are top-level primitives → @<dev>[i] is native, so a
+        // current probe needs no ammeter splice (the .save section handles it).
+        const deviceLetter = PRIMITIVE_PREFIX_TO_LETTER[refdesPrefix(part.ref)] ?? 'x'
+        const nodes = buildPositionalNodeList(part, netIdToNode, pinMap)
+        const devName = `${deviceLetter}_${part.ref.toLowerCase()}`
+        lines.push(`${devName} ${nodes.join(' ')} ${model.subcktName}`)
+        queueDef(`model:${libFile}:${model.subcktName.toLowerCase()}`, [modelCard])
+        continue
+      }
+
+      // ── subckt path: x_<ref> <nodes-in-terminal-order> <subcktName> ──────────
       // Check for current probe on this subckt (needs ammeter splice)
       const cp = currentProbeByRef.get(res.ref)
 
@@ -385,29 +729,46 @@ export function generateDeck(opts: GenerateOptions): string[] {
           lines.push(`${ammName} ${spliceIntNode} ${spliceNode} DC 0`)
 
           // Build node list using the splice for the designated pad
-          const nodeList = buildSubcktNodeList(part, netIdToNode, pinMap, splicePad, spliceIntNode)
+          const nodeList = buildSubcktNodeList(part, netIdToNode, pinMap, splicePad, spliceIntNode, subcktDef)
           const xName = `x_${part.ref.toLowerCase()}`
           lines.push(`${xName} ${nodeList} ${model.subcktName}`)
         } else {
           // Can't identify splice pad — emit without ammeter
           lines.push(`* WARNING: current probe on ${res.ref} pad ${cp.pad ?? '?'} — node not found, ammeter not inserted`)
-          const nodeList = buildSubcktNodeListPlain(part, netIdToNode, pinMap)
+          const nodeList = buildSubcktNodeListPlain(part, netIdToNode, pinMap, subcktDef)
           const xName = `x_${part.ref.toLowerCase()}`
           lines.push(`${xName} ${nodeList} ${model.subcktName}`)
         }
       } else {
-        const nodeList = buildSubcktNodeListPlain(part, netIdToNode, pinMap)
+        const nodeList = buildSubcktNodeListPlain(part, netIdToNode, pinMap, subcktDef)
         const xName = `x_${part.ref.toLowerCase()}`
         lines.push(`${xName} ${nodeList} ${model.subcktName}`)
+      }
+      // Inline the .subckt definition once (if we have it).
+      if (subcktDef) {
+        queueDef(`subckt:${libFile}:${model.subcktName.toLowerCase()}`, subcktDef.lines)
       }
       continue
     }
 
     if (model.kind === 'xspice-digital') {
-      const xspiceLines = expandXspiceDigital(res.ref, model, netIdToNode, circuit)
+      // The digital template lives in a logic74hc-style JSON. Find its file from
+      // the resolution if present; otherwise default to logic74hc.json (the only
+      // digital template file in the bundled library).
+      const templateFile = haveModelTexts
+        ? (modelIndex.texts['logic74hc.json'] ? 'logic74hc.json' : findDigitalTemplateFile(modelIndex, model.templateId))
+        : undefined
+      const xspiceLines = expandXspiceDigital(res.ref, model, part, netIdToNode, modelIndex, templateFile)
       lines.push(...xspiceLines)
       continue
     }
+  }
+
+  // ── Inlined model definitions (subckts + model cards) ──────────────────────
+  // Emitted after the element instances and before .save. Deduplicated above.
+  if (modelDefLines.length > 0) {
+    lines.push('* ── model definitions (inlined from the bundled library) ──')
+    lines.push(...modelDefLines)
   }
 
   // ── .save section ─────────────────────────────────────────────────────────
@@ -438,34 +799,68 @@ export function generateDeck(opts: GenerateOptions): string[] {
 // ─── Subckt node list builders ────────────────────────────────────────────────
 
 /**
- * Build the node list for a subckt instantiation using the pinMap.
- * pinMap maps pad numbers to subckt terminal names/positions.
- * We sort by subckt terminal position (numeric) then alpha.
+ * Build the positional node list for a part whose pinMap VALUES are 1-based
+ * terminal positions (model-card primitives — diode/BJT/MOSFET; e.g. LED pinMap
+ * {1:"2", 2:"1"} → cathode then anode is corrected by sorting on the position).
+ * Sorted by the numeric pinMap value (terminal position), then alpha.
  */
-function buildSubcktNodeListPlain(
+function buildPositionalNodeList(
   part: { padNet: Map<string, number> },
   netIdToNode: Map<number, string>,
   pinMap: Record<string, string>,
-): string {
-  // Determine ordering from pinMap values (which are terminal positions/names)
-  // If pinMap values are all numeric, sort numerically; else sort as-is.
+): string[] {
   const padEntries = Object.entries(pinMap)
-
-  // Sort by terminal position (the VALUE of pinMap) if numeric, else alphabetically
   padEntries.sort(([, a], [, b]) => {
     const na = parseInt(a, 10)
     const nb = parseInt(b, 10)
     if (!isNaN(na) && !isNaN(nb)) return na - nb
     return a.localeCompare(b)
   })
-
   const nodes: string[] = []
   for (const [padNum] of padEntries) {
     const netId = part.padNet.get(padNum)
-    if (netId !== undefined) {
-      const node = netIdToNode.get(netId) ?? '0'
-      nodes.push(node)
-    }
+    if (netId !== undefined) nodes.push(netIdToNode.get(netId) ?? '0')
+  }
+  return nodes
+}
+
+/**
+ * Build the node list for a subckt instantiation.
+ *
+ * When the subckt DEFINITION is known (parsed from the lib text), we wire nodes
+ * in the subckt's DECLARED terminal order: for each terminal, find the pad whose
+ * pinMap value names that terminal (by name, e.g. "gnd"/"trig"/…, OR by 1-based
+ * position, e.g. "1"/"2"/… matching the terminal's index) and use that pad's net.
+ * This is correct regardless of whether the pinMap values are terminal NAMES
+ * (NE555 Sim.Pins) or positions, and fixes the prior bug where named terminals
+ * were sorted alphabetically (wrong node order into the subckt).
+ *
+ * When the definition is NOT available (no modelTexts — the golden-deck tests),
+ * fall back to the legacy behaviour: sort pad entries by pinMap value (numeric
+ * then alpha). This keeps primitives-only / no-library decks byte-for-byte
+ * unchanged.
+ */
+function buildSubcktNodeListPlain(
+  part: { padNet: Map<string, number> },
+  netIdToNode: Map<number, string>,
+  pinMap: Record<string, string>,
+  subcktDef?: SubcktDef,
+): string {
+  if (subcktDef) {
+    return orderNodesByTerminals(part, netIdToNode, pinMap, subcktDef.terminals, undefined, undefined).join(' ')
+  }
+  // Legacy fallback (no definition known).
+  const padEntries = Object.entries(pinMap)
+  padEntries.sort(([, a], [, b]) => {
+    const na = parseInt(a, 10)
+    const nb = parseInt(b, 10)
+    if (!isNaN(na) && !isNaN(nb)) return na - nb
+    return a.localeCompare(b)
+  })
+  const nodes: string[] = []
+  for (const [padNum] of padEntries) {
+    const netId = part.padNet.get(padNum)
+    if (netId !== undefined) nodes.push(netIdToNode.get(netId) ?? '0')
   }
   return nodes.join(' ')
 }
@@ -480,7 +875,11 @@ function buildSubcktNodeList(
   pinMap: Record<string, string>,
   splicePad: string | undefined,
   spliceIntNode: string,
+  subcktDef?: SubcktDef,
 ): string {
+  if (subcktDef) {
+    return orderNodesByTerminals(part, netIdToNode, pinMap, subcktDef.terminals, splicePad, spliceIntNode).join(' ')
+  }
   const padEntries = Object.entries(pinMap)
   padEntries.sort(([, a], [, b]) => {
     const na = parseInt(a, 10)
@@ -488,20 +887,79 @@ function buildSubcktNodeList(
     if (!isNaN(na) && !isNaN(nb)) return na - nb
     return a.localeCompare(b)
   })
-
   const nodes: string[] = []
   for (const [padNum] of padEntries) {
     if (padNum === splicePad) {
       nodes.push(spliceIntNode)
     } else {
       const netId = part.padNet.get(padNum)
-      if (netId !== undefined) {
-        const node = netIdToNode.get(netId) ?? '0'
-        nodes.push(node)
-      }
+      if (netId !== undefined) nodes.push(netIdToNode.get(netId) ?? '0')
     }
   }
   return nodes.join(' ')
+}
+
+/**
+ * Order the subckt's argument nodes to match its DECLARED terminal list.
+ * For each terminal (in declared order) find the pad whose pinMap value names it
+ * (by lowercased name, or by 1-based position index), then resolve that pad's
+ * board net spiceNode. When `splicePad` matches the chosen pad, substitute
+ * `spliceIntNode` (the ammeter splice). Terminals with no mapped pad fall back to
+ * ground "0" (a defensive default — the resolution warnings already flag gaps).
+ */
+function orderNodesByTerminals(
+  part: { padNet: Map<string, number> },
+  netIdToNode: Map<number, string>,
+  pinMap: Record<string, string>,
+  terminals: string[],
+  splicePad: string | undefined,
+  spliceIntNode: string | undefined,
+): string[] {
+  // Build terminal → pad lookups: by name (lowercased value) and by position.
+  const padByTerminalName = new Map<string, string>()
+  const padByTerminalPos = new Map<number, string>()
+  for (const [pad, value] of Object.entries(pinMap)) {
+    const v = value.trim()
+    padByTerminalName.set(v.toLowerCase(), pad)
+    const pos = parseInt(v, 10)
+    if (!isNaN(pos)) padByTerminalPos.set(pos, pad)
+  }
+
+  const nodes: string[] = []
+  for (let i = 0; i < terminals.length; i++) {
+    const term = terminals[i]
+    // Match by terminal NAME first, then by 1-based position.
+    const pad = padByTerminalName.get(term) ?? padByTerminalPos.get(i + 1)
+    if (pad !== undefined && pad === splicePad && spliceIntNode !== undefined) {
+      nodes.push(spliceIntNode)
+      continue
+    }
+    if (pad !== undefined) {
+      const netId = part.padNet.get(pad)
+      nodes.push(netId !== undefined ? (netIdToNode.get(netId) ?? '0') : '0')
+    } else {
+      nodes.push('0')
+    }
+  }
+  return nodes
+}
+
+/**
+ * Find the logic74hc-style template file that contains a given templateId. Used
+ * when the digital template file is not the default logic74hc.json (defensive;
+ * the bundled library only ships logic74hc.json today).
+ */
+function findDigitalTemplateFile(idx: ModelTextIndex, templateId: string): string | undefined {
+  for (const [file, text] of Object.entries(idx.texts)) {
+    if (!file.endsWith('.json')) continue
+    try {
+      const parsed = JSON.parse(text) as { templates?: Record<string, unknown> }
+      if (parsed.templates && templateId in parsed.templates) return file
+    } catch {
+      // not a template json
+    }
+  }
+  return undefined
 }
 
 // ─── Tier label helper ────────────────────────────────────────────────────────

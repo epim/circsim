@@ -59,6 +59,14 @@ export interface LicenseTexts {
   modelProvenance: string
 }
 
+export interface ModelLibraryPayload {
+  /** Parsed resources/models/index.json entries (LibraryEntry[] for tier-3). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  entries: any[]
+  /** filename → file contents for every referenced .lib / .json model file. */
+  texts: Record<string, string>
+}
+
 // ─── Internal state: latest port from the handshake ───────────────────────────
 
 /** Resolvers waiting for the first/next port. */
@@ -75,9 +83,27 @@ ipcRenderer.on('simhost-port', (_event, _msg) => {
   // The main process calls webContents.postMessage('simhost-port', msg, [port2]).
   const port = _event.ports?.[0] as MessagePort | undefined
   if (!port) return
-  port.start()
+
+  // Deliver the live MessagePort to the MAIN world via `window.postMessage` with
+  // the port in the transfer list. This is the canonical Electron pattern and is
+  // RELIABLE across the contextIsolation boundary, whereas returning a
+  // MessagePort from a contextBridge-exposed function is not: the bridge proxies
+  // the object and the underlying port's message pump stays bound to the preload
+  // world, so renderer↔SimHost traffic intermittently went dead in BOTH
+  // directions (observed via E2E: child emitted `ready`, renderer never received
+  // it; renderer posted `loadCircuit`, child never received it).
+  //
+  // We do NOT call port.start() here — the main-world consumer
+  // (createPortSimClient.attachPort) sets onmessage + start() in the world that
+  // actually uses the port.
+  window.postMessage('circsim:simhost-port', '*', [port])
+
+  // Keep the legacy getSimPort() promise working too (some callers may still use
+  // it): resolve it with the same port. NOTE — the port is transferred by the
+  // window.postMessage above, so this reference is now neutered for messaging;
+  // the main-world window listener owns the live port. getSimPort() is retained
+  // only for API compatibility and resolves so awaiters don't hang.
   latestPort = port
-  // Resolve all waiting callers.
   const resolvers = portResolvers
   portResolvers = []
   for (const resolve of resolvers) {
@@ -190,5 +216,15 @@ contextBridge.exposeInMainWorld('circsim', {
    */
   getLicenseTexts: (): Promise<LicenseTexts> => {
     return ipcRenderer.invoke('circsim:getLicenseTexts') as Promise<LicenseTexts>
+  },
+
+  /**
+   * Return the bundled model library: `{ entries, texts }`. The renderer feeds
+   * `entries` to the store's `setLibrary` (tier-3 resolution) at boot and keeps
+   * `texts` (filename → contents) so the deck generator can inline the matching
+   * .subckt / .model definitions and expand xspice-digital templates from memory.
+   */
+  getModelLibrary: (): Promise<ModelLibraryPayload> => {
+    return ipcRenderer.invoke('circsim:getModelLibrary') as Promise<ModelLibraryPayload>
   },
 })

@@ -568,6 +568,235 @@ describe('XSPICE digital template', () => {
   })
 })
 
+// ─── Model-definition inlining (opts.modelTexts) ──────────────────────────────
+
+describe('generateDeck — inlines model definitions when modelTexts is provided', () => {
+  const NE555_LIB = [
+    '* timer555.lib',
+    '.subckt NE555 gnd trig out reset ctrl thres disch vcc',
+    'rdiv_a vcc ctrl 5k',
+    'rdiv_b ctrl n13 5k',
+    'rdiv_c n13 gnd 5k',
+    '.ends NE555',
+  ].join('\n')
+
+  const LED_LIB = [
+    '* led.lib',
+    '.model LED_RED D(is=1e-19 rs=2.0 n=1.7 cjo=30p vj=0.75 m=0.333',
+    '+ bv=5 ibv=100u eg=1.9 xti=3)',
+    '.model LED_GREEN D(is=1e-20 rs=3.0 n=1.8)',
+  ].join('\n')
+
+  /** Build a circuit with an NE555 (U1) and an LED (D1). */
+  function make555LedCircuit(): Circuit {
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'VCC', spiceNode: 'vcc', padRefs: [] },
+      { id: 2, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+      { id: 3, kicadName: 'OUT', spiceNode: 'out', padRefs: [] },
+      { id: 4, kicadName: 'TRIG', spiceNode: 'trig', padRefs: [] },
+      { id: 5, kicadName: 'LED_A', spiceNode: 'led_a', padRefs: [] },
+    ]
+    const u1: Part = {
+      ref: 'U1', value: 'NE555', libId: 'Timer:NE555', layer: 'F',
+      // pads 1..8 → gnd trig out reset ctrl thres disch vcc (identity by 555 pin)
+      padNet: new Map([
+        ['1', 2], ['2', 4], ['3', 3], ['4', 1], ['5', 1], ['6', 4], ['7', 1], ['8', 1],
+      ]),
+      properties: {},
+    }
+    const d1: Part = {
+      ref: 'D1', value: 'LED', libId: 'LED:LED_0805', layer: 'F',
+      // pad 1 → LED_A net, pad 2 → GND. pinMap {1:"2",2:"1"} (1=anode,2=cathode).
+      padNet: new Map([['1', 5], ['2', 2]]),
+      properties: {},
+    }
+    return { nets, parts: [u1, d1], warnings: [] }
+  }
+
+  function make555LedResolutions(): Resolution[] {
+    return [
+      {
+        ref: 'U1', status: 'ok', tier: 1, warnings: [],
+        model: {
+          kind: 'subckt', libFile: 'timer555.lib', subcktName: 'NE555',
+          // Sim.Pins map: pad → terminal NAME (uppercase as KiCad writes them)
+          pinMap: { '1': 'GND', '2': 'TRIG', '3': 'OUT', '4': 'RESET', '5': 'CTRL', '6': 'THRES', '7': 'DISCH', '8': 'VCC' },
+        },
+      },
+      {
+        ref: 'D1', status: 'ok', tier: 3, warnings: [],
+        // model-card resolves as subckt-kind in ResolvedModel (resolve.ts)
+        model: { kind: 'subckt', libFile: 'led.lib', subcktName: 'LED_RED', pinMap: { '1': '2', '2': '1' } },
+      },
+    ]
+  }
+
+  const modelTexts = { 'timer555.lib': NE555_LIB, 'led.lib': LED_LIB }
+
+  test('NE555 subckt: x_u1 nodes wired in DECLARED terminal order + .subckt inlined', () => {
+    const circuit = make555LedCircuit()
+    const deck = generateDeck({
+      circuit,
+      resolutions: make555LedResolutions(),
+      instruments: [{ kind: 'ground-ref', netId: 2 }],
+      groundNetId: 2,
+      modelTexts,
+    })
+    const deckText = deck.join('\n')
+    // Subckt declared order: gnd trig out reset ctrl thres disch vcc.
+    // pads 1..8 map there → nodes: 0 trig out vcc vcc trig vcc vcc
+    const xLine = deck.find(l => l.startsWith('x_u1'))
+    expect(xLine).toBe('x_u1 0 trig out vcc vcc trig vcc vcc NE555')
+    // The .subckt definition is inlined (loaded from memory, NOT .include'd).
+    expect(deckText).toContain('.subckt NE555 gnd trig out reset ctrl thres disch vcc')
+    expect(deckText).toContain('.ends NE555')
+    expect(deckText).not.toContain('.include')
+  })
+
+  test('LED model-card: emits a diode device + inlines its (multi-line) .model card', () => {
+    const circuit = make555LedCircuit()
+    const deck = generateDeck({
+      circuit,
+      resolutions: make555LedResolutions(),
+      instruments: [{ kind: 'ground-ref', netId: 2 }],
+      groundNetId: 2,
+      modelTexts,
+    })
+    const deckText = deck.join('\n')
+    // D1 pinMap {1:"2",2:"1"} → position 1 (anode)=pad2=GND(0); position 2 (cathode)=pad1=led_a
+    const dLine = deck.find(l => l.startsWith('d_d1'))
+    expect(dLine).toBe('d_d1 0 led_a LED_RED')
+    // The matching .model card is inlined, with its continuation joined.
+    expect(deckText).toMatch(/\.model LED_RED D\(.*eg=1\.9.*\)/)
+    // The unused LED_GREEN card is NOT pulled in (only referenced models inline).
+    expect(deckText).not.toContain('LED_GREEN')
+  })
+
+  test('definitions are deduplicated when two parts share a model', () => {
+    const circuit = make555LedCircuit()
+    // add a second LED (D2) referencing the same LED_RED model
+    circuit.parts.push({
+      ref: 'D2', value: 'LED', libId: 'LED:LED_0805', layer: 'F',
+      padNet: new Map([['1', 3], ['2', 2]]), properties: {},
+    })
+    const resolutions = make555LedResolutions()
+    resolutions.push({
+      ref: 'D2', status: 'ok', tier: 3, warnings: [],
+      model: { kind: 'subckt', libFile: 'led.lib', subcktName: 'LED_RED', pinMap: { '1': '2', '2': '1' } },
+    })
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 2 }],
+      groundNetId: 2, modelTexts,
+    })
+    // Two diode devices…
+    expect(deck.filter(l => l.startsWith('d_d')).length).toBe(2)
+    // …but the .model LED_RED card appears exactly once.
+    const modelCardCount = deck.filter(l => /^\.model LED_RED\b/.test(l)).length
+    expect(modelCardCount).toBe(1)
+  })
+
+  test('without modelTexts the subckt path is unchanged (x_ instantiation, no defs)', () => {
+    const circuit = make555LedCircuit()
+    const deck = generateDeck({
+      circuit,
+      resolutions: make555LedResolutions(),
+      instruments: [{ kind: 'ground-ref', netId: 2 }],
+      groundNetId: 2,
+      // no modelTexts
+    })
+    const deckText = deck.join('\n')
+    // Still instantiates the subckt and the (un-disambiguated) LED as x_ (legacy).
+    expect(deck.some(l => l.startsWith('x_u1'))).toBe(true)
+    // No inlined definitions section.
+    expect(deckText).not.toContain('.subckt NE555')
+    expect(deckText).not.toMatch(/^\.model LED_RED/m)
+  })
+})
+
+describe('generateDeck — expands xspice-digital from a logic74hc template', () => {
+  const LOGIC_JSON = JSON.stringify({
+    family: { vHighDefault: 5.0, adc: { inLowFrac: 0.3, inHighFrac: 0.7 }, schmittAdc: { inLowFrac: 0.28, inHighFrac: 0.55 } },
+    templates: {
+      '74HC00': {
+        gates: [
+          { prim: 'd_nand', in: ['1A', '1B'], out: '1Y' },
+          { prim: 'd_nand', in: ['2A', '2B'], out: '2Y' },
+          { prim: 'd_nand', in: ['3A', '3B'], out: '3Y' },
+          { prim: 'd_nand', in: ['4A', '4B'], out: '4Y' },
+        ],
+        inputs: ['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B'],
+        outputs: ['1Y', '2Y', '3Y', '4Y'],
+        power: { vcc: 'VCC', gnd: 'GND' },
+        delaysNs: 9,
+      },
+    },
+  })
+
+  function makeDigitalCircuit(): Circuit {
+    return {
+      nets: [
+        { id: 1, kicadName: 'A', spiceNode: 'a', padRefs: [] },
+        { id: 2, kicadName: 'B', spiceNode: 'b', padRefs: [] },
+        { id: 3, kicadName: 'Y', spiceNode: 'y', padRefs: [] },
+        { id: 4, kicadName: 'VCC', spiceNode: 'vcc', padRefs: [] },
+        { id: 5, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+      ],
+      parts: [{
+        ref: 'U1', value: '74HC00', libId: 'Logic:74HC00', layer: 'F',
+        padNet: new Map([['1', 1], ['2', 2], ['3', 3], ['7', 5], ['14', 4]]),
+        properties: {},
+      }],
+      warnings: [],
+    }
+  }
+
+  test('emits adc_bridge → d_nand → dac_bridge wired to the board nets', () => {
+    const circuit = makeDigitalCircuit()
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: {
+        kind: 'xspice-digital', templateId: '74HC00',
+        pinMap: { '1': '1A', '2': '1B', '3': '1Y', '7': 'GND', '14': 'VCC' },
+      },
+    }]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 5 }],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON },
+    })
+    const deckText = deck.join('\n')
+    // VERIFIED-against-ngspice-46 primitive name is d_nand (not nand).
+    expect(deckText).toMatch(/d_nand\(rise_delay=9n fall_delay=9n\)/)
+    // adc_bridge on input 1A reads the board net 'a' (pad 1 → net A → node a).
+    expect(deckText).toMatch(/abr_u1_1a \[a\] \[u1_d_1a\]/)
+    // dac_bridge drives output 1Y back onto board net 'y' (pad 3 → net Y → node y).
+    expect(deckText).toMatch(/abr_u1_out_1y \[u1_d_1y\] \[y\]/)
+    // adc/dac rails from vHigh=5.
+    expect(deckText).toContain('adc_bridge(in_low=1.5000 in_high=3.5000)')
+    expect(deckText).toContain('dac_bridge(out_low=0 out_high=5.0000)')
+    // no .include
+    expect(deckText).not.toContain('.include')
+  })
+
+  test('without modelTexts the xspice-digital placeholder comment is unchanged', () => {
+    const circuit = makeDigitalCircuit()
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: { kind: 'xspice-digital', templateId: '74HC00', pinMap: { '1': '1A', '3': '1Y' } },
+    }]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 5 }],
+      groundNetId: 5,
+    })
+    const deckText = deck.join('\n')
+    expect(deckText).toContain('xspice-digital')
+    expect(deckText).not.toContain('d_nand')
+  })
+})
+
 // ─── alterPlan ────────────────────────────────────────────────────────────────
 
 describe('alterPlan — dc-supply.volts', () => {

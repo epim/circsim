@@ -106,6 +106,13 @@ export function hasDigitalParts(resolutions: Resolution[]): boolean {
   return resolutions.some(r => r.model?.kind === 'xspice-digital')
 }
 
+/**
+ * Stable id of the DC supply auto-attached on open (Spec §4 "see it work in 60
+ * seconds"). Stable so the InstrumentRack can auto-select it (revealing its
+ * voltage input) and so tests can assert on it.
+ */
+export const AUTO_SUPPLY_ID = 'auto-supply'
+
 // ─── transient analysis defaults (Spec §7.5) ─────────────────────────────────────
 
 /** Default bench window in sim-seconds (Spec §7.5). NEVER unbounded. */
@@ -171,6 +178,13 @@ export interface AppState {
   schematicSimData: SchematicSimData | null
   bom: BomData | null
   library: LibraryEntry[]
+  /**
+   * Bundled model-library texts: filename → file contents for every referenced
+   * .lib / .json model file (from `window.circsim.getModelLibrary`). The deck
+   * generator inlines the matching .subckt/.model definitions and expands the
+   * xspice-digital templates from these (ngspice loads decks from memory).
+   */
+  modelTexts: Record<string, string>
   resolutions: Resolution[]
 
   // ── user overrides (kept so re-resolve is deterministic + crash-safe) ─────────
@@ -257,6 +271,12 @@ export interface AppState {
   setBomFromText(csvText: string): void
   /** Provide the bundled library (re-resolves with tier-3 matching). */
   setLibrary(library: LibraryEntry[]): void
+  /**
+   * Provide the bundled model library AND its texts in one shot (boot path).
+   * `texts` (filename → contents) lets the deck generator inline the matching
+   * .subckt/.model definitions + expand xspice-digital templates. Re-resolves.
+   */
+  setModelLibrary(library: LibraryEntry[], texts: Record<string, string>): void
 
   /** Re-run resolveAll with the current overrides/inputs. */
   reResolve(): void
@@ -377,6 +397,8 @@ export interface CreateAppStoreOptions {
   simClient: SimClient
   /** Bundled library entries (tier-3). Optional; defaults to none. */
   library?: LibraryEntry[]
+  /** Bundled model-library texts (filename → contents). Optional; defaults to none. */
+  modelTexts?: Record<string, string>
 }
 
 export type AppStore = StoreApi<AppState>
@@ -418,6 +440,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     schematicSimData: null,
     bom: null,
     library: options.library ?? [],
+    modelTexts: options.modelTexts ?? {},
     resolutions: [],
     stubOverrides: new Map(),
     pinMapOverrides: new Map(),
@@ -513,6 +536,24 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       const supplies = suggestSupplies(probe.nets)
       const groundNetId = gnd?.id ?? null
       const circuit = groundNetId !== null ? extract(board, { groundNetId }) : probe
+      const suggestedSupplyNetIds = supplies.map(s => s.id)
+
+      // Auto-attach a default DC supply on the top suggested supply net so the
+      // bench is immediately usable ("see it work in 60 seconds" — Spec §4): the
+      // user lands with a designated ground AND a source, so Power On / Run are
+      // live without manual rigging. The supply is editable/removable. We only
+      // do this when a supply net was suggested AND it isn't the ground net.
+      const instruments: Instrument[] = []
+      const topSupplyNetId = suggestedSupplyNetIds.find(id => id !== groundNetId)
+      if (topSupplyNetId !== undefined) {
+        instruments.push({
+          kind: 'dc-supply',
+          id: AUTO_SUPPLY_ID,
+          netId: topSupplyNetId,
+          volts: 5,
+          seriesOhms: 0.1, // Spec §9 default
+        })
+      }
 
       set({
         project: { boardFileName: fileName, boardText, schematicFileName },
@@ -521,8 +562,12 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         schematicSimData,
         bom,
         groundNetId,
-        suggestedSupplyNetIds: supplies.map(s => s.id),
+        suggestedSupplyNetIds,
+        instruments,
       })
+
+      // Keep ring buffers in sync with the (possibly auto-attached) instruments.
+      syncRingBuffers(instruments)
 
       // Resolve with current (empty) overrides.
       get().reResolve()
@@ -556,6 +601,12 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     setLibrary(library) {
       set({ library })
+      get().reResolve()
+      get().markDeckDirty()
+    },
+
+    setModelLibrary(library, texts) {
+      set({ library, modelTexts: texts })
       get().reResolve()
       get().markDeckDirty()
     },
@@ -714,6 +765,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         instruments,
         groundNetId,
         title: get().project.boardFileName ?? undefined,
+        modelTexts: buildDeckModelTexts(get()),
       })
 
       set({ simState: 'op', convergenceCard: null })
@@ -768,6 +820,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         instruments,
         groundNetId,
         title: get().project.boardFileName ?? undefined,
+        modelTexts: buildDeckModelTexts(get()),
       })
       resetRingBuffers(instruments)
 
@@ -831,6 +884,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         instruments,
         groundNetId,
         title: get().project.boardFileName ?? undefined,
+        modelTexts: buildDeckModelTexts(get()),
       })
       simClient.send({ type: 'loadCircuit', deckLines })
 
@@ -1014,6 +1068,23 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   simClient.onEvent(event => store.getState().ingestEvent(event))
 
   return store
+}
+
+// ─── deck model-texts assembly ──────────────────────────────────────────────────
+
+/**
+ * Build the filename → contents map the deck generator inlines definitions from.
+ * Merges the bundled model texts (loaded at boot via getModelLibrary) with the
+ * in-memory user models, which the spicegen library entries reference under the
+ * virtual path `__user_model__:<mpn>` (see reResolve). User entries win on key
+ * collision (they are added last).
+ */
+export function buildDeckModelTexts(state: AppState): Record<string, string> {
+  const texts: Record<string, string> = { ...state.modelTexts }
+  for (const [, um] of state.userModels) {
+    texts[`__user_model__:${um.mpn}`] = um.subcktText
+  }
+  return texts
 }
 
 // ─── alter command parsing ─────────────────────────────────────────────────────

@@ -21,8 +21,9 @@
  * Spec §9, §4 steps 3–5, §11.
  */
 
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
+import { AUTO_SUPPLY_ID } from '../store/appStore'
 import InstrumentProps, { McuPinsPanel } from './InstrumentProps'
 import type { Instrument } from '../../../core/spicegen/instruments'
 
@@ -230,6 +231,18 @@ export default function InstrumentRack(): React.ReactElement {
   const resolutions = useApp(s => s.resolutions)
   const [selectedInstId, setSelectedInstId] = useState<string | null>(null)
   const [showNetList, setShowNetList] = useState(false)
+
+  // Auto-select the supply that the store auto-attaches on open, so its
+  // properties (the voltage input) are immediately visible without a click —
+  // the user lands ready to tweak the supply (Spec §4). Runs once per open
+  // (keyed on the auto supply's presence) and never fights a later manual pick.
+  const hasAutoSupply = useApp(s =>
+    s.instruments.some(i => 'id' in i && (i as { id: string }).id === AUTO_SUPPLY_ID),
+  )
+  useEffect(() => {
+    if (hasAutoSupply) setSelectedInstId(AUTO_SUPPLY_ID)
+    else setSelectedInstId(null)
+  }, [hasAutoSupply])
 
   const netName = useCallback(
     (netId: number): string => circuit?.nets.find(n => n.id === netId)?.kicadName ?? String(netId),
