@@ -1,0 +1,31 @@
+* Provenance: written for circsim from manufacturer datasheet parameters, MIT.
+* In-house LED .model cards. An LED is a diode whose forward drop is set by its
+* die material; we reproduce the datasheet typical Vf at the rated test current
+* by raising the emission coefficient n and the bandgap eg (eg shifts the
+* temperature behavior toward the wider-gap III-V material; n widens the
+* exponential so the knee lands at the right voltage). No vendor model text is
+* copied — only the datasheet Vf/If operating points inform the fit.
+*
+* Target forward drops (typical @ ~20 mA):
+*   red    ~1.8-2.0 V   (AlGaInP / GaAsP)
+*   green  ~2.1-2.2 V   (InGaN, traditional green ~2.2 V)
+*   blue   ~3.0-3.2 V   (InGaN)
+*   white  ~3.0-3.4 V   (blue InGaN die + phosphor)
+*
+* Cj is set ~15-50 pF (small indicator LED). Reverse Vbr ~5 V typical.
+
+* --------------------------------------------------------------------------- RED
+.model LED_RED D(is=1e-19 rs=2.0 n=1.7 cjo=30p vj=0.75 m=0.333
++ bv=5 ibv=100u eg=1.9 xti=3)
+
+* --------------------------------------------------------------------------- GREEN
+.model LED_GREEN D(is=1e-20 rs=3.0 n=1.8 cjo=30p vj=0.75 m=0.333
++ bv=5 ibv=100u eg=2.1 xti=3)
+
+* --------------------------------------------------------------------------- BLUE
+.model LED_BLUE D(is=1e-26 rs=6.0 n=1.9 cjo=20p vj=0.75 m=0.333
++ bv=5 ibv=100u eg=2.9 xti=3)
+
+* --------------------------------------------------------------------------- WHITE
+.model LED_WHITE D(is=1e-26 rs=7.0 n=1.9 cjo=20p vj=0.75 m=0.333
++ bv=5 ibv=100u eg=3.0 xti=3)

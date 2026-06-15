@@ -1,0 +1,29 @@
+* Provenance: written for circsim from manufacturer datasheet parameters, MIT.
+* In-house discrete-MOSFET .model cards using ngspice's VDMOS model (the
+* purpose-built vertical-DMOS power-MOSFET model, ngspice >= 30). VDMOS takes
+* datasheet figures directly: vto (Vgs(th)), rd/rs/Rds(on) via the channel,
+* kp (transconductance), and the gate-charge / output capacitances. No vendor
+* model text is copied; only the datasheet electrical characteristics
+* (Vgs(th), Rds(on)@Vgs, Ciss/Coss/Crss, Qg) inform the parameters.
+*
+* VDMOS glossary: vto=threshold, kp=transconductance, lambda=channel-length
+* modulation, rd/rs=ohmic, rg=gate, cgdmax/cgdmin/cgs=gate charge model,
+* cjo=body-diode cap, is/rb=body diode. pchan selects a P-channel device.
+
+* --------------------------------------------------------------------------- NMOS
+* 2N7002 small-signal logic-level NMOS (SOT-23): Vgs(th)=1.0-2.5V,
+* Rds(on)~1.2-7.5 ohm @ Vgs=10V/Id=0.5A, Id=115mA cont, Ciss~50pF.
+.model M2N7002 VDMOS(vto=1.6 kp=0.12 lambda=0.05 rd=1.8 rs=0.2 rg=3
++ cgdmax=20p cgdmin=4p cgs=28p cjo=20p is=1e-13 rb=0.5 bv=60)
+
+* AO3400-class logic-level NMOS (SOT-23): Vgs(th)=0.65-1.45V,
+* Rds(on)~22-30 mohm @ Vgs=4.5V, Id=5.7A, Ciss~750pF (low-Rds power FET).
+.model MAO3400 VDMOS(vto=1.05 kp=40 lambda=0.02 rd=0.018 rs=0.004 rg=1.5
++ cgdmax=300p cgdmin=40p cgs=600p cjo=200p is=1e-12 rb=0.01 bv=30)
+
+* --------------------------------------------------------------------------- PMOS
+* Generic P-channel logic-level MOSFET (AO3401/DMP-class): Vgs(th)=-0.6..-1.3V,
+* Rds(on)~50-85 mohm @ Vgs=-4.5V, Id~-4A, Ciss~700pF. pchan=1 makes it P-type;
+* vto is given as a positive magnitude with pchan.
+.model MPMOS_GEN VDMOS(pchan=1 vto=-1.1 kp=18 lambda=0.02 rd=0.05 rs=0.01 rg=2
++ cgdmax=250p cgdmin=40p cgs=550p cjo=180p is=1e-12 rb=0.02 bv=30)

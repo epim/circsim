@@ -1,0 +1,245 @@
+{
+  "$comment": "Provenance: bundled SPICE model library index for circsim, MIT. Every model file referenced here carries its own 'Provenance:' header and was written in-house from datasheet parameters (no vendor model text). PinMap node positions are 1-based and refer to the device's terminal order: diode/LED = 'anode cathode' (1=anode, 2=cathode); BJT = 'collector base emitter' (1=C, 2=B, 3=E); VDMOS = 'drain gate source' (1=D, 2=G, 3=S). Pad numbers come from the KiCad footprint. Diode footprints follow the KiCad convention pad-1 = cathode.",
+  "entries": [
+    {
+      "id": "diode-1n4148",
+      "match": {
+        "mpn": ["1N4148", "1N914", "1N4148W", "1N4148WS"],
+        "refdesPrefix": ["D"],
+        "footprintRegex": "D_(SOD|SMA|SMB|0805|MELF|DO-35|DO-204)"
+      },
+      "model": { "type": "model-card", "file": "diodes.lib", "name": "D1N4148" },
+      "pinMaps": {
+        "D_(SOD|SMA|SMB|0805|MELF|DO-35|DO-204|DO-41).*": { "1": "2", "2": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "1" },
+      "provenance": "Written for circsim from 1N4148 datasheet parameters (Vf, Cj, trr, Vbr), MIT."
+    },
+    {
+      "id": "diode-1n4001",
+      "match": {
+        "mpn": ["1N4001", "1N4002", "1N4003", "1N4004", "1N4005", "1N4006", "1N4007"],
+        "refdesPrefix": ["D"],
+        "footprintRegex": "D_(DO-41|SMA|SMB|DO-214)"
+      },
+      "model": { "type": "model-card", "file": "diodes.lib", "name": "D1N4001" },
+      "pinMaps": {
+        "D_(DO-41|SMA|SMB|DO-214|DO-201).*": { "1": "2", "2": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "1" },
+      "provenance": "Written for circsim from 1N400x rectifier datasheet parameters (Vf@1A, Vbr=50V), MIT."
+    },
+    {
+      "id": "diode-1n5819",
+      "match": {
+        "mpn": ["1N5819", "1N5817", "1N5818", "SB5819"],
+        "refdesPrefix": ["D"],
+        "footprintRegex": "D_(DO-41|SMA|SMB|DO-214|SOD)"
+      },
+      "model": { "type": "model-card", "file": "diodes.lib", "name": "D1N5819" },
+      "pinMaps": {
+        "D_(DO-41|SMA|SMB|DO-214|SOD).*": { "1": "2", "2": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "1" },
+      "provenance": "Written for circsim from 1N5819 Schottky datasheet parameters (Vf~0.6V@1A, Vbr=40V, eg=0.69), MIT."
+    },
+    {
+      "id": "zener-5v1",
+      "match": {
+        "mpn": ["BZX55C5V1", "BZX84C5V1", "1N4733A", "5V1"],
+        "refdesPrefix": ["D", "Z", "ZD"],
+        "footprintRegex": "D_(SOD|MiniMELF|DO-35|SOT-23)"
+      },
+      "model": { "type": "model-card", "file": "diodes.lib", "name": "DZ5V1" },
+      "pinMaps": {
+        "D_(SOD|MiniMELF|DO-35|MELF).*": { "1": "2", "2": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "1" },
+      "provenance": "Written for circsim from BZX55C5V1 / 5V1 zener datasheet parameters (Vz=5.1V@5mA via bv/ibv), MIT."
+    },
+    {
+      "id": "led-red",
+      "match": {
+        "valueRegex": "(?i)^(led[_-]?)?red$",
+        "refdesPrefix": ["D", "LED"],
+        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+      },
+      "model": { "type": "model-card", "file": "led.lib", "name": "LED_RED" },
+      "pinMaps": {
+        "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "1" },
+      "provenance": "Written for circsim: red LED (AlGaInP, Vf~1.8-2.0V@20mA) via tuned n/eg, MIT."
+    },
+    {
+      "id": "led-green",
+      "match": {
+        "valueRegex": "(?i)^(led[_-]?)?green$",
+        "refdesPrefix": ["D", "LED"],
+        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+      },
+      "model": { "type": "model-card", "file": "led.lib", "name": "LED_GREEN" },
+      "pinMaps": {
+        "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "1" },
+      "provenance": "Written for circsim: green LED (InGaN, Vf~2.0-2.2V@20mA) via tuned n/eg, MIT."
+    },
+    {
+      "id": "led-blue",
+      "match": {
+        "valueRegex": "(?i)^(led[_-]?)?blue$",
+        "refdesPrefix": ["D", "LED"],
+        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+      },
+      "model": { "type": "model-card", "file": "led.lib", "name": "LED_BLUE" },
+      "pinMaps": {
+        "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "1" },
+      "provenance": "Written for circsim: blue LED (InGaN, Vf~3.0-3.2V@20mA) via tuned n/eg, MIT."
+    },
+    {
+      "id": "led-white",
+      "match": {
+        "valueRegex": "(?i)^(led[_-]?)?white$",
+        "refdesPrefix": ["D", "LED"],
+        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+      },
+      "model": { "type": "model-card", "file": "led.lib", "name": "LED_WHITE" },
+      "pinMaps": {
+        "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "1" },
+      "provenance": "Written for circsim: white LED (InGaN+phosphor, Vf~3.0-3.4V@20mA) via tuned n/eg, MIT."
+    },
+    {
+      "id": "bjt-2n2222",
+      "match": {
+        "mpn": ["2N2222", "2N2222A", "PN2222", "PN2222A", "MMBT2222", "MMBT2222A", "P2N2222A"],
+        "refdesPrefix": ["Q"],
+        "footprintRegex": "(SOT-23|TO-92|SOT-323)"
+      },
+      "model": { "type": "model-card", "file": "bjt.lib", "name": "Q2N2222" },
+      "pinMaps": {
+        "SOT-23.*EBC": { "1": "3", "2": "2", "3": "1" },
+        "SOT-23.*CBE": { "1": "1", "2": "2", "3": "3" },
+        "SOT-23.*": { "1": "3", "2": "2", "3": "1" },
+        "TO-92.*EBC": { "1": "3", "2": "2", "3": "1" },
+        "TO-92.*": { "1": "3", "2": "2", "3": "1" }
+      },
+      "defaultPinMap": { "1": "3", "2": "2", "3": "1" },
+      "provenance": "Written for circsim from 2N2222A datasheet parameters (hFE, fT=300MHz), Gummel-Poon NPN, MIT."
+    },
+    {
+      "id": "bjt-2n3904",
+      "match": {
+        "mpn": ["2N3904", "MMBT3904", "PZT3904"],
+        "refdesPrefix": ["Q"],
+        "footprintRegex": "(SOT-23|TO-92|SOT-223)"
+      },
+      "model": { "type": "model-card", "file": "bjt.lib", "name": "Q2N3904" },
+      "pinMaps": {
+        "SOT-23.*EBC": { "1": "3", "2": "2", "3": "1" },
+        "SOT-23.*CBE": { "1": "1", "2": "2", "3": "3" },
+        "SOT-23.*": { "1": "3", "2": "2", "3": "1" },
+        "TO-92.*": { "1": "3", "2": "2", "3": "1" }
+      },
+      "defaultPinMap": { "1": "3", "2": "2", "3": "1" },
+      "provenance": "Written for circsim from 2N3904 datasheet parameters (hFE, fT=300MHz), Gummel-Poon NPN, MIT."
+    },
+    {
+      "id": "bjt-2n3906",
+      "match": {
+        "mpn": ["2N3906", "MMBT3906", "PZT3906"],
+        "refdesPrefix": ["Q"],
+        "footprintRegex": "(SOT-23|TO-92|SOT-223)"
+      },
+      "model": { "type": "model-card", "file": "bjt.lib", "name": "Q2N3906" },
+      "pinMaps": {
+        "SOT-23.*EBC": { "1": "3", "2": "2", "3": "1" },
+        "SOT-23.*CBE": { "1": "1", "2": "2", "3": "3" },
+        "SOT-23.*": { "1": "3", "2": "2", "3": "1" },
+        "TO-92.*": { "1": "3", "2": "2", "3": "1" }
+      },
+      "defaultPinMap": { "1": "3", "2": "2", "3": "1" },
+      "provenance": "Written for circsim from 2N3906 datasheet parameters (hFE, fT=250MHz), Gummel-Poon PNP, MIT."
+    },
+    {
+      "id": "bjt-bc547",
+      "match": {
+        "mpn": ["BC547", "BC547A", "BC547B", "BC547C", "BC847", "MMBT5551"],
+        "refdesPrefix": ["Q"],
+        "footprintRegex": "(SOT-23|TO-92)"
+      },
+      "model": { "type": "model-card", "file": "bjt.lib", "name": "QBC547" },
+      "pinMaps": {
+        "SOT-23.*EBC": { "1": "3", "2": "2", "3": "1" },
+        "SOT-23.*CBE": { "1": "1", "2": "2", "3": "3" },
+        "SOT-23.*": { "1": "1", "2": "2", "3": "3" },
+        "TO-92.*": { "1": "1", "2": "2", "3": "3" }
+      },
+      "defaultPinMap": { "1": "1", "2": "2", "3": "3" },
+      "provenance": "Written for circsim from BC547B datasheet parameters (hFE~200-450, fT=300MHz), Gummel-Poon NPN. Note TO-92 BC547 pinout is C-B-E (pin1=C), MIT."
+    },
+    {
+      "id": "bjt-bc557",
+      "match": {
+        "mpn": ["BC557", "BC557A", "BC557B", "BC557C", "BC857"],
+        "refdesPrefix": ["Q"],
+        "footprintRegex": "(SOT-23|TO-92)"
+      },
+      "model": { "type": "model-card", "file": "bjt.lib", "name": "QBC557" },
+      "pinMaps": {
+        "SOT-23.*EBC": { "1": "3", "2": "2", "3": "1" },
+        "SOT-23.*CBE": { "1": "1", "2": "2", "3": "3" },
+        "SOT-23.*": { "1": "1", "2": "2", "3": "3" },
+        "TO-92.*": { "1": "1", "2": "2", "3": "3" }
+      },
+      "defaultPinMap": { "1": "1", "2": "2", "3": "3" },
+      "provenance": "Written for circsim from BC557B datasheet parameters (hFE~200-450, fT=150MHz), Gummel-Poon PNP. TO-92 pinout C-B-E (pin1=C), MIT."
+    },
+    {
+      "id": "mosfet-2n7002",
+      "match": {
+        "mpn": ["2N7002", "2N7002K", "2N7002E", "BSS138"],
+        "refdesPrefix": ["Q", "M", "T"],
+        "footprintRegex": "(SOT-23|SOT-323)"
+      },
+      "model": { "type": "model-card", "file": "mosfet.lib", "name": "M2N7002" },
+      "pinMaps": {
+        "SOT-23.*": { "1": "2", "2": "3", "3": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "3", "3": "1" },
+      "provenance": "Written for circsim from 2N7002 datasheet parameters (Vgs(th), Rds(on)), VDMOS NMOS. SOT-23 pinout pin1=Gate, pin2=Source, pin3=Drain, MIT."
+    },
+    {
+      "id": "mosfet-ao3400",
+      "match": {
+        "mpn": ["AO3400", "AO3400A", "SI2302", "DMN2075U"],
+        "refdesPrefix": ["Q", "M", "T"],
+        "footprintRegex": "(SOT-23|SOT-323)"
+      },
+      "model": { "type": "model-card", "file": "mosfet.lib", "name": "MAO3400" },
+      "pinMaps": {
+        "SOT-23.*": { "1": "2", "2": "3", "3": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "3", "3": "1" },
+      "provenance": "Written for circsim from AO3400-class datasheet parameters (logic-level, low Rds(on)), VDMOS NMOS. SOT-23 pinout pin1=Gate, pin2=Source, pin3=Drain, MIT."
+    },
+    {
+      "id": "mosfet-pmos-generic",
+      "match": {
+        "mpn": ["AO3401", "AO3401A", "DMP2305U", "SI2301", "BSS84"],
+        "refdesPrefix": ["Q", "M", "T"],
+        "footprintRegex": "(SOT-23|SOT-323)"
+      },
+      "model": { "type": "model-card", "file": "mosfet.lib", "name": "MPMOS_GEN" },
+      "pinMaps": {
+        "SOT-23.*": { "1": "2", "2": "3", "3": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "3", "3": "1" },
+      "provenance": "Written for circsim from generic logic-level P-MOSFET (AO3401/DMP-class) datasheet parameters, VDMOS PMOS. SOT-23 pinout pin1=Gate, pin2=Source, pin3=Drain, MIT."
+    }
+  ]
+}

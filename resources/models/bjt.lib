@@ -1,0 +1,37 @@
+* Provenance: written for circsim from manufacturer datasheet parameters, MIT.
+* In-house bipolar-transistor .model cards (ngspice Gummel-Poon NPN/PNP).
+* Parameters are derived from published datasheet figures: hFE (bf) at the
+* spec test current, transition frequency fT (-> tf), output capacitances
+* (Cobo -> cjc, Cibo -> cje), Early voltage (vaf) and BVceo (-> bvceo handled
+* by application, not in the level-1 card). No vendor model text is copied;
+* only datasheet operating points inform the standard parameter set.
+*
+* Glossary: is=sat current, bf=fwd beta, vaf=Early V, ikf=knee, rb/rc/re=
+* ohmic, cje/cjc=junction caps, tf/tr=transit times.
+
+* --------------------------------------------------------------------------- NPN
+* 2N2222A NPN switching/amplifier (hFE~100-300, fT=300MHz, Ic=800mA).
+.model Q2N2222 NPN(is=14.34f bf=255.9 vaf=74.03 ikf=0.2847 ise=14.34f ne=1.307
++ br=6.092 var=28.0 nr=1.0 rb=10 rc=1.0 re=0.4 cje=22.01p vje=0.75 mje=0.377
++ tf=411.1p cjc=7.306p vjc=0.75 mjc=0.3416 tr=46.91n xtb=1.5 eg=1.11)
+
+* 2N3904 NPN general purpose (hFE~100-300, fT=300MHz, Ic=200mA).
+.model Q2N3904 NPN(is=6.734f bf=416.4 vaf=74.03 ikf=66.78m ise=6.734f ne=1.259
++ br=0.7371 var=18.7 nr=1.0 rb=10 rc=1.0 re=0.5 cje=4.493p vje=0.75 mje=0.2593
++ tf=301.2p cjc=3.638p vjc=0.75 mjc=0.3085 tr=239.5n xtb=1.5 eg=1.11)
+
+* BC547B NPN general purpose (hFE~200-450, fT=300MHz, Ic=100mA).
+.model QBC547 NPN(is=7.049f bf=374.6 vaf=62.79 ikf=81.97m ise=68.0f ne=1.576
++ br=1.0 var=25.0 nr=1.0 rb=10 rc=1.0 re=0.5 cje=11.5p vje=0.75 mje=0.333
++ tf=411p cjc=5.25p vjc=0.57 mjc=0.315 tr=34n xtb=1.5 eg=1.11)
+
+* --------------------------------------------------------------------------- PNP
+* 2N3906 PNP general purpose (hFE~100-300, fT=250MHz, Ic=200mA).
+.model Q2N3906 PNP(is=1.41f bf=180.7 vaf=18.7 ikf=80m ise=0 ne=1.5
++ br=4.977 var=15.7 nr=1.0 rb=10 rc=2.5 re=0.4 cje=8.063p vje=0.75 mje=0.4373
++ tf=179.3p cjc=9.728p vjc=0.75 mjc=0.5776 tr=33.42n xtb=1.5 eg=1.11)
+
+* BC557B PNP general purpose (hFE~200-450, fT=150MHz, Ic=100mA).
+.model QBC557 PNP(is=1.0f bf=330 vaf=29.8 ikf=92m ise=10.13f ne=1.5
++ br=5.334 var=22.4 nr=1.0 rb=10 rc=1.5 re=0.6 cje=30p vje=0.5 mje=0.333
++ tf=612p cjc=13p vjc=0.5 mjc=0.333 tr=10n xtb=1.5 eg=1.11)

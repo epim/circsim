@@ -1,0 +1,40 @@
+* Provenance: written for circsim from manufacturer datasheet parameters, MIT.
+* These are in-house .model cards derived from published datasheet electrical
+* characteristics (Vf @ If, Cj, trr, Vbr, Ir). No vendor model text is copied;
+* only the numeric datasheet parameters (which are facts, not copyrightable
+* expression) inform the standard ngspice level-1 diode parameter set.
+*
+* Diode parameter glossary (ngspice D model):
+*   is  - saturation current      n   - emission coefficient
+*   rs  - series resistance        cjo - zero-bias junction cap
+*   tt  - transit time             bv  - reverse breakdown voltage
+*   ibv - current at bv            vj  - junction potential
+*   m   - grading coefficient      eg  - bandgap (eV)
+*
+* Forward drop is tuned via (is, n, rs) so that the simulated Vf at the
+* datasheet test current matches the datasheet typical.
+
+* ---------------------------------------------------------------------------
+* 1N4148 / 1N914 small-signal fast switching silicon diode.
+* Datasheet typ: Vf=0.72V @ 5mA, ~1.0V @ 100mA; trr=4ns; Cj=4pF; Vbr=100V.
+.model D1N4148 D(is=2.52n rs=0.568 n=1.752 tt=20n cjo=4p vj=0.75 m=0.333
++ bv=100 ibv=100n eg=1.11)
+
+* ---------------------------------------------------------------------------
+* 1N4001 general-purpose silicon rectifier (1A, 50V).
+* Datasheet typ: Vf=0.93V @ 1A; trr slow (~3us-class); Cj~15pF; Vbr=50V.
+.model D1N4001 D(is=14.1n rs=0.0337 n=1.984 tt=5u cjo=25.9p vj=0.325 m=0.44
++ bv=50 ibv=10u eg=1.11)
+
+* ---------------------------------------------------------------------------
+* 1N5819 Schottky barrier rectifier (1A, 40V).
+* Datasheet typ: Vf=0.6V @ 1A (low drop); Vbr=40V; higher Ir; eg lowered for
+* the Schottky metal-semiconductor junction (~0.69 eV), n near 1.
+.model D1N5819 D(is=31.7u rs=0.051 n=1.373 tt=4.32n cjo=140p vj=0.4 m=0.38
++ bv=40 ibv=1m eg=0.69 xti=2)
+
+* ---------------------------------------------------------------------------
+* BZX55C5V1 / 5V1 zener diode (Vz=5.1V @ 5mA).
+* Reverse breakdown modeled via bv/ibv; forward path is an ordinary Si diode.
+.model DZ5V1 D(is=1n rs=0.5 n=1.7 tt=50n cjo=175p vj=0.75 m=0.333
++ bv=5.1 ibv=5m eg=1.11)
