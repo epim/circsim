@@ -35,6 +35,15 @@ interface ViewportProps {
   netVoltages?: Map<number, number>
   /** Min/max voltage for the overlay legend. */
   voltageRange?: { min: number; max: number } | null
+  /**
+   * Task 22: Called when an instrument chip from the InstrumentRack is dropped
+   * onto a net on the 3D board. The viewport resolves the drop position to the
+   * nearest net and calls this with the net id + instrument kind.
+   *
+   * @param netId  The netId of the net under the drop point.
+   * @param kind   The instrument kind from the drag payload.
+   */
+  onNetDrop?: (netId: number, kind: string) => void
 }
 
 export default function Viewport({
@@ -44,11 +53,14 @@ export default function Viewport({
   overlay,
   netVoltages,
   voltageRange,
+  onNetDrop,
 }: ViewportProps): React.ReactElement {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<SceneManager | null>(null)
   const onPickRef = useRef<typeof onPick>(onPick)
   onPickRef.current = onPick
+  const onNetDropRef = useRef<typeof onNetDrop>(onNetDrop)
+  onNetDropRef.current = onNetDrop
 
   // Mount / unmount the scene manager
   useEffect(() => {
@@ -102,6 +114,55 @@ export default function Viewport({
     scene.showOpAnnotations(netVoltages)
   }, [netVoltages, voltageRange])
 
+  // ── Instrument drop handling (Task 22) ──────────────────────────────────────
+  // When an instrument chip is dragged from the InstrumentRack and dropped onto
+  // the canvas, we:
+  //   1. Perform a raycast via sceneRef to find the net under the pointer.
+  //   2. Call onNetDrop(netId, kind).
+  // If the raycast hits nothing, we pick the net with the most coverage (or skip).
+
+  const handleDragOver = (e: React.DragEvent): void => {
+    // Accept the drop only if it carries an instrument payload
+    if (e.dataTransfer.types.includes('application/circsim-instrument')) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+  }
+
+  const handleDrop = (e: React.DragEvent): void => {
+    e.preventDefault()
+    const cb = onNetDropRef.current
+    if (!cb) return
+
+    let kind: string | null = null
+    try {
+      const data = JSON.parse(
+        e.dataTransfer.getData('application/circsim-instrument'),
+      ) as { kind: string }
+      kind = data.kind
+    } catch {
+      return
+    }
+    if (!kind) return
+
+    // Ask the scene for the net id at the drop position
+    const scene = sceneRef.current
+    if (scene) {
+      const canvas = canvasRef.current
+      if (!canvas) return
+      const rect = canvas.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+      const netId = scene.pickNetAt?.(x, y, canvas.clientWidth, canvas.clientHeight)
+      if (netId !== undefined && netId !== null) {
+        cb(netId, kind)
+        return
+      }
+    }
+    // Fallback: no net under pointer — the InstrumentRack's net list is the
+    // alternative path; skip the drop here.
+  }
+
   return (
     <div
       style={{
@@ -111,6 +172,8 @@ export default function Viewport({
         position: 'relative',
         ...style,
       }}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     >
       <canvas
         ref={canvasRef}

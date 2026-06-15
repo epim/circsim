@@ -115,6 +115,19 @@ export interface SceneManager {
 
   /** Return visible annotation labels after declutter (for UI rendering). */
   getVisibleAnnotations(): AnnotationLabel[]
+
+  // ── Task 22: Drop-target hit-test ─────────────────────────────────────────
+
+  /**
+   * Return the netId of the copper mesh under the given canvas pixel position,
+   * or null if nothing is hit. Used by Viewport.tsx for instrument drag-drop.
+   *
+   * @param xPx     X position in canvas CSS pixels (from left)
+   * @param yPx     Y position in canvas CSS pixels (from top)
+   * @param width   Canvas CSS width
+   * @param height  Canvas CSS height
+   */
+  pickNetAt(xPx: number, yPx: number, width: number, height: number): number | null
 }
 
 // ─── FR4 material ─────────────────────────────────────────────────────────────
@@ -561,6 +574,18 @@ export function createSceneManager(): SceneManager {
       // If renderer is available, use its pixel size; otherwise fall back to 800×600
       const size = renderer ? renderer.getSize(new THREE.Vector2()) : new THREE.Vector2(800, 600)
       return markerController.getVisibleAnnotations(cam, size.x, size.y)
+    },
+
+    // ── Task 22: instrument drop hit-test ──────────────────────────────────────
+    pickNetAt(xPx: number, yPx: number, width: number, height: number): number | null {
+      const cam = getActiveCamera()
+      // Convert canvas pixel → NDC
+      const ndcX = (xPx / width)  *  2 - 1
+      const ndcY = (yPx / height) * -2 + 1
+      // Re-use the picker's raycasting logic which already knows the mesh→netId map
+      const hit = picker.raycastFirst({ x: ndcX, y: ndcY }, cam)
+      if (!hit) return null
+      return hit.netId ?? null
     },
   }
 }

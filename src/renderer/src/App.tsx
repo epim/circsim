@@ -12,6 +12,8 @@ import React, { useCallback } from 'react'
 import Viewport from './viewport/Viewport'
 import PartsPanel from './panels/PartsPanel'
 import ModelDoctor from './panels/ModelDoctor'
+import GroundSetup from './panels/GroundSetup'
+import InstrumentRack from './panels/InstrumentRack'
 import { AppStoreProvider, useApp, useAppStoreApi } from './store/storeContext'
 import type { AppStore } from './store/appStore'
 import { resolutionSummary } from './store/appStore'
@@ -59,11 +61,48 @@ function Shell(): React.ReactElement {
       if (event.type === 'clickComponent') {
         st.selectComponent(event.ref)
       } else if (event.type === 'clickNet') {
+        // Task 22: clicking a net on the board while GroundSetup is shown also
+        // confirms the ground (GroundSetup handles this via its own UI; here we
+        // just keep the selection sync).
         st.selectNet(event.netId)
       } else if (event.type === 'hoverNet') {
         // hover handled by the scene's emissive boost; no store change needed
       } else if (event.type === 'clearHover') {
         // no-op
+      }
+    },
+    [store],
+  )
+
+  // Task 22: instrument chip dropped onto a net on the 3D board
+  const handleNetDrop = useCallback(
+    (netId: number, kind: string) => {
+      const st = store.getState()
+      // Generate a unique id
+      const id = `${kind.replace(/-/g, '_')}_${Date.now()}`
+      switch (kind) {
+        case 'dc-supply':
+          st.addInstrument({ kind: 'dc-supply', id, netId, volts: 5, seriesOhms: 0.1 })
+          break
+        case 'function-gen':
+          st.addInstrument({
+            kind: 'function-gen', id, netId,
+            wave: 'sine', freqHz: 1000, amplitudeV: 1, offsetV: 0, outputOhms: 50,
+          })
+          break
+        case 'logic-input':
+          st.addInstrument({ kind: 'logic-input', id, netId, level: 0, vHigh: 3.3 })
+          break
+        case 'voltage-probe':
+          st.addInstrument({ kind: 'voltage-probe', id, netId, color: '#6f6' })
+          break
+        case 'current-probe':
+          // Current probes need a component ref — can't resolve from a net drop alone.
+          // Add as a voltage-probe fallback; the rack panel lets the user switch.
+          st.addInstrument({ kind: 'voltage-probe', id, netId, color: '#f6f' })
+          break
+        default:
+          break
       }
     },
     [store],
@@ -143,6 +182,7 @@ function Shell(): React.ReactElement {
             <Viewport
               board={board}
               onPick={handlePick}
+              onNetDrop={handleNetDrop}
               netVoltages={opVoltages ?? undefined}
               voltageRange={voltageRange}
               overlay={opVoltages ? 'voltage' : 'realistic'}
@@ -154,6 +194,11 @@ function Shell(): React.ReactElement {
             <div style={selectionBadge}>Selected: {selectedRef}</div>
           )}
         </div>
+        {/* Right dock: GroundSetup + InstrumentRack */}
+        <aside style={rightDockStyle}>
+          <GroundSetup />
+          <InstrumentRack />
+        </aside>
       </main>
     </div>
   )
@@ -223,6 +268,14 @@ const leftDockStyle: React.CSSProperties = {
   flexDirection: 'column',
   borderRight: '1px solid #2a2a3a',
   minHeight: 0,
+}
+const rightDockStyle: React.CSSProperties = {
+  width: 240,
+  display: 'flex',
+  flexDirection: 'column',
+  borderLeft: '1px solid #2a2a3a',
+  minHeight: 0,
+  overflowY: 'auto',
 }
 const selectionBadge: React.CSSProperties = {
   position: 'absolute',
