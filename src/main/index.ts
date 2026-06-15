@@ -15,11 +15,28 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { join } from 'path'
 import { readFile } from 'fs/promises'
-import { createProductionSupervisor } from './simhostSupervisor'
+import { createProductionSupervisor, unwrapPort } from './simhostSupervisor'
 
 // ─── Globals ──────────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null
+
+/**
+ * Base for bundled resources/docs.
+ *  - Packaged (asar): extraResources land directly under process.resourcesPath
+ *    (e.g. <resources>/sample, <resources>/ngspice, <resources>/docs).
+ *  - Dev / Playwright-launched: main is at <repoRoot>/out/main/index.js, so the
+ *    repo root is two levels up from __dirname. We resolve resources/docs from
+ *    there rather than from app.getAppPath() — which returns the main script's
+ *    own dir when Electron is launched with an explicit script path.
+ */
+const repoRoot = join(__dirname, '..', '..')
+function resourcePath(...parts: string[]): string {
+  return app.isPackaged ? join(process.resourcesPath, ...parts) : join(repoRoot, 'resources', ...parts)
+}
+function docPath(...parts: string[]): string {
+  return app.isPackaged ? join(process.resourcesPath, 'docs', ...parts) : join(repoRoot, 'docs', ...parts)
+}
 
 // ─── Window creation ──────────────────────────────────────────────────────────
 
@@ -96,10 +113,7 @@ function registerIpcHandlers(): void {
    * Packaged: <resourcesPath>/sample/blinker-555.kicad_pcb (via extraResources).
    */
   ipcMain.handle('circsim:getSampleProjectPath', () => {
-    if (app.isPackaged) {
-      return join(process.resourcesPath, 'sample', 'blinker-555.kicad_pcb')
-    }
-    return join(app.getAppPath(), 'resources', 'sample', 'blinker-555.kicad_pcb')
+    return resourcePath('sample', 'blinker-555.kicad_pcb')
   })
 
   /**
@@ -110,11 +124,8 @@ function registerIpcHandlers(): void {
    * Task 28 — Spec §16 risk 7, §12.
    */
   ipcMain.handle('circsim:openDocs', async () => {
-    const docPath = app.isPackaged
-      ? join(process.resourcesPath, 'docs', 'what-circsim-can-tell-you.md')
-      : join(app.getAppPath(), 'docs', 'what-circsim-can-tell-you.md')
     try {
-      await shell.openPath(docPath)
+      await shell.openPath(docPath('what-circsim-can-tell-you.md'))
     } catch {
       // Non-fatal: if the doc isn't present (CI runner without a display),
       // the promise still resolves so the UI doesn't stall.
@@ -133,8 +144,6 @@ function registerIpcHandlers(): void {
    * than rejecting (the About panel falls back to its built-in summary).
    */
   ipcMain.handle('circsim:getLicenseTexts', async () => {
-    const resBase = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources')
-    const docBase = app.isPackaged ? join(process.resourcesPath, 'docs') : join(app.getAppPath(), 'docs')
     const tryRead = async (p: string): Promise<string> => {
       try {
         return (await readFile(p)).toString('utf8')
@@ -143,8 +152,8 @@ function registerIpcHandlers(): void {
       }
     }
     const [ngspiceCopying, licensingDoc] = await Promise.all([
-      tryRead(join(resBase, 'ngspice', 'COPYING')),
-      tryRead(join(docBase, 'licensing.md'))
+      tryRead(resourcePath('ngspice', 'COPYING')),
+      tryRead(docPath('licensing.md'))
     ])
     return {
       appVersion: app.getVersion(),
@@ -168,15 +177,16 @@ app.whenReady().then(async () => {
 
   mainWindow = createWindow()
 
-  // Build the simhost output path. `app.getAppPath()` resolves correctly in BOTH
-  // layouts: the project root in dev, and `.../resources/app.asar` in a packaged
-  // app (asar:true). utilityProcess.fork can load a script from inside asar, and
-  // the simhost bundle's `require('koffi')` is redirected to the asarUnpack'd
-  // copy (app.asar.unpacked/node_modules/koffi) by Electron's asar integration —
-  // the koffi *.node addon must load from a real path, never from inside asar.
-  // (Earlier this used `process.resourcesPath/app/out/...`, which only exists
-  // when asar is disabled; with asar:true that path is wrong.)
-  const simhostPath = join(app.getAppPath(), 'out', 'simhost', 'index.js')
+  // Build the simhost output path RELATIVE TO THE MAIN SCRIPT (__dirname). main
+  // is always at <base>/main/index.js and simhost at <base>/simhost/index.js,
+  // where <base> is `out` in dev and `…/resources/app.asar/out` when packaged.
+  // This is correct for ALL launch modes — electron-vite dev, a Playwright
+  // `electron out/main/index.js` launch, and a packaged asar build — whereas
+  // `app.getAppPath()` returns the main script's own dir when Electron is given
+  // an explicit script path (yielding the wrong `out/main/out/simhost`).
+  // utilityProcess.fork can load from inside asar; koffi's native addon is
+  // asarUnpack'd, so `require('koffi')` still resolves to a real on-disk path.
+  const simhostPath = join(__dirname, '..', 'simhost', 'index.js')
 
   // Boot the supervisor. The `onSimhostCrashed` callback delivers the crash
   // notification via contextBridge (not the dead MessagePort — Spec §6.1).
@@ -194,13 +204,14 @@ app.whenReady().then(async () => {
     isDestroyed: () => mainWindow?.isDestroyed() ?? true,
     postMessage: (channel, msg, ports) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
-        // Electron's webContents.postMessage(channel, message, [transfer])
-        // transfer accepts MessagePortMain[] — our PortHandle wraps them.
+        // Electron's webContents.postMessage(channel, message, [transfer]) needs
+        // RAW MessagePortMain objects — unwrap the PortHandle wrappers (passing
+        // the wrappers silently failed to transfer the port → renderer hung).
         mainWindow.webContents.postMessage(
           channel,
           msg,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ports as any
+          (ports ?? []).map(unwrapPort) as any
         )
       }
     }

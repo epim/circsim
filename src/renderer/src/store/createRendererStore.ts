@@ -16,7 +16,7 @@
 import { createAppStore, type AppStore } from './appStore'
 import { createPortSimClient } from '../ipc/simClient'
 
-export async function createRendererStore(): Promise<AppStore> {
+export function createRendererStore(): AppStore {
   const client = createPortSimClient()
   const store = createAppStore({ simClient: client })
 
@@ -30,9 +30,19 @@ export async function createRendererStore(): Promise<AppStore> {
     store.getState().replayAfterCrash()
   })
 
-  // Initial handshake.
-  const port = await window.circsim.getSimPort()
-  client.attachPort(port)
+  // Initial handshake runs in the BACKGROUND — the UI must render immediately
+  // (empty state, file-open, 3D view all work without the simulator). Blocking
+  // boot on the port handshake meant any SimHost hiccup blanked the whole app.
+  // Sim actions (Power On / Run) await client readiness on their own.
+  void window.circsim
+    .getSimPort()
+    .then((port) => {
+      client.attachPort(port)
+    })
+    .catch(() => {
+      // Leave the client portless; the UI stays usable and sim commands no-op
+      // until a port arrives (the store re-sends on crash recovery).
+    })
 
   return store
 }

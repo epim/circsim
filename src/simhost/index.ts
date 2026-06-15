@@ -821,71 +821,82 @@ export function formatNum(n: number): string {
 // ─── MessagePort wiring (runs only inside the utilityProcess) ─────────────────
 
 /**
- * Bootstrap SimHost when launched as an Electron utilityProcess. The renderer↔
- * SimHost MessagePort arrives via process.parentPort (Electron). Guarded so that
- * importing this module from tests does NOT spin up a real engine.
+ * Bootstrap SimHost when launched as an Electron utilityProcess.
+ *
+ * The renderer↔SimHost link is a direct MessageChannel: Main creates the channel,
+ * keeps Main OUT of the steady-state path (Spec §6), and delivers one end to this
+ * child via `child.postMessage({type:'port'}, [port1])`. That port arrives on
+ * `process.parentPort`'s first message as `e.ports[0]` — we must wire SimHost to
+ * THAT port, not to parentPort itself (parentPort connects child↔Main, and Main
+ * does not relay SimCommands). Guarded so importing this module from tests does
+ * NOT spin up a real engine.
  */
 function bootstrapUtilityProcess(): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const parentPort = (process as any).parentPort
   if (!parentPort) return // not running as a utilityProcess (e.g. unit tests)
 
-  if (!ngspiceResourcesAvailable()) {
-    parentPort.on('message', () => {})
-    try {
-      parentPort.postMessage({
-        type: 'log',
-        level: 'error',
-        text: 'ngspice resources not found for this platform'
-      } satisfies SimEvent)
-    } catch {
-      /* ignore */
-    }
-    return
-  }
+  // The comm port (port1) arrives with the first parentPort message. Everything
+  // else (SimCommands, SimEvents) flows over that port, directly to the renderer.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  parentPort.once('message', (e: any) => {
+    const port = e?.ports?.[0]
+    if (!port) return
+    port.start()
 
-  const host = new SimHost({
-    emit: (ev: SimEvent, transfer?: ArrayBuffer[]) => {
+    if (!ngspiceResourcesAvailable()) {
       try {
-        // Electron's MessagePortMain.postMessage(message, transfer?) — transfer
-        // the sample buffers zero-copy when present.
-        if (transfer && transfer.length > 0) {
-          parentPort.postMessage(ev, transfer)
-        } else {
-          parentPort.postMessage(ev)
-        }
-      } catch {
-        /* port may have closed during shutdown */
-      }
-    }
-  })
-
-  parentPort.on('message', (e: { data: SimCommand }) => {
-    try {
-      host.handleCommand(e.data)
-    } catch (err) {
-      try {
-        parentPort.postMessage({
+        port.postMessage({
           type: 'log',
           level: 'error',
-          text: `handleCommand error: ${(err as Error).message}`
+          text: 'ngspice resources not found for this platform'
         } satisfies SimEvent)
       } catch {
         /* ignore */
       }
+      return
     }
-  })
 
-  host.start().catch((err) => {
-    try {
-      parentPort.postMessage({
-        type: 'log',
-        level: 'error',
-        text: `SimHost start failed: ${(err as Error).message}`
-      } satisfies SimEvent)
-    } catch {
-      /* ignore */
-    }
+    const host = new SimHost({
+      emit: (ev: SimEvent) => {
+        try {
+          // Electron's MessagePortMain.postMessage clones the message (ArrayBuffers
+          // included) — no explicit transfer list is needed or supported for
+          // buffers here, so we send the event as-is.
+          port.postMessage(ev)
+        } catch {
+          /* port may have closed during shutdown */
+        }
+      }
+    })
+
+    port.on('message', (msg: { data: SimCommand }) => {
+      try {
+        host.handleCommand(msg.data)
+      } catch (err) {
+        try {
+          port.postMessage({
+            type: 'log',
+            level: 'error',
+            text: `handleCommand error: ${(err as Error).message}`
+          } satisfies SimEvent)
+        } catch {
+          /* ignore */
+        }
+      }
+    })
+
+    host.start().catch((err) => {
+      try {
+        port.postMessage({
+          type: 'log',
+          level: 'error',
+          text: `SimHost start failed: ${(err as Error).message}`
+        } satisfies SimEvent)
+      } catch {
+        /* ignore */
+      }
+    })
   })
 }
 

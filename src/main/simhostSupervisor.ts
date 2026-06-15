@@ -38,6 +38,18 @@ export interface PortHandle {
   postMessage(message: unknown, ports?: unknown[]): void
   on(event: string, listener: (...args: unknown[]) => void): void
   off(event: string, listener: (...args: unknown[]) => void): void
+  /**
+   * The underlying transferable port object (the real Electron MessagePortMain
+   * in production). Electron's postMessage transfer list requires the RAW port,
+   * not this wrapper — `unwrapPort` reaches through to it. Undefined for the
+   * stub ports used in unit tests (which are passed through as-is).
+   */
+  readonly __raw?: unknown
+}
+
+/** Reach through a PortHandle to the raw transferable port for postMessage. */
+export function unwrapPort(p: unknown): unknown {
+  return (p as PortHandle | undefined)?.__raw ?? p
 }
 
 /** The two ports of a MessageChannel. */
@@ -297,9 +309,17 @@ export async function createProductionSupervisor(opts: {
   const { utilityProcess, MessageChannelMain } = await import('electron')
 
   const fork: ForkFn = (modulePath: string) => {
-    const child = utilityProcess.fork(modulePath)
+    // stdio:'pipe' so SimHost child stdout/stderr is forwarded to the main
+    // console with a prefix — invaluable for diagnosing a child that fails to
+    // start or crashes (otherwise its output is invisible).
+    const child = utilityProcess.fork(modulePath, [], { stdio: 'pipe' })
+    child.stdout?.on('data', (d: Buffer) => process.stdout.write('[simhost] ' + d.toString()))
+    child.stderr?.on('data', (d: Buffer) => process.stderr.write('[simhost] ' + d.toString()))
     return {
-      postMessage: (msg, ports) => child.postMessage(msg, ports as import('electron').MessagePortMain[]),
+      // Transfer the RAW MessagePortMain, not the PortHandle wrapper — Electron's
+      // transfer list rejects/ignores wrapper objects (this was the handshake bug).
+      postMessage: (msg, ports) =>
+        child.postMessage(msg, (ports ?? []).map(unwrapPort) as import('electron').MessagePortMain[]),
       kill: () => child.kill(),
       on: (event, listener) => { if (event === 'exit') child.on('exit', listener) },
       off: (event, listener) => { if (event === 'exit') child.off('exit', listener) }
@@ -308,11 +328,14 @@ export async function createProductionSupervisor(opts: {
 
   const portPairFactory: PortPairFactory = () => {
     const channel = new MessageChannelMain()
-    // Wrap Electron's MessagePortMain into our PortHandle interface.
+    // Wrap Electron's MessagePortMain into our PortHandle interface, keeping a
+    // reference to the raw port (__raw) so it can be unwrapped for transfer.
     const wrapPort = (p: import('electron').MessagePortMain): PortHandle => ({
+      __raw: p,
       start: () => p.start(),
       close: () => p.close(),
-      postMessage: (msg, ports) => p.postMessage(msg, ports as import('electron').MessagePortMain[]),
+      postMessage: (msg, ports) =>
+        p.postMessage(msg, (ports ?? []).map(unwrapPort) as import('electron').MessagePortMain[]),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       on: (event, listener) => (p as any).on(event, listener),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
