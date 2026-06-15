@@ -235,9 +235,66 @@ function parseFootprint(fpNode: SExpr): Footprint | null {
     model3d = { path, offset: parseXyz(offsetNode), scale: parseXyz(scaleNode), rotate: parseXyz(rotateNode) }
   }
 
-  // Courtyard bounds
+  // Courtyard bounds — parse F.CrtYd / B.CrtYd primitives added in Task 18.
+  // We collect all endpoint coordinates from fp_line, fp_arc, fp_rect, fp_circle
+  // on the courtyard layer and compute a bounding box.
   let courtyardBounds: Footprint['courtyardBounds']
-  // TODO: parse F.CrtYd primitives — deferred to Task 18
+  {
+    const crtYdLayers = new Set(['F.CrtYd', 'B.CrtYd', 'F.Courtyard', 'B.Courtyard'])
+    const crtPts: { x: number; y: number }[] = []
+
+    for (const child of fpNode) {
+      if (!Array.isArray(child)) continue
+      const head = strAtom(child, 0)
+      if (head !== 'fp_line' && head !== 'fp_arc' && head !== 'fp_rect' && head !== 'fp_circle') continue
+      const childLayer = parseLayer(child)
+      if (!crtYdLayers.has(childLayer)) continue
+
+      // Collect start/end/mid points
+      const startNode = find(child, 'start')
+      const endNode = find(child, 'end')
+      const midNode = find(child, 'mid')
+      if (startNode && Array.isArray(startNode)) {
+        crtPts.push({ x: numAtom(startNode, 1), y: numAtom(startNode, 2) })
+      }
+      if (endNode && Array.isArray(endNode)) {
+        crtPts.push({ x: numAtom(endNode, 1), y: numAtom(endNode, 2) })
+      }
+      if (midNode && Array.isArray(midNode)) {
+        crtPts.push({ x: numAtom(midNode, 1), y: numAtom(midNode, 2) })
+      }
+      // For fp_circle, also consider center ± radius
+      if (head === 'fp_circle') {
+        const centerNode = find(child, 'center')
+        const cEnd = find(child, 'end') // end = a point on the circle edge
+        if (centerNode && Array.isArray(centerNode) && cEnd && Array.isArray(cEnd)) {
+          const cx2 = numAtom(centerNode, 1)
+          const cy2 = numAtom(centerNode, 2)
+          const ex = numAtom(cEnd, 1)
+          const ey = numAtom(cEnd, 2)
+          const r = Math.sqrt((ex - cx2) ** 2 + (ey - cy2) ** 2)
+          crtPts.push({ x: cx2 - r, y: cy2 - r })
+          crtPts.push({ x: cx2 + r, y: cy2 + r })
+        }
+      }
+    }
+
+    if (crtPts.length >= 2) {
+      let minX = Infinity, maxX = -Infinity
+      let minY = Infinity, maxY = -Infinity
+      for (const p of crtPts) {
+        if (p.x < minX) minX = p.x
+        if (p.x > maxX) maxX = p.x
+        if (p.y < minY) minY = p.y
+        if (p.y > maxY) maxY = p.y
+      }
+      const w = maxX - minX
+      const h = maxY - minY
+      if (w > 0 && h > 0) {
+        courtyardBounds = { w, h }
+      }
+    }
+  }
 
   return {
     ref,

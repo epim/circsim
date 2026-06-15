@@ -25,6 +25,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { BoardModel } from '../../../core/kicad/types'
 import { buildSubstrate } from './boardGeometry'
 import { buildCopper, buildViaInstances, makeCopperMaterial } from './copperGeometry'
+import { buildComponentBoxes } from './componentGeometry'
+import { buildSilkscreenEntries, createSilkscreenTexts } from './silkscreen'
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -76,6 +78,8 @@ export function createSceneManager(): SceneManager {
   // Scene objects (can be replaced on board reload)
   let substrateGroup: THREE.Group | null = null
   let copperGroup: THREE.Group | null = null
+  let componentGroup: THREE.Group | null = null
+  let silkscreenGroup: THREE.Group | null = null
 
   function getActiveCamera(): THREE.Camera {
     return useOrtho ? orthoCamera! : perspCamera!
@@ -195,6 +199,22 @@ export function createSceneManager(): SceneManager {
         })
       }
 
+      // Remove previous components
+      if (componentGroup) {
+        scene.remove(componentGroup)
+        componentGroup.traverse(obj => {
+          if (obj instanceof THREE.Mesh) {
+            obj.geometry.dispose()
+            if (obj.material instanceof THREE.Material) obj.material.dispose()
+          }
+        })
+      }
+
+      // Remove previous silkscreen
+      if (silkscreenGroup) {
+        scene.remove(silkscreenGroup)
+      }
+
       substrateGroup = new THREE.Group()
 
       const substGeo = buildSubstrate(board.outline, board.boardThicknessMm)
@@ -246,6 +266,45 @@ export function createSceneManager(): SceneManager {
       }
 
       scene.add(copperGroup)
+
+      // ── Component placeholder boxes ──
+      componentGroup = new THREE.Group()
+      componentGroup.position.set(-cx, -cy, 0)
+
+      const boxEntries = buildComponentBoxes(board.footprints, board.boardThicknessMm)
+      for (const entry of boxEntries) {
+        const mat = new THREE.MeshStandardMaterial({
+          color: entry.color,
+          roughness: 0.7,
+          metalness: 0.1,
+          transparent: true,
+          opacity: 0.85,
+        })
+        const mesh = new THREE.Mesh(entry.geo, mat)
+        mesh.position.set(entry.worldX, entry.worldY, entry.worldZ)
+        mesh.userData = { ref: entry.ref, className: entry.className }
+        componentGroup.add(mesh)
+      }
+      scene.add(componentGroup)
+
+      // ── Silkscreen (troika Text — async, non-blocking) ──
+      const silkEntries = buildSilkscreenEntries(board.silkscreen, board.boardThicknessMm)
+      if (silkEntries.length > 0) {
+        // Create a new group synchronously; texts are added asynchronously.
+        silkscreenGroup = new THREE.Group()
+        silkscreenGroup.position.set(-cx, -cy, 0)
+        scene.add(silkscreenGroup)
+
+        createSilkscreenTexts(silkEntries).then(textObjs => {
+          if (!silkscreenGroup || !scene) return
+          for (const obj of textObjs) {
+            silkscreenGroup.add(obj)
+          }
+          dirty = true
+        }).catch(() => {
+          // Silkscreen text loading is best-effort; log but don't crash
+        })
+      }
 
       // Fit perspective camera to board
       if (perspCamera) {
