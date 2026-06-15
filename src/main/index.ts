@@ -1,7 +1,29 @@
-import { app, BrowserWindow } from 'electron'
-import { join } from 'path'
+/**
+ * src/main/index.ts
+ *
+ * Electron main process:
+ *  - Creates the BrowserWindow with contextIsolation + the preload bridge.
+ *  - Starts the SimhostSupervisor after app.whenReady().
+ *  - Does the ONE-TIME port handshake: port1 → child, port2 → renderer via
+ *    webContents.postMessage. Main is NOT in the steady-state message path
+ *    after the handshake (Spec §6).
+ *  - Notifies the renderer via contextBridge when SimHost crashes (the dead
+ *    MessagePort cannot carry this event — Spec §6.1).
+ *  - CSP: allows worker-src blob: for troika-three-text (Spec §5).
+ */
 
-function createWindow(): void {
+import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { join } from 'path'
+import { readFile } from 'fs/promises'
+import { createProductionSupervisor } from './simhostSupervisor'
+
+// ─── Globals ──────────────────────────────────────────────────────────────────
+
+let mainWindow: BrowserWindow | null = null
+
+// ─── Window creation ──────────────────────────────────────────────────────────
+
+function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -9,24 +31,129 @@ function createWindow(): void {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // CSP: worker-src blob: is required by troika-three-text (Spec §5).
+      // The Content-Security-Policy header is set below via session handler.
     }
   })
 
-  // In development, load from the dev server
+  // Set CSP via the will-navigate response, or use webContents session.
+  // For development and production: inject CSP via a handler on the session.
+  win.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self';" +
+          " script-src 'self' 'unsafe-inline';" +
+          " style-src 'self' 'unsafe-inline';" +
+          " worker-src blob:;" +
+          " connect-src 'self';" +
+          " img-src 'self' data: blob:;"
+        ]
+      }
+    })
+  })
+
   if (process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    void win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
+    void win.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  return win
 }
 
-app.whenReady().then(() => {
-  createWindow()
+// ─── IPC handlers for the preload bridge ─────────────────────────────────────
+
+function registerIpcHandlers(): void {
+  /** Open a native file dialog (renderer calls via contextBridge). */
+  ipcMain.handle('circsim:openFileDialog', async (_event, opts: Electron.OpenDialogOptions) => {
+    if (!mainWindow) return null
+    const result = await dialog.showOpenDialog(mainWindow, opts)
+    return result
+  })
+
+  /** Read a file from disk (renderer calls via contextBridge). */
+  ipcMain.handle('circsim:readFile', async (_event, filePath: string) => {
+    const buf = await readFile(filePath)
+    return buf.toString('utf8')
+  })
+
+  /** Return platform path information. */
+  ipcMain.handle('circsim:platformPaths', () => {
+    return {
+      platform: process.platform,
+      resourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
+      userData: app.getPath('userData')
+    }
+  })
+}
+
+// ─── App lifecycle ────────────────────────────────────────────────────────────
+
+app.whenReady().then(async () => {
+  registerIpcHandlers()
+
+  mainWindow = createWindow()
+
+  // Build the simhost output path. electron-vite places it at:
+  //   <app root>/out/simhost/index.js  (dev layout)
+  //   resources/app.asar/../simhost/index.js  (packaged — adjustable)
+  const simhostPath = app.isPackaged
+    ? join(process.resourcesPath, 'app', 'out', 'simhost', 'index.js')
+    : join(app.getAppPath(), 'out', 'simhost', 'index.js')
+
+  // Boot the supervisor. The `onSimhostCrashed` callback delivers the crash
+  // notification via contextBridge (not the dead MessagePort — Spec §6.1).
+  const supervisor = await createProductionSupervisor({
+    simhostPath,
+    onSimhostCrashed: ({ willRespawn }) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('circsim:simhostCrashed', { willRespawn })
+      }
+    }
+  })
+
+  // Wrap the BrowserWindow's webContents with the PortHandle interface.
+  supervisor.setWebContents({
+    isDestroyed: () => mainWindow?.isDestroyed() ?? true,
+    postMessage: (channel, msg, ports) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        // Electron's webContents.postMessage(channel, message, [transfer])
+        // transfer accepts MessagePortMain[] — our PortHandle wraps them.
+        mainWindow.webContents.postMessage(
+          channel,
+          msg,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ports as any
+        )
+      }
+    }
+  })
+
+  // Start the first SimHost spawn.
+  supervisor.start()
+
+  // Deliver port2 to the renderer when the page is ready.
+  mainWindow.webContents.on('did-finish-load', () => {
+    supervisor.onRendererReady()
+    // Let the renderer know the simhost is ready (initial log).
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      // eslint-disable-next-line no-console
+      console.log('[main] renderer ready — simhost port handshake complete')
+    }
+  })
+
+  mainWindow.on('closed', () => {
+    supervisor.dispose()
+    mainWindow = null
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
+      mainWindow = createWindow()
     }
   })
 })
