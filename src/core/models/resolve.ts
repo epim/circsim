@@ -26,6 +26,8 @@ import type { Circuit, Part } from '../netlist/extract'
 import type { SchematicSimData } from '../kicad/schematic'
 import type { LibraryEntry, PinMap, ResolvedModel, Resolution } from './types'
 import { parseValue } from '../values/parseValue'
+import { matchLibraryEntry, selectPinMap } from './libraryMatch'
+import type { PartDescriptor } from './libraryMatch'
 
 // ─── BOM type seam ───────────────────────────────────────────────────────────
 
@@ -420,6 +422,91 @@ function makeTier6(
   }
 }
 
+// ─── Tier 3: Bundled library match ───────────────────────────────────────────
+
+/**
+ * Attempt tier-3 resolution by matching the part against the bundled library.
+ *
+ * Matching order (see libraryMatch.ts):
+ *   1. Normalized MPN (from part.properties['mpn'] or 'MPN')
+ *   2. Value regex
+ *   3. refdesPrefix + footprintRegex fallback
+ *
+ * Returns a Resolution or null if no match / ambiguous.
+ * Ambiguous → unresolved with candidate list in warnings.
+ */
+function tryTier3(
+  part: Part,
+  library: LibraryEntry[],
+): Resolution | null {
+  // Build a PartDescriptor for the matcher
+  // MPN can come from part.properties['mpn'] or 'MPN' (case variants)
+  const mpn: string | undefined =
+    part.properties['mpn'] ??
+    part.properties['MPN'] ??
+    part.properties['Mpn'] ??
+    undefined
+
+  const descriptor: PartDescriptor = {
+    mpn,
+    libId: part.libId,
+    value: part.value,
+    ref: part.ref,
+  }
+
+  const matchResult = matchLibraryEntry(descriptor, library)
+
+  if (matchResult.kind === 'none') return null
+
+  if (matchResult.kind === 'ambiguous') {
+    return {
+      ref: part.ref,
+      status: 'unresolved',
+      tier: 3,
+      warnings: [
+        `Ambiguous library match for ${part.ref} (${part.value}): multiple entries match — ${matchResult.candidates.join(', ')}; fix by setting MPN property`
+      ],
+    }
+  }
+
+  // Single match
+  const entry = matchResult.entry
+  const warnings: string[] = []
+
+  // Select pin map
+  const { pinMap, warnings: pinWarnings } = selectPinMap(entry, part.libId)
+  warnings.push(...pinWarnings)
+
+  // Build the resolved model
+  let model: ResolvedModel
+
+  if (entry.model.type === 'xspice-digital') {
+    model = {
+      kind: 'xspice-digital',
+      templateId: entry.model.name,
+      pinMap,
+    }
+  } else {
+    // 'subckt' or 'model-card' both resolve as subckt-kind in ResolvedModel
+    // (model-card is still a .model card in a file — treated as subckt reference
+    // so the deck generator can .include the file and use the model)
+    model = {
+      kind: 'subckt',
+      libFile: entry.model.file ?? '',
+      subcktName: entry.model.name,
+      pinMap,
+    }
+  }
+
+  return {
+    ref: part.ref,
+    status: 'ok',
+    model,
+    tier: 3,
+    warnings,
+  }
+}
+
 // ─── Main resolveAll function ─────────────────────────────────────────────────
 
 /**
@@ -475,12 +562,14 @@ function resolvePart(
   const tier2 = tryTier2(part, circuit)
   if (tier2) return tier2
 
-  // ── Tier 3: Bundled library match [seam] ──────────────────────────────────
-  // Not yet implemented in Task 12 — clean seam, library param is available
-  // for Task 15 to implement matching here.
+  // ── Tier 3: Bundled library match ─────────────────────────────────────────
+  if (_library && _library.length > 0) {
+    const tier3 = tryTier3(part, _library)
+    if (tier3) return tier3
+  }
 
   // ── Tier 4: User .lib [seam] ──────────────────────────────────────────────
-  // Not yet implemented.
+  // Not yet implemented (Task 15 seam: user bindings lookup will go here).
 
   // ── Tier 5: LLM-assist paste [seam] ──────────────────────────────────────
   // Not yet implemented.
