@@ -51,6 +51,7 @@ interface ViewportProps {
    * sample rate.
    */
   onSceneReady?: (scene: SceneManager | null) => void
+  /** Optional board model reference for net-name lookup in annotations. */
 }
 
 export default function Viewport({
@@ -191,6 +192,35 @@ export default function Viewport({
         ref={canvasRef}
         style={{ display: 'block', width: '100%', height: '100%' }}
       />
+      {/* DOM-accessible op-annotation data for E2E tests (Task 26).
+          The actual visual annotations are rendered by Three.js (troika-three-text);
+          this hidden div mirrors the same data for Playwright to query.
+          `opacity:0.001` makes it visually invisible while still considered
+          "visible" by Playwright's DOM checks (display:none fails toBeVisible). */}
+      {netVoltages && netVoltages.size > 0 && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            right: 0,
+            opacity: 0.001,
+            pointerEvents: 'none',
+            fontSize: 1,
+          }}
+          data-testid="op-annotations-list"
+        >
+          {Array.from(netVoltages.entries()).map(([netId, volts]) => (
+            <span
+              key={netId}
+              data-net-id={netId}
+              data-testid="op-annotation"
+            >
+              {volts.toFixed(3)} V
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -115,9 +115,10 @@ interface NumericFieldProps {
   onChange: (v: number) => void
   min?: number
   max?: number
+  testId?: string
 }
 
-function NumericField({ label, value, unit, onChange, min, max }: NumericFieldProps): React.ReactElement {
+function NumericField({ label, value, unit, onChange, min, max, testId }: NumericFieldProps): React.ReactElement {
   const [text, setText] = useState(String(value))
   useEffect(() => setText(String(value)), [value])
 
@@ -143,6 +144,7 @@ function NumericField({ label, value, unit, onChange, min, max }: NumericFieldPr
           onBlur={commit}
           onKeyDown={e => e.key === 'Enter' && commit()}
           style={fieldInputStyle}
+          data-testid={testId}
         />
         {unit && <span style={fieldUnitStyle}>{unit}</span>}
       </div>
@@ -212,17 +214,15 @@ export default function InstrumentProps({ instrument }: InstrumentPropsProps): R
     return (
       <div style={propsStyle}>
         <div style={propsHeaderStyle}>DC Supply — {netName(inst.netId)}</div>
-        <div style={knobRowStyle}>
-          <DragKnob
-            label="Voltage"
-            value={inst.volts}
-            min={0}
-            max={30}
-            step={0.1}
-            unit="V"
-            onChange={v => update({ ...inst, volts: v })}
-          />
-        </div>
+        <NumericField
+          label="Voltage"
+          value={inst.volts}
+          unit="V"
+          min={0}
+          max={30}
+          onChange={v => update({ ...inst, volts: v })}
+          testId="supply-volts-input"
+        />
         <NumericField
           label="Series R"
           value={inst.seriesOhms}

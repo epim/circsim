@@ -94,6 +94,7 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
         disabled={!canPowerOn}
         onClick={handlePowerOn}
         title={canPowerOn ? 'Run a DC operating-point check' : disabledReason}
+        data-testid="power-on-btn"
       >
         Power On
       </button>
@@ -103,6 +104,7 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
         disabled={!canPowerOn}
         onClick={handleRunPause}
         title={canPowerOn ? (running ? 'Pause the simulation' : 'Run the live simulation') : disabledReason}
+        data-testid="run-btn"
       >
         {running ? 'Pause' : simState === 'paused' ? 'Resume' : 'Run'}
       </button>

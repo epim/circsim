@@ -459,6 +459,7 @@ const Scope: React.FC = () => {
           ref={canvasRef}
           style={styles.canvas}
           onClick={handleCanvasClick}
+          data-testid="scope-canvas"
         />
         {noProbes && (
           <div style={styles.emptyOverlay}>

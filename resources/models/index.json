@@ -58,6 +58,20 @@
       "provenance": "Written for circsim from BZX55C5V1 / 5V1 zener datasheet parameters (Vz=5.1V@5mA via bv/ibv), MIT."
     },
     {
+      "id": "led-generic",
+      "match": {
+        "valueRegex": "(?i)^led$",
+        "refdesPrefix": ["D", "LED"],
+        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+      },
+      "model": { "type": "model-card", "file": "led.lib", "name": "LED_RED" },
+      "pinMaps": {
+        "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "1" },
+      "provenance": "Generic LED (red model, Vf~1.9V) written for circsim — used when value field is simply 'LED' without a color qualifier, MIT."
+    },
+    {
       "id": "led-red",
       "match": {
         "valueRegex": "(?i)^(led[_-]?)?red$",

@@ -87,8 +87,13 @@ export default function PartsPanel(): React.ReactElement {
                 background: isSelected ? '#2a3a5a' : 'transparent',
               }}
               data-ref={part.ref}
+              data-testid="part-row"
             >
-              <span style={{ ...badgeStyle, background: BADGE_COLORS[badge] }} title={BADGE_LABEL[badge]} />
+              <span
+                style={{ ...badgeStyle, background: BADGE_COLORS[badge] }}
+                title={BADGE_LABEL[badge]}
+                data-testid={badge === 'red' ? 'status-badge-red' : badge === 'amber' ? 'status-badge-amber' : 'status-badge-ok'}
+              />
               <span style={refStyle}>{part.ref}</span>
               <span style={valueStyle}>{part.value || '—'}</span>
             </div>

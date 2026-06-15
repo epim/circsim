@@ -245,7 +245,11 @@ function tryTier1(
   const device = sim.Device?.toUpperCase()
   const type = sim.Type?.toUpperCase()
 
-  if (device && !PRIMITIVE_DEVICE_LETTERS[device] && type !== 'SUBCKT') {
+  // In KiCad 6/7, the SUBCKT convention uses Sim.Device="SUBCKT" without Sim.Type.
+  // In some schematics, Sim.Type="SUBCKT" is also used. Handle both forms.
+  const isSubckt = device === 'SUBCKT' || type === 'SUBCKT'
+
+  if (device && !PRIMITIVE_DEVICE_LETTERS[device] && !isSubckt) {
     // Out-of-scope device (e.g. KIBIS, PSPICE, etc.)
     return {
       ref: part.ref,
@@ -255,8 +259,8 @@ function tryTier1(
     }
   }
 
-  // SUBCKT type: resolve as subckt
-  if (type === 'SUBCKT') {
+  // SUBCKT type: resolve as subckt (handles both Sim.Device=SUBCKT and Sim.Type=SUBCKT)
+  if (isSubckt) {
     const libFile = sim.Library ?? ''
     const subcktName = sim.Name ?? ''
 
