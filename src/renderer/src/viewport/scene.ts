@@ -2,6 +2,7 @@
  * viewport/scene.ts
  *
  * Task 16 — Imperative scene manager.
+ * Task 19 — Wired picking controller.
  *
  * THIS IS THE ONLY FILE that owns live THREE.Scene / WebGLRenderer /
  * OrbitControls objects. It is intentionally React-free: it communicates
@@ -13,8 +14,9 @@
  *   - Ortho top-down toggle
  *   - Flip-to-back shortcut (rotates 180° around Y)
  *   - On-demand / dirty render loop (render only when dirty — battery matters)
+ *   - Picking: hover / click via PickingController (Task 19)
  *
- * Spec §10.3
+ * Spec §10.2, §10.3
  *
  * NOTE: scene.ts is validated by the build, not headless unit tests.
  *       OrbitControls/render loop require a DOM canvas.
@@ -27,12 +29,18 @@ import { buildSubstrate } from './boardGeometry'
 import { buildCopper, buildViaInstances, makeCopperMaterial } from './copperGeometry'
 import { buildComponentBoxes } from './componentGeometry'
 import { buildSilkscreenEntries, createSilkscreenTexts } from './silkscreen'
+import { createPicker, type PickCallback } from './picking'
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
 export interface SceneCallbacks {
   /** Called whenever a render frame completes (useful for FPS counters etc.) */
   onRender?: () => void
+  /**
+   * Called when a pick event fires (hover/click on copper or component).
+   * The store subscribes to this; scene.ts stays React-free.
+   */
+  onPickEvent?: PickCallback
 }
 
 export interface SceneManager {
@@ -50,6 +58,8 @@ export interface SceneManager {
   flipToBack(): void
   /** Mark the scene as dirty so the next animation frame re-renders. */
   invalidate(): void
+  /** Programmatically clear hover state (e.g. before board reload or on mouse leave). */
+  clearHover(): void
 }
 
 // ─── FR4 material ─────────────────────────────────────────────────────────────
@@ -80,6 +90,37 @@ export function createSceneManager(): SceneManager {
   let copperGroup: THREE.Group | null = null
   let componentGroup: THREE.Group | null = null
   let silkscreenGroup: THREE.Group | null = null
+
+  // ── Picking controller (Task 19) ────────────────────────────────────────────
+  const picker = createPicker(
+    event => callbacks.onPickEvent?.(event),
+    () => { dirty = true }
+  )
+
+  // Pointer event handlers (attached in mount, removed in dispose)
+  let _canvas: HTMLCanvasElement | null = null
+
+  function _onPointerMove(e: PointerEvent): void {
+    if (!_canvas) return
+    const cam = getActiveCamera()
+    const rect = _canvas.getBoundingClientRect()
+    const x = ((e.clientX - rect.left) / rect.width)  * 2 - 1
+    const y = ((e.clientY - rect.top)  / rect.height) * -2 + 1
+    picker.onPointerMove({ x, y }, cam)
+  }
+
+  function _onClick(e: MouseEvent): void {
+    if (!_canvas) return
+    const cam = getActiveCamera()
+    const rect = _canvas.getBoundingClientRect()
+    const x = ((e.clientX - rect.left) / rect.width)  * 2 - 1
+    const y = ((e.clientY - rect.top)  / rect.height) * -2 + 1
+    picker.onClick({ x, y }, cam)
+  }
+
+  function _onPointerLeave(): void {
+    picker.clearHover()
+  }
 
   function getActiveCamera(): THREE.Camera {
     return useOrtho ? orthoCamera! : perspCamera!
@@ -112,6 +153,7 @@ export function createSceneManager(): SceneManager {
   return {
     mount(canvas: HTMLCanvasElement, cb: SceneCallbacks = {}): void {
       callbacks = cb
+      _canvas = canvas
 
       // --- Renderer ---
       renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
@@ -148,6 +190,11 @@ export function createSceneManager(): SceneManager {
       controls.dampingFactor = 0.08
       controls.addEventListener('change', markDirty)
 
+      // --- Picking event listeners ---
+      canvas.addEventListener('pointermove', _onPointerMove)
+      canvas.addEventListener('click', _onClick)
+      canvas.addEventListener('pointerleave', _onPointerLeave)
+
       // --- Start render loop ---
       dirty = true
       renderLoop()
@@ -157,6 +204,14 @@ export function createSceneManager(): SceneManager {
       if (animFrameId !== null) cancelAnimationFrame(animFrameId)
       animFrameId = null
       controls?.dispose()
+      // Remove picking event listeners
+      if (_canvas) {
+        _canvas.removeEventListener('pointermove', _onPointerMove)
+        _canvas.removeEventListener('click', _onClick)
+        _canvas.removeEventListener('pointerleave', _onPointerLeave)
+        _canvas = null
+      }
+      picker.clear()
       renderer?.dispose()
       renderer = null
       scene = null
@@ -176,6 +231,9 @@ export function createSceneManager(): SceneManager {
 
     loadBoard(board: BoardModel): void {
       if (!scene) return
+
+      // Clear picking registrations before rebuilding geometry
+      picker.clear()
 
       // Remove previous substrate
       if (substrateGroup) {
@@ -242,11 +300,12 @@ export function createSceneManager(): SceneManager {
       copperGroup.position.set(-cx, -cy, copperZ)
 
       const copperMap = buildCopper(board)
-      for (const [, entry] of copperMap) {
+      for (const [netId, entry] of copperMap) {
         const mat = makeCopperMaterial()
         if (entry.F) {
           const mesh = new THREE.Mesh(entry.F, mat.clone())
           copperGroup.add(mesh)
+          picker.registerCopperMesh(mesh, netId)
         }
         if (entry.B) {
           // B-side copper is flipped below the board
@@ -254,6 +313,7 @@ export function createSceneManager(): SceneManager {
           const mesh = new THREE.Mesh(entry.B, bMat)
           mesh.position.z = -copperZ  // offset to the back face
           copperGroup.add(mesh)
+          picker.registerCopperMesh(mesh, netId)
         }
       }
 
@@ -263,6 +323,7 @@ export function createSceneManager(): SceneManager {
         // Offset vias to board center
         viaResult.mesh.position.set(-cx, -cy, 0)
         scene.add(viaResult.mesh)
+        picker.registerViaInstance(viaResult.mesh, viaResult.netIds)
       }
 
       scene.add(copperGroup)
@@ -284,6 +345,7 @@ export function createSceneManager(): SceneManager {
         mesh.position.set(entry.worldX, entry.worldY, entry.worldZ)
         mesh.userData = { ref: entry.ref, className: entry.className }
         componentGroup.add(mesh)
+        picker.registerComponentBox(mesh, entry.ref)
       }
       scene.add(componentGroup)
 
@@ -349,6 +411,10 @@ export function createSceneManager(): SceneManager {
 
     invalidate(): void {
       dirty = true
+    },
+
+    clearHover(): void {
+      picker.clearHover()
     },
   }
 }
