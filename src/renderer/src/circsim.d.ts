@@ -29,6 +29,14 @@ interface CircsimCrashedPayload {
   willRespawn: boolean
 }
 
+interface CircsimLicenseTexts {
+  appVersion: string
+  appLicense: string
+  ngspiceCopying: string
+  licensingDoc: string
+  modelProvenance: string
+}
+
 declare global {
   interface Window {
     circsim: {
@@ -43,6 +51,11 @@ declare global {
        * Wired from the fidelity banner and About panel (Task 28, Spec §12, §16 risk 7).
        */
       openDocs(): Promise<void>
+      /**
+       * Licensing texts for the About dialog (Task 27, Spec §14): app license,
+       * verbatim ngspice COPYING, model-library provenance, docs/licensing.md.
+       */
+      getLicenseTexts(): Promise<CircsimLicenseTexts>
     }
   }
 }

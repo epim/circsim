@@ -1,0 +1,148 @@
+# electron-builder configuration — circsim packaging (Task 27, Spec §14, §15).
+#
+# CRITICAL packaging facts encoded here:
+#
+#  1. NATIVE LIBS LIVE OUTSIDE ASAR. ngspice.dll / libngspice.{dylib,so}, the
+#     XSPICE *.cm code models, and the koffi *.node addon CANNOT be loaded from
+#     inside an asar archive (asar is a read-only virtual fs; dlopen/LoadLibrary
+#     need a real path). We therefore:
+#       - keep asar:true for app JS (smaller, tamper-resistant),
+#       - ship ngspice/models/sample/docs via `extraResources` (copied verbatim
+#         into the packaged app's `resources/` dir, never asar-packed),
+#       - asarUnpack koffi so its prebuilt .node addons land in
+#         resources/app.asar.unpacked/node_modules/koffi/... with real paths.
+#
+#  2. PACKAGED PATH RESOLUTION. ngspiceFfi.resolveNgspicePaths() looks for
+#     `process.resourcesPath/ngspice/<platform>/` in a packaged app. The
+#     `extraResources` `to:` targets below place each platform's ngspice dir at
+#     exactly `<resources>/ngspice/<platform>/`, so the resolver finds
+#     ngspice.dll + lib/ngspice/*.cm and the runtime spinit bootstrap writes
+#     ABSOLUTE codemodel paths into those files. This is the #1 packaging
+#     failure mode (works in dev, .cm silently missing when packaged).
+#
+#  3. PER-PLATFORM ngspice ONLY. The common resources (models/sample/docs) are
+#     at the top level and apply to every target. Each platform block adds ONLY
+#     its own ngspice dir via its own `extraResources` (electron-builder
+#     CONCATENATES top-level + platform-specific extraResources — verified in
+#     app-builder-lib/out/fileMatcher.js getFileMatchers). So a Windows build
+#     bundles only resources/ngspice/win32-x64, a mac build only its arch dir,
+#     etc. — no cross-platform native libs in any installer.
+
+appId: ai.circsim.app
+productName: circsim
+copyright: Copyright © 2026 circsim contributors (MIT)
+
+# Where electron-vite emits the built main/preload/renderer/simhost bundles.
+directories:
+  output: dist
+  buildResources: build
+
+# App code goes into asar; the koffi native addon must be unpacked so its
+# prebuilt *.node files load by real path at runtime.
+asar: true
+asarUnpack:
+  - "node_modules/koffi/**"
+
+# Only ship what the app actually needs from the source tree. electron-vite
+# outputs to out/; package.json `main` points at out/main/index.js.
+files:
+  - "out/**"
+  - "package.json"
+  - "!**/*.map"
+  - "!**/__tests__/**"
+  - "!**/*.test.*"
+
+# Common resources for EVERY platform (copied to <resources>/ outside asar).
+#  - models  → <resources>/models   (bundled SPICE library; .lib + index.json)
+#  - sample  → <resources>/sample   (blinker-555 first-run project)
+#  - docs    → <resources>/docs      (what-circsim-can-tell-you.md, licensing.md
+#                                      — opened by openDocs / shown in About)
+extraResources:
+  - from: resources/models
+    to: models
+    filter:
+      - "**/*"
+  - from: resources/sample
+    to: sample
+    filter:
+      - "**/*"
+  - from: docs/what-circsim-can-tell-you.md
+    to: docs/what-circsim-can-tell-you.md
+  - from: docs/licensing.md
+    to: docs/licensing.md
+  - from: resources/ngspice/COPYING
+    to: ngspice/COPYING
+  - from: resources/ngspice/README.md
+    to: ngspice/README.md
+
+# ─── Windows: NSIS installer, x64 ────────────────────────────────────────────
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # Bundle ONLY the Windows ngspice dir (ngspice.dll + libomp140 + lib/ngspice/*.cm).
+  extraResources:
+    - from: resources/ngspice/win32-x64
+      to: ngspice/win32-x64
+      filter:
+        - "**/*"
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+
+# ─── macOS: dmg, x64 + arm64 ─────────────────────────────────────────────────
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  # Both mac archs share the same dmg config; the matching arch's ngspice dir is
+  # what exists on each runner (macos-15-intel builds darwin-x64; macos-14 builds
+  # darwin-arm64). Both `from:` dirs are listed; electron-builder skips a missing
+  # source with a warning, so each runner ships only the arch it actually built.
+  extraResources:
+    - from: resources/ngspice/darwin-x64
+      to: ngspice/darwin-x64
+      filter:
+        - "**/*"
+    - from: resources/ngspice/darwin-arm64
+      to: ngspice/darwin-arm64
+      filter:
+        - "**/*"
+  # Signing/notarization is a documented release-blocker TODO (Spec §15);
+  # unsigned dmg is the v1 distribution form.
+  identity: null
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+# ─── Linux: AppImage + deb, x64 ──────────────────────────────────────────────
+linux:
+  category: Development
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  extraResources:
+    - from: resources/ngspice/linux-x64
+      to: ngspice/linux-x64
+      filter:
+        - "**/*"
+
+appImage:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+deb:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+# Unsigned builds for v1; publish is wired to GitHub releases on tags (CI).
+publish: null

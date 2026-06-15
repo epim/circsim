@@ -51,6 +51,14 @@ export interface SimhostCrashedPayload {
   willRespawn: boolean
 }
 
+export interface LicenseTexts {
+  appVersion: string
+  appLicense: string
+  ngspiceCopying: string
+  licensingDoc: string
+  modelProvenance: string
+}
+
 // ─── Internal state: latest port from the handshake ───────────────────────────
 
 /** Resolvers waiting for the first/next port. */
@@ -173,5 +181,14 @@ contextBridge.exposeInMainWorld('circsim', {
    */
   openDocs: (): Promise<void> => {
     return ipcRenderer.invoke('circsim:openDocs') as Promise<void>
+  },
+
+  /**
+   * Return the licensing texts for the About dialog (Task 27, Spec §14):
+   * app version + license, the verbatim ngspice COPYING text, the bundled
+   * model-library provenance statement, and docs/licensing.md.
+   */
+  getLicenseTexts: (): Promise<LicenseTexts> => {
+    return ipcRenderer.invoke('circsim:getLicenseTexts') as Promise<LicenseTexts>
   },
 })

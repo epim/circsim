@@ -18,6 +18,7 @@ import Toolbar from './panels/Toolbar'
 import WarningsBar from './panels/WarningsBar'
 import SimLog from './panels/SimLog'
 import Scope from './panels/Scope'
+import About from './panels/About'
 import { AppStoreProvider, useApp, useAppStoreApi } from './store/storeContext'
 import type { AppStore } from './store/appStore'
 import { resolutionSummary } from './store/appStore'
@@ -50,6 +51,9 @@ function Shell(): React.ReactElement {
   // voltage once an op result is in, so the primary scenario lights up the copper.
   const [overlay, setOverlay] = useState<OverlayMode>('realistic')
 
+  // About dialog (licensing surfacing — Task 27, Spec §14).
+  const [aboutOpen, setAboutOpen] = useState(false)
+
   // When an op result first arrives, snap the overlay to voltage (Spec §4 step 4).
   // Intentionally keyed only on opVoltages so manual overlay changes stick after.
   const overlayRef = React.useRef(overlay)
@@ -80,6 +84,22 @@ function Shell(): React.ReactElement {
       schematicFileName: opened.schematicFileName,
       bomText: opened.bomText,
     })
+  }, [store])
+
+  /** Open the bundled sample project (first-run CTA — Spec §11, Task 26). */
+  const handleOpenSample = useCallback(async () => {
+    try {
+      const samplePath = await window.circsim.getSampleProjectPath()
+      const opened = await openProjectFromPath(samplePath, window.circsim.readFile)
+      store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+        schematicText: opened.schematicText,
+        schematicFileName: opened.schematicFileName,
+        bomText: opened.bomText,
+      })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[circsim] Failed to open sample project:', err)
+    }
   }, [store])
 
   const handlePick = useCallback(
@@ -182,7 +202,17 @@ function Shell(): React.ReactElement {
             viewer-only
           </span>
         )}
+        <button
+          style={{ ...toolbarBtn, marginLeft: 'auto' }}
+          onClick={() => setAboutOpen(true)}
+          data-testid="about-btn"
+          title="Licenses & provenance"
+        >
+          About
+        </button>
       </header>
+
+      <About open={aboutOpen} onClose={() => setAboutOpen(false)} />
 
       {/* Simulation toolbar: Power On · Run/Pause · pace · overlay (Spec §11). */}
       <Toolbar overlay={overlay} onOverlay={setOverlay} />
@@ -223,7 +253,7 @@ function Shell(): React.ReactElement {
                 overlay={overlay}
               />
             ) : (
-              <EmptyState onOpen={handleOpen} />
+              <EmptyState onOpen={handleOpen} onOpenSample={handleOpenSample} />
             )}
             {selectedRef && (
               <div style={selectionBadge}>Selected: {selectedRef}</div>
@@ -251,16 +281,28 @@ function Shell(): React.ReactElement {
   )
 }
 
-function EmptyState({ onOpen }: { onOpen: () => void }): React.ReactElement {
+function EmptyState({ onOpen, onOpenSample }: { onOpen: () => void; onOpenSample: () => void }): React.ReactElement {
   return (
     <div style={emptyStateStyle}>
       <div style={{ fontSize: 18, marginBottom: 8 }}>No board loaded</div>
       <div style={{ color: '#888', marginBottom: 16 }}>
         Open a <code>.kicad_pcb</code> file, or drag one onto the window.
       </div>
-      <button style={{ ...toolbarBtn, padding: '8px 16px' }} onClick={onOpen}>
-        Open…
-      </button>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <button style={{ ...toolbarBtn, padding: '8px 16px' }} onClick={onOpen}>
+          Open…
+        </button>
+        <button
+          style={{ ...toolbarBtn, padding: '8px 16px', background: '#1e3a2e', borderColor: '#2a5a3a' }}
+          onClick={onOpenSample}
+          data-testid="open-sample-btn"
+        >
+          Open sample project
+        </button>
+      </div>
+      <div style={{ color: '#555', marginTop: 10, fontSize: 12 }}>
+        Try the bundled 555 LED blinker to see the full simulation flow.
+      </div>
     </div>
   )
 }

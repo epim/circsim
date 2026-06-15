@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   pull_request:
     branches: [main, master]
 
@@ -102,9 +103,159 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # License-hygiene gate (Task 27, Spec §14): every resources/models/* file
+      # carries a Provenance: header; no table.cm in any platform ngspice dir.
+      # Fails the build on a violation (also unit-tested in the suite below).
+      - name: License hygiene check
+        run: npm run license:check
+
       - name: Test (unit + ngspice resources)
         run: npm test
 
       - name: Test integration (requires ngspice resources)
         run: npm run test:integration
         continue-on-error: false
+
+  # ===========================================================================
+  # Release job (Task 27, Spec §15) — tag-triggered only.
+  #
+  # Builds the installer matrix and attaches the artifacts to the GitHub release
+  # for the pushed tag. Each runner fetches/builds ONLY its own ngspice, then
+  # electron-builder bundles that platform's binaries (per electron-builder.yml's
+  # per-platform extraResources). Builds are UNSIGNED for v1 (signing is the one
+  # documented deferral — see docs/licensing.md).
+  #
+  # Matrix:
+  #   windows-latest   → NSIS .exe (x64)
+  #   macos-15-intel   → .dmg (x64)
+  #   macos-14         → .dmg (arm64)
+  #   ubuntu-latest    → AppImage + .deb (x64)
+  # ===========================================================================
+  release:
+    name: Release (${{ matrix.os }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write # attach artifacts to the GitHub release
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-15-intel
+          - macos-14
+          - ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Read ngspice version
+        id: ngspice-version
+        shell: bash
+        run: |
+          VERSION="$(node -e "console.log(require('./package.json').config?.circsim?.ngspiceVersion ?? '46')")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # ngspice cache (same keys as the test job, so a release reuses the cache).
+      - name: Cache ngspice binaries (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        id: cache-ngspice-win
+        with:
+          path: resources/ngspice/win32-x64
+          key: ngspice-win32-x64-v${{ steps.ngspice-version.outputs.version }}
+
+      - name: Cache ngspice binaries (macOS x64)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        uses: actions/cache@v4
+        id: cache-ngspice-darwin-x64
+        with:
+          path: resources/ngspice/darwin-x64
+          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}
+
+      - name: Cache ngspice binaries (macOS arm64)
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        uses: actions/cache@v4
+        id: cache-ngspice-darwin-arm64
+        with:
+          path: resources/ngspice/darwin-arm64
+          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}
+
+      - name: Cache ngspice binaries (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        id: cache-ngspice-linux
+        with:
+          path: resources/ngspice/linux-x64
+          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}
+
+      - name: Install macOS build tools (macOS only)
+        if: runner.os == 'macOS' && (steps.cache-ngspice-darwin-x64.outputs.cache-hit != 'true' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true')
+        run: brew install autoconf automake libtool
+
+      - name: Install Linux build tools (Linux only)
+        if: runner.os == 'Linux' && steps.cache-ngspice-linux.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y autoconf automake libtool libfftw3-dev bison flex
+
+      - name: Fetch ngspice DLL (Windows)
+        if: runner.os == 'Windows' && steps.cache-ngspice-win.outputs.cache-hit != 'true'
+        run: npm run fetch:ngspice
+
+      - name: Build ngspice from source (macOS / Linux)
+        if: runner.os != 'Windows' && (steps.cache-ngspice-darwin-x64.outputs.cache-hit != 'true' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true' && steps.cache-ngspice-linux.outputs.cache-hit != 'true')
+        shell: bash
+        run: bash scripts/build-ngspice.sh
+
+      # Guard: never package a non-compliant bundle.
+      - name: License hygiene check
+        run: npm run license:check
+
+      # Build the app bundles (main/preload/renderer/simhost) then the installer.
+      - name: Build app bundles
+        run: npm run build
+
+      - name: Package installers (electron-builder)
+        # GH_TOKEN lets electron-builder publish artifacts to the release when
+        # invoked with --publish; we publish explicitly below via softprops to
+        # keep the matrix outputs in one release. Here we only build (--publish never).
+        run: npx electron-builder --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload build artifacts (CI retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: circsim-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: warn
+
+      - name: Attach installers to GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
+          draft: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

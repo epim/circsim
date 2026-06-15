@@ -120,6 +120,45 @@ function registerIpcHandlers(): void {
       // the promise still resolves so the UI doesn't stall.
     }
   })
+
+  /**
+   * Return the licensing texts surfaced in the About dialog (Task 27, Spec §14):
+   *  - appVersion + appLicense (MIT)
+   *  - ngspiceCopying: the verbatim ngspice COPYING file shipped beside the
+   *    binaries (resources/ngspice/COPYING in dev; <resources>/ngspice/COPYING
+   *    when packaged via extraResources)
+   *  - modelProvenance: the in-house model-library provenance statement
+   *  - licensingDoc: docs/licensing.md (the Spec §14 table, expanded)
+   * Each text read is best-effort; a missing file yields an empty string rather
+   * than rejecting (the About panel falls back to its built-in summary).
+   */
+  ipcMain.handle('circsim:getLicenseTexts', async () => {
+    const resBase = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources')
+    const docBase = app.isPackaged ? join(process.resourcesPath, 'docs') : join(app.getAppPath(), 'docs')
+    const tryRead = async (p: string): Promise<string> => {
+      try {
+        return (await readFile(p)).toString('utf8')
+      } catch {
+        return ''
+      }
+    }
+    const [ngspiceCopying, licensingDoc] = await Promise.all([
+      tryRead(join(resBase, 'ngspice', 'COPYING')),
+      tryRead(join(docBase, 'licensing.md'))
+    ])
+    return {
+      appVersion: app.getVersion(),
+      appLicense: 'MIT',
+      ngspiceCopying,
+      licensingDoc,
+      modelProvenance:
+        'The bundled SPICE model library was written in-house for circsim from ' +
+        'public datasheet parameters and is MIT-licensed. Each file in ' +
+        'resources/models/ carries a "Provenance:" header. No vendor (TI/ADI/' +
+        'onsemi) or Micro-Cap/Intusoft model text is included. The GPL-encumbered ' +
+        'ngspice "table.cm" code model is excluded from every platform bundle.'
+    }
+  })
 }
 
 // ─── App lifecycle ────────────────────────────────────────────────────────────
@@ -129,12 +168,15 @@ app.whenReady().then(async () => {
 
   mainWindow = createWindow()
 
-  // Build the simhost output path. electron-vite places it at:
-  //   <app root>/out/simhost/index.js  (dev layout)
-  //   resources/app.asar/../simhost/index.js  (packaged — adjustable)
-  const simhostPath = app.isPackaged
-    ? join(process.resourcesPath, 'app', 'out', 'simhost', 'index.js')
-    : join(app.getAppPath(), 'out', 'simhost', 'index.js')
+  // Build the simhost output path. `app.getAppPath()` resolves correctly in BOTH
+  // layouts: the project root in dev, and `.../resources/app.asar` in a packaged
+  // app (asar:true). utilityProcess.fork can load a script from inside asar, and
+  // the simhost bundle's `require('koffi')` is redirected to the asarUnpack'd
+  // copy (app.asar.unpacked/node_modules/koffi) by Electron's asar integration —
+  // the koffi *.node addon must load from a real path, never from inside asar.
+  // (Earlier this used `process.resourcesPath/app/out/...`, which only exists
+  // when asar is disabled; with asar:true that path is wrong.)
+  const simhostPath = join(app.getAppPath(), 'out', 'simhost', 'index.js')
 
   // Boot the supervisor. The `onSimhostCrashed` callback delivers the crash
   // notification via contextBridge (not the dead MessagePort — Spec §6.1).

@@ -17,7 +17,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "fetch:ngspice": "node scripts/fetch-ngspice.mjs",
-    "test:integration": "vitest run --reporter=verbose .integration.test"
+    "test:integration": "vitest run --reporter=verbose .integration.test",
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "license:check": "node scripts/license-hygiene.mjs",
+    "package": "npm run build && electron-builder",
+    "package:dir": "npm run build && electron-builder --dir"
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
@@ -31,6 +35,8 @@
   "devDependencies": {
     "@electron-toolkit/eslint-config-ts": "^2.0.0",
     "@electron-toolkit/tsconfig": "^1.0.1",
+    "@playwright/test": "^1.60.0",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.12.7",
     "@types/react": "^18.2.79",
     "@types/react-dom": "^18.2.25",
@@ -44,6 +50,7 @@
     "electron-builder": "^24.13.3",
     "electron-vite": "^2.1.0",
     "eslint": "^8.57.0",
+    "js-yaml": "^4.2.0",
     "typescript": "^5.4.5",
     "vite": "^5.2.11",
     "vitest": "^1.5.0"
