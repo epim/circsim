@@ -30,7 +30,9 @@ import type { Instrument } from '../instruments'
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function goldenFile(name: string): string {
-  return readFileSync(join(__dirname, 'golden', name), 'utf8').trimEnd()
+  // Normalize CRLF→LF: git may check these text files out with CRLF on Windows,
+  // but generated decks use LF. Comparison must be line-ending-agnostic.
+  return readFileSync(join(__dirname, 'golden', name), 'utf8').replace(/\r\n/g, '\n').trimEnd()
 }
 
 /**

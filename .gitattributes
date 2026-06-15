@@ -1,0 +1,17 @@
+# Enforce LF for all text so SPICE decks, fixtures, and golden files compare
+# identically across Windows/macOS/Linux (generated decks use LF).
+* text=auto eol=lf
+
+# Treat ngspice binaries and 3D assets as binary (never normalize)
+*.dll binary
+*.cm binary
+*.7z binary
+*.wrl binary
+*.step binary
+*.stp binary
+
+# Golden test decks and KiCad fixtures are LF, always
+*.kicad_pcb text eol=lf
+*.kicad_sch text eol=lf
+*.lib text eol=lf
+src/core/spicegen/__tests__/golden/* text eol=lf
