@@ -1,0 +1,15 @@
+node_modules/
+out/
+dist/
+dist-electron/
+*.log
+.DS_Store
+resources/ngspice/win32-x64/
+resources/ngspice/darwin-x64/
+resources/ngspice/darwin-arm64/
+resources/ngspice/linux-x64/
+.vite/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo

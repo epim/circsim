@@ -193,7 +193,7 @@ Pass criterion: transient runs and `v(out)` ends ≥ 4.5 V. (XSPICE `a` elements
 
 ### 7.3 Binary acquisition (per platform, done in CI — see §15)
 
-- **Windows x64:** official prebuilt release archive from SourceForge (contains `ngspice.dll` + `.cm` files).
+- **Windows x64:** official prebuilt **shared-library** archive from SourceForge — `ngspice-<ver>_dll_64.7z` (the plain `ngspice-<ver>_64.7z` has the executables but no DLL). Contains `ngspice.dll` + its `libomp140.x86_64.dll` companion + `.cm` files. See plan Task 8 for verified URL/paths.
 - **macOS x64/arm64, Linux x64:** build from source in CI: `./configure --with-ngshared --enable-xspice --enable-cider --with-x=no --disable-debug && make -j`. **The shared-library flag is `--with-ngshared`** (`--with-ngspice-lib` does not exist; a wrong flag silently produces an executable instead of `libngspice.{dylib,so}`). The build script must verify the output is actually a shared library (`file` says "shared object"/"dynamically linked shared library"). Do not use Homebrew: its formula does not build the shared library at all, regardless of version.
 - Pin the ngspice version in one config file; binaries land in `resources/ngspice/<platform>/`.
 
