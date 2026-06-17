@@ -284,6 +284,67 @@ describe('parseBoard — TrackSegment discriminated union', () => {
   })
 })
 
+// ─── KiCad 9 / 2026 name-only net format ──────────────────────────────────────
+
+describe('parseBoard — KiCad 9 (2026) name-only net format', () => {
+  const FIXTURE_V9_PATH = join(__dirname, '../../../../fixtures/fixture-rc-v9.kicad_pcb')
+  const fixtureV9Text = readFileSync(FIXTURE_V9_PATH, 'utf-8')
+
+  it('synthesizes a net table from name-only references (no top-level net table)', () => {
+    // KiCad 9/2026 dropped the numeric net id AND the top-level net table:
+    // every reference is `(net "NAME")`. The parser must synthesize ids so the
+    // rest of the pipeline (which keys on numeric ids) keeps working.
+    const board = parseBoard(fixtureV9Text)
+    // 3 distinct named nets: VIN, OUT, GND. The empty net is never referenced.
+    expect(board.netById.size).toBe(3)
+    const names = [...board.netById.values()].map(n => n.name).sort()
+    expect(names).toEqual(['GND', 'OUT', 'VIN'])
+    // Synthesized ids are positive integers, all distinct.
+    const ids = [...board.netById.keys()]
+    expect(ids.every(id => Number.isInteger(id) && id > 0)).toBe(true)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('assigns the SAME synthesized id to every reference of one net name', () => {
+    // The connectivity guarantee: R1.pad2, R2.pad1, the segment and the via all
+    // name "OUT", so they must all resolve to one shared id.
+    const board = parseBoard(fixtureV9Text)
+    const r1 = board.footprints[0]
+    const r2 = board.footprints[1]
+    const r1Pad2 = r1.pads.find(p => p.number === '2')!
+    const r2Pad1 = r2.pads.find(p => p.number === '1')!
+    expect(r1Pad2.netId).toBeDefined()
+    expect(r1Pad2.netId).toBe(r2Pad1.netId)
+
+    const seg = board.tracks[0]
+    expect(seg.netId).toBe(r1Pad2.netId)
+    expect(board.vias[0].netId).toBe(r1Pad2.netId)
+
+    // And that shared id maps back to "OUT" in the synthesized table.
+    expect(board.netById.get(r1Pad2.netId!)!.name).toBe('OUT')
+  })
+
+  it('distinct net names get distinct ids (VIN ≠ OUT ≠ GND)', () => {
+    const board = parseBoard(fixtureV9Text)
+    const r1 = board.footprints[0]
+    const r2 = board.footprints[1]
+    const vin = r1.pads.find(p => p.number === '1')!.netId
+    const out = r1.pads.find(p => p.number === '2')!.netId
+    const gnd = r2.pads.find(p => p.number === '2')!.netId
+    expect(new Set([vin, out, gnd]).size).toBe(3)
+    expect(board.netById.get(vin!)!.name).toBe('VIN')
+    expect(board.netById.get(gnd!)!.name).toBe('GND')
+  })
+
+  it('still parses footprints, tracks and vias from the v9 file', () => {
+    const board = parseBoard(fixtureV9Text)
+    expect(board.footprints).toHaveLength(2)
+    expect(board.footprints[0].ref).toBe('R1')
+    expect(board.tracks).toHaveLength(1)
+    expect(board.vias).toHaveLength(1)
+  })
+})
+
 // ─── pad rotDeg default ───────────────────────────────────────────────────────
 
 describe('parseBoard — pad rotDeg default', () => {

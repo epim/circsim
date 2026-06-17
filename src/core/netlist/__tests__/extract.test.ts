@@ -187,6 +187,47 @@ describe('extract() — fixture-rc', () => {
   })
 })
 
+// ─── KiCad 9 (2026) name-only net format ──────────────────────────────────────
+
+describe('extract() — fixture-rc-v9 (KiCad 9 name-only nets)', () => {
+  const board = loadBoard('fixture-rc-v9.kicad_pcb')
+  const circuit = extract(board)
+
+  it('extracts the SAME 3-net topology as the legacy id-based fixture', () => {
+    expect(circuit.nets).toHaveLength(3)
+    const names = circuit.nets.map(n => n.kicadName).sort()
+    expect(names).toEqual(['GND', 'OUT', 'VIN'])
+  })
+
+  it('OUT net joins R1.pad2 and R2.pad1 (connectivity survived the name-only format)', () => {
+    const out = circuit.nets.find(n => n.kicadName === 'OUT')!
+    expect(out.padRefs).toEqual(
+      expect.arrayContaining([
+        { ref: 'R1', pad: '2' },
+        { ref: 'R2', pad: '1' },
+      ])
+    )
+    expect(out.padRefs).toHaveLength(2)
+    expect(out.spiceNode).toBe('out')
+  })
+
+  it('builds correct padNet maps for both resistors', () => {
+    const r1 = circuit.parts.find(p => p.ref === 'R1')!
+    const r2 = circuit.parts.find(p => p.ref === 'R2')!
+    // R1.pad2 and R2.pad1 share OUT's synthesized id; R1.pad1=VIN, R2.pad2=GND.
+    expect(r1.padNet.get('2')).toBe(r2.padNet.get('1'))
+    expect(r1.padNet.get('1')).not.toBe(r1.padNet.get('2'))
+    expect(r2.padNet.get('1')).not.toBe(r2.padNet.get('2'))
+  })
+
+  it('ground designation still maps the GND net to spiceNode "0"', () => {
+    const gnd = Array.from(board.netById.values()).find(n => n.name === 'GND')!
+    const c2 = extract(board, { groundNetId: gnd.id })
+    const gndNet = c2.nets.find(n => n.kicadName === 'GND')!
+    expect(gndNet.spiceNode).toBe('0')
+  })
+})
+
 // ─── ground designation ───────────────────────────────────────────────────────
 
 describe('extract() with ground designation', () => {
@@ -406,6 +447,22 @@ describe('suggestGround()', () => {
     ]
     expect(suggestGround(nets)).toBeUndefined()
   })
+
+  it('matches hierarchical sheet-prefixed names (/GND)', () => {
+    // Real KiCad boards label nets from global/hierarchical labels with a sheet
+    // path prefix: the root-sheet GND net is named "/GND", not "GND".
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: '/GND', spiceNode: '_gnd', padRefs: [] },
+    ]
+    expect(suggestGround(nets)?.kicadName).toBe('/GND')
+  })
+
+  it('matches deeply-nested sheet paths (/Power/AGND)', () => {
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: '/Power/AGND', spiceNode: '_power_agnd', padRefs: [] },
+    ]
+    expect(suggestGround(nets)?.kicadName).toBe('/Power/AGND')
+  })
 })
 
 // ─── suggestSupplies ─────────────────────────────────────────────────────────
@@ -474,6 +531,18 @@ describe('suggestSupplies()', () => {
       { id: 1, kicadName: 'OUT', spiceNode: 'out', padRefs: [] },
     ]
     expect(suggestSupplies(nets)).toHaveLength(0)
+  })
+
+  it('matches hierarchical sheet-prefixed names (/VCC, /Power/+5V)', () => {
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: '/VCC', spiceNode: '_vcc', padRefs: [] },
+      { id: 2, kicadName: '/Power/+5V', spiceNode: '_power__5v', padRefs: [] },
+      { id: 3, kicadName: '/SIGNAL_OUT', spiceNode: '_signal_out', padRefs: [] },
+    ]
+    const names = suggestSupplies(nets).map(n => n.kicadName)
+    expect(names).toContain('/VCC')
+    expect(names).toContain('/Power/+5V')
+    expect(names).not.toContain('/SIGNAL_OUT')
   })
 })
 

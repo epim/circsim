@@ -159,18 +159,32 @@ export function extract(board: BoardModel, opts: ExtractOptions = {}): Circuit {
 // ─── ground / supply heuristics ──────────────────────────────────────────────
 
 /**
+ * The "leaf" of a KiCad net name. Real boards label nets from global /
+ * hierarchical labels with a sheet-path prefix — the root-sheet GND net is
+ * named "/GND" and a sub-sheet rail "/Power/+5V". The heuristics below match on
+ * the final path segment so "/GND" still reads as ground and "/Power/+5V" as a
+ * supply. A bare name (no slash) is returned unchanged.
+ */
+function leafNetName(name: string): string {
+  const parts = name.split('/').filter(p => p.length > 0)
+  return parts.length > 0 ? parts[parts.length - 1] : name
+}
+
+/**
  * Suggest which net is the ground reference.
- * Matches (case-insensitive): GND, AGND, DGND, VSS, 0V
+ * Matches (case-insensitive): GND, AGND, DGND, VSS, 0V — including hierarchical
+ * forms like "/GND" or "/Power/AGND".
  */
 export function suggestGround(nets: CircuitNet[]): CircuitNet | undefined {
   const GROUND_NAMES = /^(gnd|agnd|dgnd|vss|0v)$/i
-  return nets.find(n => GROUND_NAMES.test(n.kicadName))
+  return nets.find(n => GROUND_NAMES.test(leafNetName(n.kicadName)))
 }
 
 /**
  * Suggest which nets are power supply rails.
- * Matches (case-insensitive): VCC, VDD, 3V3, 5V, +5V, +3.3V, 12V, and
- * general patterns like \+?\d+V\d* or \d+V\d*.
+ * Matches (case-insensitive): VCC, VDD, 3V3, 5V, +5V, +3.3V, 12V, and general
+ * patterns like \+?\d+V\d* or \d+V\d* — including hierarchical forms like
+ * "/VCC" or "/Power/+5V".
  */
 export function suggestSupplies(nets: CircuitNet[]): CircuitNet[] {
   // Named keywords (case-insensitive)
@@ -179,7 +193,7 @@ export function suggestSupplies(nets: CircuitNet[]): CircuitNet[] {
   const SUPPLY_VOLTAGE = /^\+?\d+(\.\d+)?v\d*$/i
 
   return nets.filter(n => {
-    const name = n.kicadName
+    const name = leafNetName(n.kicadName)
     return SUPPLY_NAMES.test(name) || SUPPLY_VOLTAGE.test(name)
   })
 }

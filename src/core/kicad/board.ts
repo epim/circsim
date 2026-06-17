@@ -92,23 +92,92 @@ function isSilkscreen(layer: string): boolean {
 
 // ─── net parsing ──────────────────────────────────────────────────────────────
 
-function parseNets(root: SExpr): Map<number, { id: number; name: string }> {
-  const netById = new Map<number, { id: number; name: string }>()
-  if (!Array.isArray(root)) return netById
-  for (const child of root) {
-    if (!Array.isArray(child) || child[0] !== 'net') continue
-    const id = numAtom(child, 1)
-    const name = strAtom(child, 2)
-    // Skip net 0 (the empty net)
-    if (id === 0) continue
-    netById.set(id, { id, name })
+/**
+ * Resolves `(net ...)` nodes to numeric net ids across BOTH KiCad formats:
+ *
+ *  - KiCad 6–8 (legacy): a top-level net table of `(net <id> "<name>")`, with
+ *    references `(net <id> "<name>")` on pads and `(net <id>)` on tracks/vias.
+ *    The numeric id is authoritative.
+ *
+ *  - KiCad 9 / 2026 (version 20260206): the numeric id AND the top-level net
+ *    table were both removed. EVERY reference is name-only — `(net "<name>")` —
+ *    on pads, tracks, vias and zones.
+ *
+ * To keep the downstream pipeline (which keys connectivity on numeric net ids)
+ * working unchanged, this index synthesizes a stable id for each distinct net
+ * name encountered in the v9 format, in first-seen order. The same name always
+ * resolves to the same id within one parse, which is all connectivity needs.
+ *
+ * `byId` is the BoardModel.netById map: it accumulates every net actually
+ * referenced (legacy ids from the table, or synthesized v9 ids).
+ */
+class NetIndex {
+  readonly byId = new Map<number, { id: number; name: string }>()
+  private readonly byName = new Map<string, number>()
+  private nextSyntheticId = 1
+
+  /** Record a legacy net (explicit numeric id + name). */
+  private registerLegacy(id: number, name: string): void {
+    if (!this.byId.has(id)) this.byId.set(id, { id, name })
+    if (name !== '' && !this.byName.has(name)) this.byName.set(name, id)
+    // Keep synthesized ids from ever colliding with explicit ones.
+    if (id >= this.nextSyntheticId) this.nextSyntheticId = id + 1
   }
-  return netById
+
+  /** Resolve (or synthesize) the id for a name-only (v9) net reference. */
+  private registerByName(name: string): number {
+    const existing = this.byName.get(name)
+    if (existing !== undefined) return existing
+    const id = this.nextSyntheticId++
+    this.byName.set(name, id)
+    this.byId.set(id, { id, name })
+    return id
+  }
+
+  /**
+   * Register a top-level net-table entry (legacy files only — v9 has no table).
+   * `(net 0 "")` and empty names are skipped.
+   */
+  registerTableEntry(node: SExpr): void {
+    if (!Array.isArray(node)) return
+    const first = atom(node, 1)
+    if (typeof first === 'number') {
+      if (first === 0) return
+      this.registerLegacy(first, strAtom(node, 2))
+    } else if (typeof first === 'string' && first !== '') {
+      // Unusual, but tolerate a name-only entry appearing at the table level.
+      this.registerByName(first)
+    }
+  }
+
+  /**
+   * Resolve a `(net ...)` reference node (on a pad / track / via / zone) to a
+   * net id, registering the net if it is not yet known. Returns `undefined` for
+   * the empty net (`(net 0 …)` or `(net "")`) so callers treat it as unconnected.
+   */
+  resolve(node: SExpr): number | undefined {
+    if (!Array.isArray(node)) return undefined
+    const first = atom(node, 1)
+    if (typeof first === 'number') {
+      // Legacy reference: (net <id> ["name"]). Capture the name when present so a
+      // net referenced only by pads (never in the table) still gets a name.
+      if (first === 0) return undefined
+      const name = strAtom(node, 2)
+      this.registerLegacy(first, name)
+      return first
+    }
+    if (typeof first === 'string') {
+      // KiCad 9 / 2026 reference: (net "<name>").
+      if (first === '') return undefined
+      return this.registerByName(first)
+    }
+    return undefined
+  }
 }
 
 // ─── pad parsing ──────────────────────────────────────────────────────────────
 
-function parsePad(padNode: SExpr): Pad | null {
+function parsePad(padNode: SExpr, nets: NetIndex): Pad | null {
   if (!Array.isArray(padNode) || padNode[0] !== 'pad') return null
 
   const number = strAtom(padNode, 1)
@@ -146,13 +215,10 @@ function parsePad(padNode: SExpr): Pad | null {
     }
   }
 
-  // (net N "NAME") — netId
+  // (net N "NAME") legacy, or (net "NAME") v9 — resolved via the NetIndex.
   let netId: number | undefined
   const netNode = find(padNode, 'net')
-  if (netNode && Array.isArray(netNode)) {
-    const nid = numAtom(netNode, 1)
-    if (nid !== 0) netId = nid
-  }
+  if (netNode) netId = nets.resolve(netNode)
 
   // (drill ...) — optional
   let drill: number | undefined
@@ -166,7 +232,7 @@ function parsePad(padNode: SExpr): Pad | null {
 
 // ─── footprint parsing ────────────────────────────────────────────────────────
 
-function parseFootprint(fpNode: SExpr): Footprint | null {
+function parseFootprint(fpNode: SExpr, nets: NetIndex): Footprint | null {
   if (!Array.isArray(fpNode) || fpNode[0] !== 'footprint') return null
 
   const libId = strAtom(fpNode, 1)
@@ -203,7 +269,7 @@ function parseFootprint(fpNode: SExpr): Footprint | null {
   // Pads
   const pads: Pad[] = []
   for (const child of fpNode) {
-    const pad = parsePad(child)
+    const pad = parsePad(child, nets)
     if (pad) pads.push(pad)
   }
 
@@ -311,7 +377,7 @@ function parseFootprint(fpNode: SExpr): Footprint | null {
 
 // ─── track/arc segment parsing ────────────────────────────────────────────────
 
-function parseSegment(node: SExpr): TrackSegment | null {
+function parseSegment(node: SExpr, nets: NetIndex): TrackSegment | null {
   if (!Array.isArray(node)) return null
 
   const head = strAtom(node, 0)
@@ -322,7 +388,7 @@ function parseSegment(node: SExpr): TrackSegment | null {
     const widthMm = widthNode && Array.isArray(widthNode) ? numAtom(widthNode, 1) : 0
     const layer = parseLayer(node)
     const netNode = find(node, 'net')
-    const netId = netNode && Array.isArray(netNode) ? numAtom(netNode, 1) : 0
+    const netId = netNode ? (nets.resolve(netNode) ?? 0) : 0
     return { kind: 'segment', start, end, widthMm, layer, netId }
   }
 
@@ -334,7 +400,7 @@ function parseSegment(node: SExpr): TrackSegment | null {
     const widthMm = widthNode && Array.isArray(widthNode) ? numAtom(widthNode, 1) : 0
     const layer = parseLayer(node)
     const netNode = find(node, 'net')
-    const netId = netNode && Array.isArray(netNode) ? numAtom(netNode, 1) : 0
+    const netId = netNode ? (nets.resolve(netNode) ?? 0) : 0
     return { kind: 'arc', start, mid, end, widthMm, layer, netId }
   }
 
@@ -343,7 +409,7 @@ function parseSegment(node: SExpr): TrackSegment | null {
 
 // ─── via parsing ──────────────────────────────────────────────────────────────
 
-function parseVia(node: SExpr): Via | null {
+function parseVia(node: SExpr, nets: NetIndex): Via | null {
   if (!Array.isArray(node) || node[0] !== 'via') return null
 
   const atNode = find(node, 'at')
@@ -367,7 +433,7 @@ function parseVia(node: SExpr): Via | null {
   }
 
   const netNode = find(node, 'net')
-  const netId = netNode && Array.isArray(netNode) ? numAtom(netNode, 1) : undefined
+  const netId = netNode ? nets.resolve(netNode) : undefined
 
   return { at, sizeMm, drillMm, layers, netId }
 }
@@ -426,11 +492,11 @@ function parseBoardText(node: SExpr): BoardText | null {
 
 // ─── zone parsing ─────────────────────────────────────────────────────────────
 
-function parseZone(node: SExpr): Zone | null {
+function parseZone(node: SExpr, nets: NetIndex): Zone | null {
   if (!Array.isArray(node) || node[0] !== 'zone') return null
 
   const netNode = find(node, 'net')
-  const netId = netNode && Array.isArray(netNode) ? numAtom(netNode, 1) : undefined
+  const netId = netNode ? nets.resolve(netNode) : undefined
 
   const layer = parseLayer(node)
 
@@ -466,7 +532,14 @@ export function parseBoard(text: string): BoardModel {
   }
 
   // --- nets ---
-  const netById = parseNets(root)
+  // Register the legacy top-level net table FIRST (KiCad 6–8) so that tracks/
+  // vias, which carry only `(net <id>)` with no name, resolve to their proper
+  // names. KiCad 9/2026 files have no table — the index synthesizes ids lazily
+  // from the name-only references parsed below.
+  const nets = new NetIndex()
+  for (const child of root) {
+    if (Array.isArray(child) && child[0] === 'net') nets.registerTableEntry(child)
+  }
 
   // --- board thickness ---
   let boardThicknessMm = 1.6
@@ -481,7 +554,7 @@ export function parseBoard(text: string): BoardModel {
   // --- footprints ---
   const footprints: Footprint[] = []
   for (const child of root) {
-    const fp = parseFootprint(child)
+    const fp = parseFootprint(child, nets)
     if (fp) footprints.push(fp)
   }
 
@@ -491,7 +564,7 @@ export function parseBoard(text: string): BoardModel {
     if (!Array.isArray(child)) continue
     const head = strAtom(child, 0)
     if (head === 'segment' || head === 'arc') {
-      const track = parseSegment(child)
+      const track = parseSegment(child, nets)
       if (track) tracks.push(track)
     }
   }
@@ -499,14 +572,14 @@ export function parseBoard(text: string): BoardModel {
   // --- vias ---
   const vias: Via[] = []
   for (const child of root) {
-    const via = parseVia(child)
+    const via = parseVia(child, nets)
     if (via) vias.push(via)
   }
 
   // --- zones ---
   const zones: Zone[] = []
   for (const child of root) {
-    const zone = parseZone(child)
+    const zone = parseZone(child, nets)
     if (zone) zones.push(zone)
   }
 
@@ -552,7 +625,7 @@ export function parseBoard(text: string): BoardModel {
   const outline = stitchOutline(edgeCuts)
 
   return {
-    netById,
+    netById: nets.byId,
     footprints,
     tracks,
     vias,
