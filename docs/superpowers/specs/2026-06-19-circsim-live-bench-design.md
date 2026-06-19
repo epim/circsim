@@ -27,7 +27,9 @@ So "turn a knob → the sim updates live" is **solved at the engine level**. Wha
 3. A **potentiometer** sits on the bench with a knob. **Drag the knob** → the LED dims and brightens in real time, exactly like turning a pot on a breadboard.
 4. Plain-language readouts on hover: *"LED1: 12 mA — bright. R2 drops 3.2 V."* SPICE is never shown.
 
-**First Light demo** (the proof slice): a **pot-dimmed LED** — supply → potentiometer (rheostat) → LED → ground. Energize, dial the pot, watch brightness track the knob. This is the most visceral possible "it works!" for a breadboarder and exercises every new piece.
+**The bench-instrument framing** (preserves the "*I* connected it" feeling without board editing): the supply, the **potentiometer**, and an **LED indicator** are *bench instruments the user clips onto the board's nets* — exactly like clipping your own pot and LED to a device under test. The user attaches them by dragging onto copper (the existing instrument-attach gesture), so they did the connecting.
+
+**First Light demo** (the proof slice): a **pot-dimmed LED**. Proof-of-life ordering matters — **on/off first, then dimming**: a binary blink/toggle is unmistakable "it's alive" (dimming alone can read as a render gradient), then the pot establishes "and *I'm* controlling it." Energize, watch it light, then dial the pot and watch brightness track the knob. One verb only — **"Energize"** (retire the separate "Power On"/op-check vocabulary so newcomers aren't choosing between two power buttons).
 
 ## 3. Gaps to fill → components
 
@@ -62,15 +64,16 @@ Today the op→store mapping keeps node voltages but drops `i(...)` keys, and tr
 - A **3D grabbable knob** mesh in the viewport (picking + drag-to-rotate) as an upgrade over the 2D knob.
 - **Time control**: slow-mo / scrub to *watch* a cap charge or a 555 oscillate ("bullet-time for circuits").
 
-## 4. Phased build
+## 4. Phased build (revised per council, 2026-06-19)
 
-- **L0** — current into the store (G1) + tests. *(Also unblocks the Critic's op-fed checks.)*
-- **L1** — LED classifier + current→glow in the viewport (G2) + tests. **The wow.**
-- **L2** — potentiometer instrument end-to-end (G3) + tests.
-- **L3** — First Light demo circuit + Energize + plain-language readouts (G4) + an E2E that energizes, asserts the LED's emissive intensity rises, dials the pot, and asserts brightness changes.
-- **L4** — stretch (G5), prioritized by demo impact.
+- **L0 — de-risk spike + current lane (G1). DO THIS FIRST.** The council flagged this as the load-bearing unknown. Spike: build the First Light deck, `bg_tran`, and assert the LED branch current (`@d_d1[i]` → `i(d_d1)`) actually streams as a transient vector **with the correct sign**. Then add a device-keyed **current lane** to the transient ingestion path — today `ingestSamples` maps vectors to *nets only* and silently drops branch currents — plus op-path current/power (also unblocks the Critic's ampacity/thermal). Note: auto-probing a component injects a current-probe and currently forces a deck reload; resolve how LEDs get probed without a reload-on-energize hitch. Tests.
+- **L1 — LED glow WITH bloom (G2).** Classify LEDs; current→intensity curve; drive the LED body emissive **and a bloom/halo sprite** so the eye reads "bright," not a value field. **Bloom is core, not stretch.** Tests.
+- **L2 — potentiometer + grabbable 3D knob (G3).** The pot instrument (alter-safe resistor) **and a grabbable 3D knob ON the part** (picking + drag-to-rotate). The on-part 3D knob is core to the tactile feeling — **not deferred**; a 2D knob is only a fallback. Add the resistor `alter` branch to `alterPlan` (today it falls through to a reload). Tests.
+- **L3 — First Light + on-ramp (G4).** Demo + the single **"Energize"** verb + plain-language readouts + the **"why isn't it glowing?" coach** for the dark-LED case (wrong polarity / no current-limit). On/off before dimming. E2E gate.
+- **L4 — gallery + your-own-board (power/comprehensiveness).** A curated gallery of delightful demos (555 blink, voltage divider, transistor switch) **and "energize MY OWN KiCad board."** Surface the op-fed Critic findings (ampacity/thermal) as the visible "this is powerful" signal — don't stake the whole product on one toy.
+- **L5 — stretch:** current-flow overlay, time control (slow-mo / scrub).
 
-**First deliverable (vertical proof):** L0+L1+L2+L3 minimal = the pot-dimmed LED you energize and dial live, LED brightness visibly tracking the knob in 3D.
+**First deliverable (vertical proof):** L0+L1+L2+L3 = the pot-dimmed LED you energize and dial live, with a blooming LED whose brightness tracks a grabbable on-part knob in 3D.
 
 ## 5. Testing & gates
 
@@ -85,3 +88,17 @@ Today the op→store mapping keeps node voltages but drops `i(...)` keys, and tr
 3. **Pot convergence at extremes** — `Rmin` clamp; alter (not reload) keeps it smooth.
 4. **Believable glow without photoreal models** — emissive placeholder body + halo sprite reads clearly as "lit"; photoreal models are a later upgrade, not a blocker.
 5. **Honesty** — brightness is proportional/qualitative; readouts state real numbers (mA, V) and never imply photometric accuracy. Consistent with circsim's trust-as-validator stance.
+
+## 7. Council refinements (2026-06-19)
+
+A three-member design council (newcomer-UX, technical-feasibility, product/astonishment) reviewed this spec. All voted **REFINE** (direction right, execution needs changes). Folded in above:
+
+- **3D grabbable on-part knob + LED bloom → core** (L1/L2), not stretch — the 2D-knob/emissive-only version reads as "a slider lit a cube," missing the tactile breadboard magic that is the entire point.
+- **Current lane is the load-bearing risk → de-risk first** (L0): the transient `ingestSamples` path maps vectors to nets only and drops branch currents; auto-probing a part forces a deck reload. Prove the LED current streams (correct sign) before any viewport work.
+- **`alterPlan` needs a resistor branch** — without it the pot forces a reload instead of a smooth live `alter`.
+- **"Why isn't it glowing?" coach** — a silent dark LED is a beginner's worst moment; convert it to plain-language teaching.
+- **Bench-instrument framing** — the pot/LED-indicator are clipped on by the user (preserves "I connected it" without board editing).
+- **Don't stake everything on one toy** (L4) — curated demo gallery + "energize MY OWN board"; surface the op-fed Critic (ampacity/thermal) as the visible "powerful" signal.
+- **On/off before dimming**; unify on a single **"Energize"** verb.
+
+Open question deferred to L4: a true "build it yourself" placement gesture (add a part to a net) edges toward the board-editing/P&R territory we deliberately dropped — the bench-instrument framing is the v1 answer; revisit only if users ask.
