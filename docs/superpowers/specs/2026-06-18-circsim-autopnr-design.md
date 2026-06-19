@@ -1,6 +1,8 @@
 # circsim Auto Place-and-Route — Design Spec
 
-**Status:** approved direction (2026-06-18). Scope: full place + route together; custom physics-aware 2-layer router.
+> **⛔ SUPERSEDED / ABANDONED (2026-06-19).** A unanimous UI/UX council (product positioning, target-user advocate, interaction design, trust/expectations) judged that in-circsim auto-P&R **undermines** circsim: the target user always arrives with an already-routed board, it forfeits the validator moat to compete with Quilter, and it creates a structural "author + grader" conflict that manufactures false pre-fab confidence — the exact failure circsim exists to prevent. The decision: **do not build P&R.** Pivot to making the core simulator astonishing (a live, breadboard-like, directly-manipulable bench). The physics/cost models sketched below (thermal proxy, RF/loop-area, IR-drop, congestion, GPU compute) are retained as *candidate ideas for a read-only board-audit/critic layer*, not for generation. This document is kept only as a record of the considered-and-rejected design.
+
+**Status:** SUPERSEDED — see banner above. (Originally: approved direction 2026-06-18; full place + route together; custom physics-aware 2-layer router.)
 
 **Goal:** Given a circuit's connectivity (netlist + parts + footprint geometry) and a board outline, autonomously produce a *placed and routed* KiCad 9 `.kicad_pcb` for 2-layer hobbyist boards — taking power/thermal, RF/criticality, and routability into account — that round-trips through circsim's parser and can be simulated immediately.
 
