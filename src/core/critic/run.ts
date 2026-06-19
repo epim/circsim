@@ -16,6 +16,7 @@ import { buildContext, type CriticContext } from './context'
 import { checkFloating } from './checks/floating'
 import { checkClearance } from './checks/clearance'
 import { checkDecoupling } from './checks/decoupling'
+import { checkAmpacity } from './checks/ampacity'
 
 type Check = (ctx: CriticContext) => Finding[]
 
@@ -24,6 +25,7 @@ const CHECKS: { id: CheckId; run: Check; needs?: 'op' }[] = [
   { id: 'floating', run: checkFloating },
   { id: 'clearance', run: checkClearance },
   { id: 'decoupling', run: checkDecoupling },
+  { id: 'ampacity', run: checkAmpacity, needs: 'op' },
 ]
 
 export function runCritic(

@@ -20,9 +20,9 @@
 import type { Finding } from '../types'
 import type { CriticContext } from '../context'
 import type { Part } from '../../netlist/extract'
-import { suggestSupplies, suggestGround } from '../../netlist/extract'
 import { padWorldPos, dist } from '../geom'
 import { parseValue } from '../../values/parseValue'
+import { classifyRails } from '../classify'
 
 /** A bypass cap is small-signal: ≤ 1 µF. Bulk/electrolytics are not bypass caps. */
 const BYPASS_MAX_FARAD = 1e-6
@@ -38,12 +38,8 @@ export function checkDecoupling(ctx: CriticContext): Finding[] {
   const { circuit, refToFootprint, opts } = ctx
   const findings: Finding[] = []
 
-  // ── classify nets ───────────────────────────────────────────────────────────
-  const powerNetIds = new Set(suggestSupplies(circuit.nets).map((n) => n.id))
-  // A net counts as ground if suggestGround returns it when asked about it alone.
-  const groundNetIds = new Set(
-    circuit.nets.filter((n) => suggestGround([n])).map((n) => n.id),
-  )
+  // ── classify nets (shared classifier; also infers non-standard rails) ────────
+  const { powerNetIds, groundNetIds } = classifyRails(circuit, ctx)
 
   // ── collect bypass caps (C-ref parts ≤ 1 µF) with their net memberships ──────
   // Each cap records which nets it touches so we can ask "does it bridge P↔GND?".
