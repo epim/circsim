@@ -241,6 +241,58 @@ function registerTypes(): void {
 
 const POINTER_SIZE = koffi.sizeof('void*')
 
+/**
+ * Minimal shape of koffi.decode used by the SendData row decoder (injectable).
+ * Loose by design: koffi.decode is heavily overloaded; the decoder below only ever
+ * calls decode(ptr, offset, 'type') and decode(ptr, 'type'), so a permissive
+ * callable lets both the real koffi.decode and a test fake satisfy it.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type DecodeFn = (ptr: any, offsetOrType: any, type?: any) => any
+
+/**
+ * Decode one `vecvaluesall` timepoint into a `{ name → value }` row, RESILIENT
+ * PER ENTRY (Spec §7.4 transient streaming; silent-data-loss guard).
+ *
+ * Each vector entry is decoded inside its OWN try/catch. This matters because a
+ * single exotic/unreadable entry (e.g. a device-internal current vector from
+ * `.save @d1[i]`) can throw mid-decode. If one failure aborted the whole loop we
+ * would discard the ENTIRE timepoint — node voltages and working currents
+ * included — i.e. total, silent data loss even though ngspice computed the row
+ * correctly. Instead, a failing entry is simply skipped (its key absent → the
+ * downstream SampleBatcher maps it to NaN by name lookup, preserving column
+ * order), and the remaining vectors still stream. The happy path (no throws) is
+ * unchanged: every entry's `name → creal` lands in the row exactly as before.
+ *
+ * Extracted as a pure function (decoder injected) so the per-entry resilience is
+ * unit-testable without a live libngspice — see ngspiceFfi.senddata.test.ts.
+ */
+export function decodeVecvaluesallRow(
+  veccount: number,
+  vecsa: unknown,
+  decode: DecodeFn
+): { row: Record<string, number>; scaleName: string } {
+  const row: Record<string, number> = {}
+  let scaleName = 'time'
+  for (let i = 0; i < veccount; i++) {
+    try {
+      const vvPtr = decode(vecsa, i * POINTER_SIZE, 'pvecvalues')
+      if (!vvPtr) continue
+      const vv = decode(vvPtr, 'vecvalues') as {
+        name: string
+        creal: number
+        is_scale: boolean
+      }
+      const name = String(vv.name)
+      row[name] = vv.creal
+      if (vv.is_scale) scaleName = name
+    } catch {
+      /* one bad vector entry must not drop the whole timepoint row */
+    }
+  }
+  return { row, scaleName }
+}
+
 // ─── adapter implementation ──────────────────────────────────────────────────
 
 export interface NgspiceFfiOptions {
@@ -371,21 +423,7 @@ export class NgspiceFfiEngine implements SpiceEngine {
           veccount: number
           vecsa: unknown
         }
-        const row: Record<string, number> = {}
-        let scaleName = 'time'
-        const n = all.veccount
-        for (let i = 0; i < n; i++) {
-          const vvPtr = koffi.decode(all.vecsa, i * POINTER_SIZE, 'pvecvalues')
-          if (!vvPtr) continue
-          const vv = koffi.decode(vvPtr, 'vecvalues') as {
-            name: string
-            creal: number
-            is_scale: boolean
-          }
-          const name = String(vv.name)
-          row[name] = vv.creal
-          if (vv.is_scale) scaleName = name
-        }
+        const { row, scaleName } = decodeVecvaluesallRow(all.veccount, all.vecsa, koffi.decode)
         this.emit({ type: 'data', row, scaleName })
       } catch {
         /* a decode hiccup must not crash the FFI callback frame */

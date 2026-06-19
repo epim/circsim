@@ -26,15 +26,20 @@
  *       RESULT: streams cleanly as "vmeas#branch", ~8.65 mA, every timepoint.
  *       THIS is the path Live-Bench should use for a device branch current.
  *
- * GOTCHA — why `@d1[i]` does not stream (load-bearing for Live-Bench): the FFI
- * SendData decode in ngspiceFfi.ts wraps the whole per-timepoint vecvaluesall
- * row-decode in one try/catch that silently drops the ENTIRE row on any decode
- * hiccup. When the saved set includes a device-internal "@d1[i]" vector, decoding
- * that entry throws, so EVERY timepoint row is discarded and NOTHING streams (not
- * even the node voltages). The op path is unaffected (it reads vectors via
- * ngGet_Vec_Info, not the SendData struct). So in the transient stream a device's
- * own @dev[i] current is currently unusable; a 0 V series ammeter (whose current
- * comes through as the well-behaved "<src>#branch" form) is the working answer.
+ * GOTCHA — why `@d1[i]` does not stream (load-bearing for Live-Bench, root cause
+ * RE-DIAGNOSED): when the saved set includes a device-internal "@d1[i]" vector,
+ * ngspice's shared-library SendData dispatch does NOT fire AT ALL for the run — the
+ * FFI SendData callback is never invoked, so no timepoint is ever delivered (proven
+ * in isolation: the identical circuit WITHOUT @d1[i] streams 1000+ rows; WITH it,
+ * zero callbacks). The loss is INSIDE ngspice's SendData path, not in the koffi
+ * vecvaluesall decode. (The decode loop is nonetheless now per-entry resilient — a
+ * single bad vector substitutes NaN for itself rather than dropping the whole row —
+ * see ngspiceFfi.ts and the unit test in ngspiceFfi.senddata.test.ts; but that
+ * resilience cannot resurrect rows ngspice never sends.) The op path is unaffected
+ * (it reads vectors via ngGet_Vec_Info, not the SendData struct). So in the
+ * transient stream a device's own @dev[i] current is unusable; a 0 V series ammeter
+ * (whose current comes through as the well-behaved "<src>#branch" form) is the
+ * working answer.
  *
  * NORMALIZATION NOTE (also load-bearing): the transient streaming path
  * (onEngineEvent → initData/data) passes ngspice's RAW vector names straight into
@@ -132,15 +137,18 @@ function findCurrentColumn(col: SampleCollector, dev: string): { raw: string; va
 }
 
 describe.skipIf(!haveNgspice)('Live-Bench spike — LED branch current streams (real libngspice)', () => {
-  it('(a) `.save all @d1[i]` ANNOUNCES the vector but streams NO samples (gotcha)', async () => {
+  it('(a) `.save all @d1[i]` ANNOUNCES the vector but streams NO samples (ngspice gotcha)', async () => {
     // Diode model: is/n chosen so Vf ≈ 1.8–2 V at ~10 mA (so i ≈ (5-Vf)/330).
     // This test PINS the known gotcha: including a device-internal "@d1[i]" vector
-    // in the saved set makes the FFI SendData row-decode throw and silently drop
-    // EVERY per-timepoint row, so nothing streams — even though "@d1[i]" appears in
-    // the `vectors` event. ngspice itself runs fine (1011 data rows internally);
-    // the loss is purely in the koffi vecvaluesall decode path. If a future
-    // ngspiceFfi fix makes @dev[i] stream, this test's first assertion will start
-    // failing — that's the intended tripwire to revisit the Live-Bench design.
+    // in the saved set makes ngspice's shared-library SendData dispatch skip the
+    // entire run — the FFI SendData callback is NEVER invoked, so nothing streams,
+    // even though "@d1[i]" appears in the `vectors` event. The identical circuit
+    // WITHOUT @d1[i] streams 1000+ rows (verified in isolation), proving the loss
+    // is inside ngspice's SendData path — NOT in the koffi vecvaluesall decode
+    // (which is independently per-entry resilient; see ngspiceFfi.senddata.test.ts).
+    // If a future ngspice/wrapper change makes @dev[i] stream, this test's
+    // batchCount assertion will start failing — the intended tripwire to revisit
+    // the Live-Bench design.
     const deck = [
       '* current-limited LED — diode internal current via .save all @d1[i]',
       'v1 vcc 0 dc 5',
@@ -163,8 +171,8 @@ describe.skipIf(!haveNgspice)('Live-Bench spike — LED branch current streams (
     // The device current vector name IS announced in the `vectors` event...
     expect(col.vectorNames).toContain('@d1[i]')
     expect(col.vectorNames.map(normalizeVectorKey)).toContain('i(d1)')
-    // ...but NO samples stream (the SendData decode drops every row). This is the
-    // documented gotcha: @dev[i] is NOT a usable transient-stream current source.
+    // ...but NO samples stream (ngspice never fires SendData for this run). This is
+    // the documented gotcha: @dev[i] is NOT a usable transient-stream current source.
     expect(col.batchCount).toBe(0)
     expect(col.time.length).toBe(0)
   }, 30_000)
