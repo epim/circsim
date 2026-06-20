@@ -26,7 +26,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { createAppStore, fidelityBannerItems, type AppStore } from '../appStore'
+import { createAppStore, fidelityBannerItems, mapOpResultToCurrents, type AppStore } from '../appStore'
 import { createMockSimClient, type MockSimClient } from '../../ipc/simClient'
 import type { Resolution } from '../../../../core/models/types'
 
@@ -363,5 +363,28 @@ describe('orchestration — SimHost crash replay', () => {
     expect(load).toBeDefined()
     // the 9 V supply card is in the replayed deck
     expect(load!.deckLines.some(l => /vpsu_psu1\s+\S+\s+0\s+DC\s+9\b/i.test(l))).toBe(true)
+  })
+})
+
+describe('mapOpResultToCurrents — op device currents → part refs', () => {
+  it('maps an LED ref to its device current via the ref↔spicename map', () => {
+    const ledSpiceNames = new Map<string, string>([['D1', 'd_d1']])
+    const values = { vin: 5, out: 2.5, '@d_d1[i]': 0.011 }
+    const currents = mapOpResultToCurrents(values, ledSpiceNames)
+    expect(currents.get('D1')).toBeCloseTo(0.011)
+    expect(currents.size).toBe(1)
+  })
+
+  it('accepts the i(dev) encoding and is case-insensitive', () => {
+    const ledSpiceNames = new Map<string, string>([['D2', 'd_d2']])
+    const currents = mapOpResultToCurrents({ 'I(D_D2)': -0.008 }, ledSpiceNames)
+    expect(currents.get('D2')).toBeCloseTo(-0.008)
+  })
+
+  it('omits refs whose current is absent from the result', () => {
+    const ledSpiceNames = new Map<string, string>([['D1', 'd_d1'], ['D9', 'd_d9']])
+    const currents = mapOpResultToCurrents({ '@d_d1[i]': 0.01 }, ledSpiceNames)
+    expect(currents.has('D1')).toBe(true)
+    expect(currents.has('D9')).toBe(false)
   })
 })

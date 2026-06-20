@@ -34,7 +34,7 @@ import {
   type BomData,
 } from '../../../core/models/resolve'
 import type { LibraryEntry, PinMap, Resolution } from '../../../core/models/types'
-import { generateDeck, alterPlan } from '../../../core/spicegen/generate'
+import { generateDeck, alterPlan, buildLedSpiceNames } from '../../../core/spicegen/generate'
 import type { Instrument } from '../../../core/spicegen/instruments'
 import { parseBom } from '../../../core/bom/parseBom'
 import type { BoardModel } from '../../../core/kicad/types'
@@ -150,6 +150,12 @@ export interface BoardHooks {
   applyNetVoltages(voltages: Map<number, number>, minVolts: number, maxVolts: number): void
   /** Show floating net-voltage labels from an op result. */
   showOpAnnotations(voltages: Map<number, number>): void
+  /**
+   * Drive per-LED emissive glow from op-point device currents (ref → amps).
+   * Additive over voltage tint/annotations; LEDs at ~0 current stay dark.
+   * Optional so older hook providers (and headless tests) can omit it.
+   */
+  applyLedCurrents?(currentsByRef: Map<string, number>): void
 }
 
 // ─── store shape ─────────────────────────────────────────────────────────────
@@ -203,6 +209,12 @@ export interface AppState {
   opVoltages: Map<number, number> | null
   /** Min/max voltage across the latest op result (for the voltage legend). */
   voltageRange: { min: number; max: number } | null
+  /**
+   * Latest op-point device currents, keyed by part ref (amps). Populated from
+   * each opResult's saved LED device-current vectors (LED glow). Drives the
+   * viewport's per-LED emissive intensity. Reset on board change.
+   */
+  currentsByRef: Map<string, number>
   ngspiceVersion: string | null
   /** Real-time pacing factor (0.1× / 1× / 'max'). */
   paceFactor: number | 'max'
@@ -451,6 +463,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     deckDirty: false,
     opVoltages: null,
     voltageRange: null,
+    currentsByRef: new Map(),
     ngspiceVersion: null,
     paceFactor: 1,
     achievedRealtimeFactor: null,
@@ -476,6 +489,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         viewerOnly: false,
         opVoltages: null,
         voltageRange: null,
+        currentsByRef: new Map(),
         instruments: [],
         stubOverrides: new Map(),
         pinMapOverrides: new Map(),
@@ -785,8 +799,9 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Map opResult.values (bare lowercase node names) → netId voltages.
       const opVoltages = mapOpResultToNetVoltages(result.values, circuit)
       const voltageRange = computeVoltageRange(opVoltages)
+      const currentsByRef = applyOpCurrents(boardHooks, result.values, resolutions, circuit)
 
-      set({ opVoltages, voltageRange, deckDirty: false, simState: 'idle' })
+      set({ opVoltages, voltageRange, currentsByRef, deckDirty: false, simState: 'idle' })
 
       // Push onto the 3D board: floating voltage labels + copper voltage tint.
       applyOpToBoard(boardHooks, opVoltages, voltageRange)
@@ -1002,7 +1017,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           if (!circuit) break
           const opVoltages = mapOpResultToNetVoltages(event.values, circuit)
           const voltageRange = computeVoltageRange(opVoltages)
-          set({ opVoltages, voltageRange })
+          const currentsByRef = applyOpCurrents(boardHooks, event.values, get().resolutions, circuit)
+          set({ opVoltages, voltageRange, currentsByRef })
           // Keep the board in sync after a replayed/standalone op too.
           applyOpToBoard(boardHooks, opVoltages, voltageRange)
           break
@@ -1140,6 +1156,41 @@ export function mapOpResultToNetVoltages(
   return out
 }
 
+/**
+ * Map an op result's device-current vectors onto part refs.
+ *
+ * ngspice exposes a saved device current `@d_d1[i]` in opResult.values under a
+ * bare key. Across ngspice/encodings the key may appear as `@d_d1[i]`, `i(d_d1)`,
+ * or a vector-named variant — so we accept any value key that references the LED's
+ * SPICE device name and looks like a current. `ledSpiceNames` is the ref →
+ * spiceName map from the deck generator (buildLedSpiceNames); we reverse it.
+ *
+ * Returns ref → amps. Refs whose current is absent from the result are omitted.
+ */
+export function mapOpResultToCurrents(
+  values: Record<string, number>,
+  ledSpiceNames: Map<string, string>,
+): Map<string, number> {
+  const out = new Map<string, number>()
+  // Normalised lookup of every value key (lowercased, whitespace-stripped).
+  const lower = new Map<string, number>()
+  for (const [k, v] of Object.entries(values)) lower.set(k.toLowerCase(), v)
+
+  for (const [ref, spiceName] of ledSpiceNames) {
+    const dev = spiceName.toLowerCase()
+    // Accepted encodings of a device current for this LED.
+    const candidates = [`@${dev}[i]`, `i(${dev})`, `${dev}#branch`, `i(@${dev})`]
+    for (const c of candidates) {
+      const v = lower.get(c)
+      if (v !== undefined) {
+        out.set(ref, v)
+        break
+      }
+    }
+  }
+  return out
+}
+
 /** Min/max across a netId→volts map (for the voltage legend). */
 export function computeVoltageRange(
   voltages: Map<number, number>,
@@ -1169,6 +1220,23 @@ function applyOpToBoard(
   if (!hooks) return
   hooks.showOpAnnotations(voltages)
   if (range) hooks.applyNetVoltages(voltages, range.min, range.max)
+}
+
+/**
+ * Compute LED device currents from an op result and push them onto the board
+ * (additive over voltage tint/annotations). Returns the ref → amps map so the
+ * caller can also store it in state. No-op-safe when no LEDs / no hooks.
+ */
+function applyOpCurrents(
+  hooks: BoardHooks | null,
+  values: Record<string, number>,
+  resolutions: Resolution[],
+  circuit: Circuit,
+): Map<string, number> {
+  const ledSpiceNames = buildLedSpiceNames(resolutions, circuit)
+  const currentsByRef = mapOpResultToCurrents(values, ledSpiceNames)
+  hooks?.applyLedCurrents?.(currentsByRef)
+  return currentsByRef
 }
 
 /**

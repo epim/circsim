@@ -282,6 +282,71 @@ const PRIMITIVE_PREFIX_TO_LETTER: Record<string, string> = {
   T: 'm',
 }
 
+// ─── LED classification + device-current naming ──────────────────────────────
+
+/**
+ * Classify a part as an LED for operating-point glow.
+ *
+ * An LED is a diode-family part (refdes prefix `D`) whose value, libId, or
+ * resolved model name mentions "LED". A plain rectifier diode (e.g. 1N4148 in
+ * `Diode_SMD:D_SOD-123`) is rejected because nothing names it an LED. Resistors
+ * and other prefixes are rejected outright.
+ *
+ * Pure + side-effect free so the store/viewport can reuse the same predicate.
+ */
+export function isLedPart(args: {
+  ref: string
+  value?: string
+  libId?: string
+  /** Resolved model/subckt/model-card name, when known (e.g. "LED_RED"). */
+  subcktName?: string
+}): boolean {
+  if (refdesPrefix(args.ref) !== 'D') return false
+  const hay = `${args.value ?? ''} ${args.libId ?? ''} ${args.subcktName ?? ''}`.toUpperCase()
+  return hay.includes('LED')
+}
+
+/**
+ * The SPICE device-current name for an LED diode in the OP deck.
+ *
+ * LED model-card parts are emitted as a top-level diode primitive `d_<ref>`
+ * (see the model-card path below), so the device-current vector is `@d_<ref>[i]`.
+ * This builder returns the bare device name (`d_<ref>`); callers append `[i]`.
+ */
+export function ledSpiceName(ref: string): string {
+  return `d_${ref.toLowerCase()}`
+}
+
+/**
+ * Build a ref → SPICE device-name map for every LED part in the circuit.
+ *
+ * The store reverses this map to translate an op result's device-current vector
+ * (`@d_d1[i]` / `i(d_d1)`) back to the part ref. Only LED parts are included.
+ */
+export function buildLedSpiceNames(
+  resolutions: Resolution[],
+  circuit: Circuit,
+): Map<string, string> {
+  const out = new Map<string, string>()
+  const partByRef = new Map(circuit.parts.map(p => [p.ref, p]))
+  for (const res of resolutions) {
+    const part = partByRef.get(res.ref)
+    const subcktName =
+      res.model && (res.model.kind === 'subckt') ? res.model.subcktName : undefined
+    if (
+      isLedPart({
+        ref: res.ref,
+        value: part?.value,
+        libId: part?.libId,
+        subcktName,
+      })
+    ) {
+      out.set(res.ref, ledSpiceName(res.ref))
+    }
+  }
+  return out
+}
+
 // ─── Wave source card builders ────────────────────────────────────────────────
 
 /**
@@ -789,6 +854,21 @@ export function generateDeck(opts: GenerateOptions): string[] {
       const ammName = `vamm_${probeId}`
       lines.push(`.save @${ammName}[i]`)
     }
+  }
+
+  // LED operating-point glow: save each LED's diode device current so the
+  // viewport can drive emissive intensity from the real OP current. The OP path
+  // reads device-current vectors fine; this is additive and LED-only, so a
+  // current probe is NOT required (and these are deduplicated against any probe
+  // already saved on the same device).
+  const savedDevs = new Set(
+    lines.filter(l => l.startsWith('.save @')).map(l => l.slice('.save '.length)),
+  )
+  for (const [, spiceName] of buildLedSpiceNames(resolutions, circuit)) {
+    const vec = `@${spiceName}[i]`
+    if (savedDevs.has(vec)) continue
+    savedDevs.add(vec)
+    lines.push(`.save ${vec}`)
   }
 
   lines.push('.end')

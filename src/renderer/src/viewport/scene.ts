@@ -32,6 +32,7 @@ import { buildSilkscreenEntries, createSilkscreenTexts } from './silkscreen'
 import { createPicker, type PickCallback } from './picking'
 import { createOverlayController, type OverlayController, type OverlayMode, type LegendData } from './overlay'
 import { createMarkerController, type MarkerController, type AnnotationLabel, type ProbeMarker, type ProbeMarkerOpts } from './markers'
+import { createLedGlowController, isLed, ledColorFor, type LedGlowController } from './ledGlow'
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -128,6 +129,21 @@ export interface SceneManager {
    * @param height  Canvas CSS height
    */
   pickNetAt(xPx: number, yPx: number, width: number, height: number): number | null
+
+  // ── LED operating-point glow ───────────────────────────────────────────────
+
+  /**
+   * Set an LED component's emissive glow. `intensity` is 0..1 (e.g. from
+   * ledIntensity(current)); `color` is an optional THREE hex to retint. No-op for
+   * a ref that isn't a registered LED. Additive over the voltage overlay.
+   */
+  updateComponentEmissive(ref: string, intensity: number, color?: number): void
+
+  /**
+   * Drive every LED's glow from op-point device currents (ref → amps). LEDs with
+   * ~0 current (or absent from the map) stay dark.
+   */
+  applyLedCurrents(currentsByRef: Map<string, number>): void
 }
 
 // ─── FR4 material ─────────────────────────────────────────────────────────────
@@ -164,6 +180,10 @@ export function createSceneManager(): SceneManager {
   let netMaterialsMap = new Map<number, THREE.MeshStandardMaterial>()
   let overlayController: OverlayController = createOverlayController(netMaterialsMap)
   const markerController: MarkerController = createMarkerController()
+
+  // ── LED operating-point glow (additive over the voltage overlay) ─────────────
+  // Rebuilt per board load (anchored to the component group). null before mount.
+  let ledGlowController: LedGlowController | null = null
 
   // Net positions for op annotations: netId → world position (centroid of copper)
   // Populated in loadBoard from pad positions.
@@ -432,6 +452,13 @@ export function createSceneManager(): SceneManager {
       componentGroup = new THREE.Group()
       componentGroup.position.set(-cx, -cy, 0)
 
+      // Fresh LED-glow controller for this board, anchored to the component group.
+      ledGlowController?.dispose()
+      ledGlowController = createLedGlowController(componentGroup)
+
+      // ref → footprint, for LED classification / color capture.
+      const fpByRef = new Map(board.footprints.map(fp => [fp.ref, fp]))
+
       const boxEntries = buildComponentBoxes(board.footprints, board.boardThicknessMm)
       for (const entry of boxEntries) {
         const mat = new THREE.MeshStandardMaterial({
@@ -446,6 +473,14 @@ export function createSceneManager(): SceneManager {
         mesh.userData = { ref: entry.ref, className: entry.className }
         componentGroup.add(mesh)
         picker.registerComponentBox(mesh, entry.ref)
+
+        // LEDs get an emissive channel + halo so they can light at their OP current.
+        const fp = fpByRef.get(entry.ref)
+        if (fp && isLed({ ref: fp.ref, value: fp.value, libId: fp.libId, properties: fp.properties })) {
+          ledGlowController.registerLed(entry.ref, mesh, ledColorFor({
+            ref: fp.ref, value: fp.value, libId: fp.libId, properties: fp.properties,
+          }))
+        }
       }
       scene.add(componentGroup)
 
@@ -586,6 +621,17 @@ export function createSceneManager(): SceneManager {
       const hit = picker.raycastFirst({ x: ndcX, y: ndcY }, cam)
       if (!hit) return null
       return hit.netId ?? null
+    },
+
+    // ── LED operating-point glow ────────────────────────────────────────────────
+    updateComponentEmissive(ref: string, intensity: number, color?: number): void {
+      ledGlowController?.updateComponentEmissive(ref, intensity, color)
+      dirty = true
+    },
+
+    applyLedCurrents(currentsByRef: Map<string, number>): void {
+      ledGlowController?.applyCurrents(currentsByRef)
+      dirty = true
     },
   }
 }

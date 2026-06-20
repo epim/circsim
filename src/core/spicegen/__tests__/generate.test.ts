@@ -22,7 +22,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { describe, test, expect } from 'vitest'
-import { generateDeck, formatSpiceValue, alterPlan, instrumentSpiceName } from '../generate'
+import { generateDeck, formatSpiceValue, alterPlan, instrumentSpiceName, buildLedSpiceNames, isLedPart } from '../generate'
 import type { Circuit, CircuitNet, Part } from '../../netlist/extract'
 import type { Resolution } from '../../models/types'
 import type { Instrument } from '../instruments'
@@ -711,6 +711,39 @@ describe('generateDeck — inlines model definitions when modelTexts is provided
     // No inlined definitions section.
     expect(deckText).not.toContain('.subckt NE555')
     expect(deckText).not.toMatch(/^\.model LED_RED/m)
+  })
+
+  test('LED device current is saved in the OP deck (.save @d_d1[i])', () => {
+    const circuit = make555LedCircuit()
+    const deck = generateDeck({
+      circuit,
+      resolutions: make555LedResolutions(),
+      instruments: [{ kind: 'ground-ref', netId: 2 }],
+      groundNetId: 2,
+      modelTexts,
+    })
+    // The diode device is d_d1 → its current vector is saved for glow.
+    expect(deck).toContain('.save @d_d1[i]')
+    // Non-LED parts (the NE555 subckt) get no extra current save.
+    expect(deck.filter(l => /^\.save @/.test(l))).toEqual(['.save @d_d1[i]'])
+  })
+
+  test('buildLedSpiceNames maps each LED ref → its diode device name', () => {
+    const circuit = make555LedCircuit()
+    const map = buildLedSpiceNames(make555LedResolutions(), circuit)
+    expect(map.get('D1')).toBe('d_d1')
+    // The NE555 (a non-LED subckt) is not an LED.
+    expect(map.has('U1')).toBe(false)
+  })
+
+  test('isLedPart classifies an LED part, rejects a plain rectifier diode', () => {
+    // LED: refdes Dx + value/libId mentions LED.
+    expect(isLedPart({ ref: 'D1', value: 'LED', libId: 'LED:LED_0805', subcktName: 'LED_RED' })).toBe(true)
+    expect(isLedPart({ ref: 'D7', value: 'RED', libId: 'Diode:LED_0603' })).toBe(true)
+    // Plain rectifier diode (no LED anywhere) → not an LED.
+    expect(isLedPart({ ref: 'D2', value: '1N4148', libId: 'Diode_SMD:D_SOD-123', subcktName: 'D1N4148' })).toBe(false)
+    // Resistor → not an LED.
+    expect(isLedPart({ ref: 'R1', value: '10k', libId: 'Resistor_SMD:R_0402' })).toBe(false)
   })
 })
 
