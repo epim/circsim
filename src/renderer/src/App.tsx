@@ -19,6 +19,7 @@ import WarningsBar from './panels/WarningsBar'
 import CoachNotes from './panels/CoachNotes'
 import SimLog from './panels/SimLog'
 import Scope from './panels/Scope'
+import CriticPanel from './panels/CriticPanel'
 import About from './panels/About'
 import { AppStoreProvider, useApp, useAppStoreApi } from './store/storeContext'
 import type { AppStore } from './store/appStore'
@@ -294,10 +295,11 @@ function Shell(): React.ReactElement {
             </div>
           )}
         </div>
-        {/* Right dock: GroundSetup + InstrumentRack */}
+        {/* Right dock: GroundSetup + InstrumentRack + Board Critic */}
         <aside style={rightDockStyle}>
           <GroundSetup />
           <InstrumentRack />
+          {board && <CriticPanel />}
         </aside>
       </main>
     </div>

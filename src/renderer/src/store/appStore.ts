@@ -44,6 +44,8 @@ import {
 } from '../../../core/live/coach'
 import { parseBom } from '../../../core/bom/parseBom'
 import type { BoardModel } from '../../../core/kicad/types'
+import { runCritic } from '../../../core/critic/run'
+import type { CriticReport, Finding, OpResult } from '../../../core/critic/types'
 
 import type { SimClient } from '../ipc/simClient'
 import type { SimCommand, SimEvent } from '../../../simhost/protocol'
@@ -162,6 +164,14 @@ export interface BoardHooks {
    * Optional so older hook providers (and headless tests) can omit it.
    */
   applyLedCurrents?(currentsByRef: Map<string, number>): void
+
+  // ── Board Critic overlay (read-only) ────────────────────────────────────────
+  /** Place severity-colored markers at the located findings (replaces prior). */
+  setCriticFindings?(findings: Finding[]): void
+  /** Remove all critic markers. */
+  clearCriticFindings?(): void
+  /** Fly the camera to a finding + highlight its net/part (read-only). */
+  focusFinding?(finding: Finding): void
 }
 
 // ─── store shape ─────────────────────────────────────────────────────────────
@@ -247,6 +257,16 @@ export interface AppState {
   selectedRef: string | null
   selectedNetId: number | null
 
+  // ── Board Critic (read-only pre-fab audit — Spec §7) ──────────────────────────
+  /**
+   * Latest critic report. Auto-rebuilt when a board opens (no-sim checks) and
+   * after each operating-point solve (with real currents for ampacity/thermal).
+   * null before the first audit. The critic never edits the board.
+   */
+  criticReport: CriticReport | null
+  /** Finding the user clicked (drives the viewport fly-to + highlight). */
+  selectedFindingId: string | null
+
   // ── Task 25: user models (llm-generated + user-import, in-memory) ────────────
   /**
    * In-memory user model store: ref → { subcktText, subcktName, pinMap, provenance }.
@@ -314,6 +334,18 @@ export interface AppState {
   // selection
   selectComponent(ref: string | null): void
   selectNet(netId: number | null): void
+
+  // ── Board Critic (Spec §7) ───────────────────────────────────────────────────
+  /**
+   * Run the read-only board audit. Builds the critic OpResult from the current op
+   * state (net voltages by spiceNode + per-ref currents) when energized, else
+   * passes undefined so the sim-dependent checks (ampacity/thermal) are reported
+   * as skipped. Stores the report and pushes the located findings to the viewport
+   * overlay. No-op when no board/circuit is loaded.
+   */
+  runCriticAudit(): void
+  /** Select a finding: stores its id and tells the viewport to focus/highlight it. */
+  selectFinding(id: string | null): void
 
   // ground / supply
   setGround(netId: number | null): void
@@ -557,6 +589,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     viewerOnly: false,
     selectedRef: null,
     selectedNetId: null,
+    criticReport: null,
+    selectedFindingId: null,
     userModels: new Map(),
     logLines: [],
     lastBenchRestart: null,
@@ -582,6 +616,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         deckDirty: false,
         selectedRef: null,
         selectedNetId: null,
+        criticReport: null,
+        selectedFindingId: null,
         logLines: [],
         benchRestartToast: null,
         convergenceCard: null,
@@ -674,6 +710,12 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Viewer-only iff the netlist is unusable for simulation (no parts / no nets).
       const usable = circuit.parts.length > 0 && circuit.nets.length > 0
       set({ viewerOnly: !usable })
+
+      // Auto-run the read-only critic audit (Spec §7 trigger): the no-sim checks
+      // (floating / clearance / decoupling) run immediately on open; the
+      // sim-dependent ones (ampacity / thermal) are reported as skipped until an
+      // operating-point solve lands (which re-runs the audit with real currents).
+      get().runCriticAudit()
     },
 
     setSchematicFromText(schText, fileName) {
@@ -783,6 +825,34 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     },
     selectNet(netId) {
       set({ selectedNetId: netId })
+    },
+
+    // ── Board Critic (Spec §7) ─────────────────────────────────────────────────
+    runCriticAudit() {
+      const { board, circuit, opVoltages, currentsByRef } = get()
+      if (!board || !circuit) {
+        set({ criticReport: null, selectedFindingId: null })
+        boardHooks?.clearCriticFindings?.()
+        return
+      }
+      // Build the critic OpResult from the live op state ONLY when energized (an
+      // op result is present). Without it runCritic SKIPS ampacity/thermal — which
+      // is fine: opening re-audits no-sim checks, the post-op re-audit feeds reals.
+      const opResult = buildCriticOpResult(circuit, opVoltages, currentsByRef)
+      const report = runCritic(board, circuit, opResult)
+      set({ criticReport: report })
+      // Drop a stale selection if the finding no longer exists.
+      const sel = get().selectedFindingId
+      if (sel && !report.findings.some(f => f.id === sel)) set({ selectedFindingId: null })
+      // Push the located findings to the read-only viewport overlay.
+      boardHooks?.setCriticFindings?.(report.findings)
+    },
+
+    selectFinding(id) {
+      set({ selectedFindingId: id })
+      if (id === null) return
+      const finding = get().criticReport?.findings.find(f => f.id === id)
+      if (finding) boardHooks?.focusFinding?.(finding)
     },
 
     // ── ground / supply ───────────────────────────────────────────────────────
@@ -929,6 +999,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
       // Push onto the 3D board: floating voltage labels + copper voltage tint.
       applyOpToBoard(boardHooks, opVoltages, voltageRange)
+
+      // Re-run the critic with the fresh op result so the sim-dependent checks
+      // (ampacity / thermal) now run with real node voltages + currents (Spec §7).
+      get().runCriticAudit()
       return opVoltages
     },
 
@@ -1191,6 +1265,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           set({ opVoltages, voltageRange, currentsByRef, coachNotes })
           // Keep the board in sync after a replayed/standalone op too.
           applyOpToBoard(boardHooks, opVoltages, voltageRange)
+          // Re-audit with the fresh op result (ampacity/thermal get real data).
+          get().runCriticAudit()
           break
         }
         case 'vectors':
@@ -1365,6 +1441,45 @@ export function mapOpResultToCurrents(
     }
   }
   return out
+}
+
+// ─── critic OpResult construction (Spec §7) ──────────────────────────────────────
+
+/**
+ * Build the Board Critic's OpResult from the live op state, or undefined when the
+ * board isn't energized (no op voltages) so runCritic SKIPS ampacity/thermal.
+ *
+ * `nodeVoltages` is keyed by SPICE NODE NAME (the critic's IR/thermal math works
+ * in spice-node space), translated from the store's netId→volts map via the
+ * circuit's net.spiceNode. `partCurrents` (ref → amps) comes straight from
+ * currentsByRef. `partPower` is left undefined — circsim does not yet harvest
+ * per-part power, and the thermal check derives its own estimate without it.
+ *
+ * Exported for unit testing.
+ */
+export function buildCriticOpResult(
+  circuit: Circuit,
+  opVoltages: Map<number, number> | null,
+  currentsByRef: Map<string, number>,
+): OpResult | undefined {
+  if (!opVoltages || opVoltages.size === 0) return undefined
+
+  const netToNode = new Map<number, string>()
+  for (const net of circuit.nets) netToNode.set(net.id, net.spiceNode)
+
+  const nodeVoltages: Record<string, number> = {}
+  for (const [netId, volts] of opVoltages) {
+    const node = netToNode.get(netId)
+    if (node !== undefined) nodeVoltages[node] = volts
+  }
+
+  const partCurrents: Record<string, number> = {}
+  for (const [ref, amps] of currentsByRef) partCurrents[ref] = amps
+
+  return {
+    nodeVoltages,
+    partCurrents: Object.keys(partCurrents).length > 0 ? partCurrents : undefined,
+  }
 }
 
 // ─── coach input construction (First Light, L3) ──────────────────────────────────

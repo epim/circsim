@@ -122,6 +122,14 @@ export interface PickingController {
     ndc: { x: number; y: number },
     camera: THREE.Camera
   ): { netId?: number; ref?: string; point: THREE.Vector3 } | null
+
+  /**
+   * Programmatically highlight a net + component refs via the SAME emissive boost
+   * the hover path uses (read-only, no geometry change). Passing null/[] clears
+   * the respective highlight. Used by the Board Critic to spotlight a finding's
+   * involved net/part without going through a pointer event.
+   */
+  setExternalHighlight(netId: number | null, refs?: string[]): void
 }
 
 // ─── factory ──────────────────────────────────────────────────────────────────
@@ -292,6 +300,27 @@ export function createPicker(
         ref:   resolved.ref,
         point: hits[0].point,
       }
+    },
+
+    setExternalHighlight(netId, refs) {
+      // Keep hover state consistent: a later pointermove compares against
+      // hoveredNetId, so record the critic's highlighted net as the hovered net.
+      // This also prevents a stray pointermove from silently erasing the highlight
+      // (it now treats the critic net as already-hovered).
+      hoveredNetId = netId
+      // Reuse the hover emissive path for the net (copper + vias).
+      applyHoverHighlight(netId)
+      // Component boxes: boost the requested refs, clear the rest — but NEVER
+      // touch LED-owned materials: an LED box shares its MeshStandardMaterial with
+      // ledGlowController (which drives emissive for the glow), so writing
+      // EMISSIVE_OFF here would zero the LED's glow until the next publish. Skip any
+      // mesh flagged `userData.isLed`.
+      const wanted = new Set(refs ?? [])
+      for (const rec of componentRecords) {
+        if (rec.mesh.userData?.isLed) continue
+        setMeshEmissive(rec.mesh, wanted.has(rec.ref) ? EMISSIVE_BOOST : EMISSIVE_OFF)
+      }
+      invalidate?.()
     },
   }
 }

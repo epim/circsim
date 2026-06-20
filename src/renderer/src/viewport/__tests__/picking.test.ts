@@ -558,6 +558,34 @@ describe('createPicker — clear on board reload', () => {
   })
 })
 
+// ─── setExternalHighlight (critic) leaves LED-owned materials alone ────────────
+
+describe('createPicker — setExternalHighlight skips LED materials', () => {
+  it('does not zero the emissive of an LED component box while dimming a normal part', () => {
+    const picker = createPicker(() => {})
+
+    // An LED box: its material's emissive is driven by ledGlowController (glow).
+    const ledMat = new THREE.MeshStandardMaterial()
+    ledMat.emissive.setHex(0x884400) // currently "lit" glow
+    const ledMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), ledMat)
+    ledMesh.userData.isLed = true
+    picker.registerComponentBox(ledMesh, 'D1')
+
+    // A normal (non-LED) component box.
+    const partMat = new THREE.MeshStandardMaterial()
+    const partMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), partMat)
+    picker.registerComponentBox(partMesh, 'R1')
+
+    // Highlight some OTHER net/ref (neither D1 nor R1 is in refs).
+    picker.setExternalHighlight(99, ['U7'])
+
+    // The LED glow must be UNTOUCHED (still lit), not zeroed to black.
+    expect(ledMat.emissive.getHex()).toBe(0x884400)
+    // The normal non-highlighted part is dimmed (emissive off).
+    expect(partMat.emissive.getHex()).toBe(0x000000)
+  })
+})
+
 // ─── kicadToWorld sanity check ────────────────────────────────────────────────
 
 describe('kicadToWorld sanity for pad positions', () => {

@@ -33,6 +33,8 @@ import { createPicker, type PickCallback } from './picking'
 import { createOverlayController, type OverlayController, type OverlayMode, type LegendData } from './overlay'
 import { createMarkerController, type MarkerController, type AnnotationLabel, type ProbeMarker, type ProbeMarkerOpts } from './markers'
 import { createLedGlowController, isLed, ledColorFor, ledIntensity, type LedGlowController } from './ledGlow'
+import { createCriticOverlayController, MARKER_Z_LIFT, type CriticOverlayController } from './criticOverlay'
+import type { Finding } from '../../../core/critic/types'
 
 // ─── E2E LED-glow hook (First Light, L5) ─────────────────────────────────────────
 
@@ -180,6 +182,27 @@ export interface SceneManager {
    * ~0 current (or absent from the map) stay dark.
    */
   applyLedCurrents(currentsByRef: Map<string, number>): void
+
+  // ── Board Critic overlay (read-only) ────────────────────────────────────────
+
+  /**
+   * Place READ-ONLY critic markers at the located findings (one small sphere per
+   * finding with a `location`, colored by severity). Replaces any prior markers;
+   * pass [] (or call clearCriticFindings) to clear. The critic never edits the
+   * board — this only adds markers on a dedicated overlay group.
+   */
+  setCriticFindings(findings: Finding[]): void
+
+  /** Remove all critic markers (report changed / board closed). */
+  clearCriticFindings(): void
+
+  /**
+   * Fly the camera + OrbitControls target to a finding's location and highlight
+   * the involved net/part. Reuses the SAME emissive-highlight path the picker uses
+   * for hover (per-net emissive boost) so the critic stays read-only and visually
+   * consistent. No-op when the finding has no location AND no net/ref to highlight.
+   */
+  focusFinding(finding: Finding): void
 }
 
 // ─── FR4 material ─────────────────────────────────────────────────────────────
@@ -220,6 +243,14 @@ export function createSceneManager(): SceneManager {
   // ── LED operating-point glow (additive over the voltage overlay) ─────────────
   // Rebuilt per board load (anchored to the component group). null before mount.
   let ledGlowController: LedGlowController | null = null
+
+  // ── Board Critic overlay (read-only markers + camera fly-to) ──────────────────
+  // One controller for the app lifetime; its group is re-centered per board load.
+  const criticOverlay: CriticOverlayController = createCriticOverlayController()
+  // Board-centering offset (−cx,−cy) + thickness captured in loadBoard, reused to
+  // position the critic group and compute marker/camera world targets.
+  let boardCenter = { x: 0, y: 0 }
+  let boardThicknessMm = 0
 
   // Net positions for op annotations: netId → world position (centroid of copper)
   // Populated in loadBoard from pad positions.
@@ -264,8 +295,32 @@ export function createSceneManager(): SceneManager {
     dirty = true
   }
 
+  // ── camera fly-to tween (critic focusFinding) ────────────────────────────────
+  // When active, each frame eases the active camera position + controls target
+  // toward the goal. Self-clears once close enough. Kept light: lerp factor per
+  // frame, no external tween lib.
+  let camTween: { camGoal: THREE.Vector3; targetGoal: THREE.Vector3 } | null = null
+
+  function stepCamTween(): void {
+    if (!camTween || !controls) return
+    const cam = getActiveCamera() as THREE.PerspectiveCamera | THREE.OrthographicCamera
+    const EASE = 0.18
+    cam.position.lerp(camTween.camGoal, EASE)
+    controls.target.lerp(camTween.targetGoal, EASE)
+    const posDone = cam.position.distanceToSquared(camTween.camGoal) < 1e-3
+    const tgtDone = controls.target.distanceToSquared(camTween.targetGoal) < 1e-3
+    if (posDone && tgtDone) {
+      cam.position.copy(camTween.camGoal)
+      controls.target.copy(camTween.targetGoal)
+      camTween = null
+    } else {
+      dirty = true // keep animating
+    }
+  }
+
   function renderLoop(): void {
     animFrameId = requestAnimationFrame(renderLoop)
+    if (camTween) stepCamTween()
     if (!dirty || !renderer || !scene) return
     dirty = false
     controls?.update()
@@ -346,6 +401,8 @@ export function createSceneManager(): SceneManager {
         _canvas = null
       }
       picker.clear()
+      criticOverlay.dispose()
+      camTween = null
       renderer?.dispose()
       renderer = null
       scene = null
@@ -513,12 +570,27 @@ export function createSceneManager(): SceneManager {
         // LEDs get an emissive channel + halo so they can light at their OP current.
         const fp = fpByRef.get(entry.ref)
         if (fp && isLed({ ref: fp.ref, value: fp.value, libId: fp.libId, properties: fp.properties })) {
+          // Flag the mesh so the picker's external-highlight (critic focus) leaves
+          // this LED-owned material alone — it shares its emissive with the glow.
+          mesh.userData.isLed = true
           ledGlowController.registerLed(entry.ref, mesh, ledColorFor({
             ref: fp.ref, value: fp.value, libId: fp.libId, properties: fp.properties,
           }))
         }
       }
       scene.add(componentGroup)
+
+      // ── Board Critic overlay group ──
+      // Share the board-centering offset so finding markers (placed from
+      // kicadToWorld) line up with the copper/components. Clear stale markers; the
+      // CURRENT report's markers (already pushed via setCriticFindings BEFORE this
+      // loadBoard ran — see openBoardFromText) are re-applied at the END of this
+      // method so they survive the geometry rebuild.
+      boardCenter = { x: cx, y: cy }
+      boardThicknessMm = board.boardThicknessMm
+      criticOverlay.clear()
+      criticOverlay.group.position.set(-cx, -cy, 0)
+      if (criticOverlay.group.parent !== scene) scene.add(criticOverlay.group)
 
       // ── Silkscreen (troika Text — async, non-blocking) ──
       const silkEntries = buildSilkscreenEntries(board.silkscreen, board.boardThicknessMm)
@@ -549,6 +621,11 @@ export function createSceneManager(): SceneManager {
         controls?.target.set(0, 0, board.boardThicknessMm / 2)
         controls?.update()
       }
+
+      // Re-apply the current report's critic markers AFTER the clear above, so the
+      // findings the store pushed before loadBoard ran (board open) are not wiped
+      // out and actually show on the board (HIGH fix).
+      criticOverlay.reapplyLast(boardThicknessMm)
 
       dirty = true
     },
@@ -672,6 +749,44 @@ export function createSceneManager(): SceneManager {
       // uses) so a Playwright test can assert the LED is lit — and dimmed when the
       // supply voltage drops. Best-effort; no-op outside a DOM/window.
       publishLedGlow(currentsByRef)
+      dirty = true
+    },
+
+    // ── Board Critic overlay ───────────────────────────────────────────────────
+    setCriticFindings(findings: Finding[]): void {
+      criticOverlay.setFindings(findings, boardThicknessMm)
+      dirty = true
+    },
+
+    clearCriticFindings(): void {
+      // setFindings([]) wipes the markers AND forgets them, so a subsequent board
+      // reload's reapplyLast doesn't resurrect a cleared report.
+      criticOverlay.setFindings([], boardThicknessMm)
+      // Drop any critic highlight too.
+      picker.setExternalHighlight(null, [])
+      dirty = true
+    },
+
+    focusFinding(finding: Finding): void {
+      // Highlight the involved net/part via the picker's emissive path (read-only,
+      // identical to hover). netId → copper/vias; refs → component boxes.
+      picker.setExternalHighlight(finding.netId ?? null, finding.refs)
+
+      // Ease the camera to the finding location (BOARD-mm → world, then apply the
+      // board-centering offset the overlay/copper groups use).
+      if (finding.location && controls) {
+        const w = kicadToWorld(finding.location.x, finding.location.y)
+        const target = new THREE.Vector3(
+          w.x - boardCenter.x,
+          w.y - boardCenter.y,
+          // Center on the marker plane (where the sphere sits), not the board mid.
+          boardThicknessMm + MARKER_Z_LIFT,
+        )
+        // Keep the current viewing distance/direction; just recenter on the point.
+        const cam = getActiveCamera()
+        const offset = cam.position.clone().sub(controls.target)
+        camTween = { camGoal: target.clone().add(offset), targetGoal: target }
+      }
       dirty = true
     },
   }
