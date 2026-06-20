@@ -193,12 +193,15 @@ if [[ -z "${CM_SRC_DIR}" ]]; then
   CM_SRC_DIR="$(find "${BUILD_DIR}" -type d -name 'ngspice' | head -1)"
 fi
 
+# NOTE: macOS ships bash 3.2, which has no `mapfile`/`readarray`. Collect the
+# .cm paths into the array with a portable while-read loop instead.
+CM_FILES=()
 if [[ -z "${CM_SRC_DIR}" ]] || [[ "$(find "${CM_SRC_DIR}" -name '*.cm' 2>/dev/null | wc -l)" -eq 0 ]]; then
   echo "WARNING: .cm files directory not found via install. Searching build tree ..."
   # Try to find any .cm in the build/install trees
-  mapfile -t CM_FILES < <(find "${INSTALL_DIR}" "${BUILD_DIR}" -name '*.cm' 2>/dev/null | sort -u)
+  while IFS= read -r _cm; do CM_FILES+=("$_cm"); done < <(find "${INSTALL_DIR}" "${BUILD_DIR}" -name '*.cm' 2>/dev/null | sort -u)
 else
-  mapfile -t CM_FILES < <(find "${CM_SRC_DIR}" -name '*.cm' | sort)
+  while IFS= read -r _cm; do CM_FILES+=("$_cm"); done < <(find "${CM_SRC_DIR}" -name '*.cm' | sort)
 fi
 
 if [[ ${#CM_FILES[@]} -eq 0 ]]; then
@@ -243,13 +246,13 @@ echo "Verified: digital.cm present"
 echo ""
 echo "Writing manifest.json ..."
 
-SHA256_LIB="$(sha256sum "${DEST_DIR}/${LIB_NAME}" 2>/dev/null || shasum -a 256 "${DEST_DIR}/${LIB_NAME}" | cut -d' ' -f1)"
+SHA256_LIB="$( { sha256sum "${DEST_DIR}/${LIB_NAME}" 2>/dev/null || shasum -a 256 "${DEST_DIR}/${LIB_NAME}"; } | cut -d' ' -f1)"
 FETCHED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Build CM file sha256 list
 CM_JSON="{}"
 for NAME in "${COPIED_CM[@]}"; do
-  HASH="$(sha256sum "${CM_DEST_DIR}/${NAME}" 2>/dev/null || shasum -a 256 "${CM_DEST_DIR}/${NAME}" | cut -d' ' -f1)"
+  HASH="$( { sha256sum "${CM_DEST_DIR}/${NAME}" 2>/dev/null || shasum -a 256 "${CM_DEST_DIR}/${NAME}"; } | cut -d' ' -f1)"
   # Simple JSON append using node (already required)
   CM_JSON="$(node -e "
     const obj = JSON.parse(process.env.CM_JSON || '{}');

@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "description": "Cross-platform Electron PCB simulator",
   "main": "./out/main/index.js",
-  "author": "",
+  "author": "circsim maintainers <epim@users.noreply.github.com>",
   "license": "MIT",
   "config": {
     "circsim": {
