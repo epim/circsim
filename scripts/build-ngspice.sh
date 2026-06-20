@@ -106,8 +106,13 @@ cd "${BUILD_DIR}"
   --enable-cider \
   --with-x=no \
   --disable-debug \
+  --disable-openmp \
   --prefix="${WORK_DIR}/install" \
   CFLAGS="-O2"
+# --disable-openmp: Apple clang has no bundled <omp.h>, so an OpenMP-enabled
+# build fails with "'omp.h' file not found" (misc_time.c). ngspice runs fine
+# single-threaded for our use; disabling OpenMP keeps the macOS/Linux source
+# build portable without a libomp dependency.
 
 echo ""
 echo "Building (make -j) ..."
