@@ -337,6 +337,41 @@ export default function InstrumentProps({ instrument }: InstrumentPropsProps): R
     )
   }
 
+  // ── potentiometer ─────────────────────────────────────────────────────────
+  // "Turn the pot": a single wiper knob (0..100%). Dragging calls
+  // updateInstrument → alterPlan live-alters the rpot resistor value(s).
+  // (3D knob mesh is a follow-up; this reuses the 2D DragKnob.)
+  if (instrument.kind === 'potentiometer') {
+    const inst = instrument
+    const header =
+      inst.mode === 'rheostat'
+        ? `Potentiometer (rheostat) — ${netName(inst.netA)}↔${netName(inst.netW)}`
+        : `Potentiometer (divider) — ${netName(inst.netHi)}/${netName(inst.netW)}/${netName(inst.netLo)}`
+    return (
+      <div style={propsStyle}>
+        <div style={propsHeaderStyle}>{header}</div>
+        <div style={knobRowStyle}>
+          <DragKnob
+            label="Wiper"
+            value={Math.round(inst.wiperPct * 100)}
+            min={0}
+            max={100}
+            step={1}
+            unit="%"
+            onChange={pct => update({ ...inst, wiperPct: Math.max(0, Math.min(1, pct / 100)) })}
+          />
+        </div>
+        <NumericField
+          label="Total R"
+          value={inst.totalOhms}
+          unit="Ω"
+          min={1}
+          onChange={v => update({ ...inst, totalOhms: v })}
+        />
+      </div>
+    )
+  }
+
   // ── voltage-probe ─────────────────────────────────────────────────────────
   if (instrument.kind === 'voltage-probe') {
     const inst = instrument

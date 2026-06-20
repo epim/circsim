@@ -24,6 +24,7 @@
 import type { Circuit, CircuitNet } from '../netlist/extract'
 import type { Resolution } from '../models/types'
 import type { Instrument, AlterPlanResult } from './instruments'
+import { clampPotOhms, potResistorNames } from './instruments'
 
 // ─── Public API types ─────────────────────────────────────────────────────────
 
@@ -647,6 +648,36 @@ export function generateDeck(opts: GenerateOptions): string[] {
     if (inst.kind === 'voltage-probe') continue  // no element needed; node voltages are saved
     if (inst.kind === 'current-probe') continue  // handled separately below
 
+    // ── potentiometer: emit 1 (rheostat) or 2 (divider) resistors ────────────
+    // Pots carry their own nets (not inst.netId). Resistor names come from the
+    // shared potResistorNames() helper; every leg is clamped so it never hits 0Ω
+    // (an Rmin clamp keeps ngspice convergent).
+    if (inst.kind === 'potentiometer') {
+      const names = potResistorNames(inst)
+      const nodeFor = (netId: number): string | undefined => {
+        const n = netById(circuit, netId)
+        return n?.spiceNode
+      }
+      if (inst.mode === 'rheostat' && 'single' in names) {
+        const a = nodeFor(inst.netA)
+        const w = nodeFor(inst.netW)
+        if (a === undefined || w === undefined) continue
+        const ohms = clampPotOhms(inst.totalOhms * inst.wiperPct, inst.totalOhms)
+        lines.push(`${names.single} ${a} ${w} ${formatSpiceValue(ohms)}`)
+      } else if (inst.mode === 'divider' && 'upper' in names) {
+        const hi = nodeFor(inst.netHi)
+        const w  = nodeFor(inst.netW)
+        const lo = nodeFor(inst.netLo)
+        if (hi === undefined || w === undefined || lo === undefined) continue
+        // upper leg netHi–netW = totalOhms*(1-wiperPct); lower leg netW–netLo = totalOhms*wiperPct
+        const upper = clampPotOhms(inst.totalOhms * (1 - inst.wiperPct), inst.totalOhms)
+        const lower = clampPotOhms(inst.totalOhms * inst.wiperPct, inst.totalOhms)
+        lines.push(`${names.upper} ${hi} ${w} ${formatSpiceValue(upper)}`)
+        lines.push(`${names.lower} ${w} ${lo} ${formatSpiceValue(lower)}`)
+      }
+      continue
+    }
+
     const net = netById(circuit, inst.netId)
     if (!net) continue  // skip if net not in circuit
 
@@ -1148,6 +1179,50 @@ export function alterPlan(
       kind: 'alter',
       commands: [`alter @${name}[pulse] [ ${lo} ${hi} 0 1e-09 1e-09 ${width} ${period} ]`],
     }
+  }
+
+  // ── potentiometer: only wiperPct changed → live-alter the rpot resistor(s) ─
+  // Any change to nets / mode / totalOhms changes the deck structure (resistor
+  // names or topology) → reload. The emitted alter is the bare-value form
+  //   `alter <rpot_name> <ohms>`
+  // which parseAlterCommand/buildAlterCommand round-trip into the valid ngspice
+  // line `alter <rpot_name> = <ohms>`. Resistor names come from the SAME shared
+  // potResistorNames() helper used by generateDeck so they can never drift.
+  if (kind === 'potentiometer') {
+    const prev = prevInstrument as Extract<Instrument, { kind: 'potentiometer' }>
+    const next = nextInstrument as Extract<Instrument, { kind: 'potentiometer' }>
+
+    // mode change → reload (topology + resistor names differ).
+    if (prev.mode !== next.mode) return { kind: 'reload' }
+    // totalOhms change → reload (clamp ceiling changes; keep it simple & safe).
+    if (prev.totalOhms !== next.totalOhms) return { kind: 'reload' }
+    // net change → reload (resistor endpoints differ).
+    if (prev.mode === 'rheostat' && next.mode === 'rheostat') {
+      if (prev.netA !== next.netA || prev.netW !== next.netW) return { kind: 'reload' }
+    } else if (prev.mode === 'divider' && next.mode === 'divider') {
+      if (prev.netHi !== next.netHi || prev.netW !== next.netW || prev.netLo !== next.netLo) {
+        return { kind: 'reload' }
+      }
+    }
+
+    // Only wiperPct (or nothing) changed → alter the resistor value(s).
+    const names = potResistorNames(next)
+    if (next.mode === 'rheostat' && 'single' in names) {
+      const ohms = clampPotOhms(next.totalOhms * next.wiperPct, next.totalOhms)
+      return { kind: 'alter', commands: [`alter ${names.single} ${formatSpiceValue(ohms)}`] }
+    }
+    if (next.mode === 'divider' && 'upper' in names) {
+      const upper = clampPotOhms(next.totalOhms * (1 - next.wiperPct), next.totalOhms)
+      const lower = clampPotOhms(next.totalOhms * next.wiperPct, next.totalOhms)
+      return {
+        kind: 'alter',
+        commands: [
+          `alter ${names.upper} ${formatSpiceValue(upper)}`,
+          `alter ${names.lower} ${formatSpiceValue(lower)}`,
+        ],
+      }
+    }
+    return { kind: 'reload' }
   }
 
   // ── current-probe: any change → check if it involves a subckt part ────────

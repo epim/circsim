@@ -1009,6 +1009,156 @@ describe('alterPlan — current-probe on subckt → reload', () => {
   })
 })
 
+// ─── Potentiometer deck emission ──────────────────────────────────────────────
+
+/**
+ * Minimal 3-net circuit for pot tests:
+ *   net 1 HI → hi
+ *   net 2 W  → w (wiper)
+ *   net 3 LO → 0 (ground)
+ * No parts (the pot itself supplies the resistors).
+ */
+function makePotCircuit(): Circuit {
+  const nets: CircuitNet[] = [
+    { id: 1, kicadName: 'HI', spiceNode: 'hi', padRefs: [] },
+    { id: 2, kicadName: 'W',  spiceNode: 'w',  padRefs: [] },
+    { id: 3, kicadName: 'LO', spiceNode: '0',  padRefs: [] },
+  ]
+  return { nets, parts: [], warnings: [] }
+}
+
+/** Pull the value (last token) of a deck card by its element name. */
+function cardValue(deck: string[], name: string): string | undefined {
+  const line = deck.find(l => l.split(/\s+/)[0] === name)
+  if (!line) return undefined
+  const toks = line.split(/\s+/)
+  return toks[toks.length - 1]
+}
+
+describe('Potentiometer — rheostat deck emission', () => {
+  function rheostatDeck(wiperPct: number): string[] {
+    const circuit = makePotCircuit()
+    const instruments: Instrument[] = [
+      { kind: 'ground-ref', netId: 3 },
+      { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 1, netW: 2, totalOhms: 10000, wiperPct },
+    ]
+    return generateDeck({ circuit, resolutions: [], instruments, groundNetId: 3 })
+  }
+
+  test('wiperPct 0 → resistor clamped to RMIN (1Ω), stable name rpot_p1, nets hi–w', () => {
+    const deck = rheostatDeck(0)
+    const line = deck.find(l => l.startsWith('rpot_p1 '))
+    expect(line).toBeDefined()
+    expect(line).toBe('rpot_p1 hi w 1')
+  })
+
+  test('wiperPct 0.5 → totalOhms*0.5 = 5000', () => {
+    const deck = rheostatDeck(0.5)
+    expect(cardValue(deck, 'rpot_p1')).toBe('5000')
+  })
+
+  test('wiperPct 1 → totalOhms = 10000 (full)', () => {
+    const deck = rheostatDeck(1)
+    expect(cardValue(deck, 'rpot_p1')).toBe('10000')
+  })
+})
+
+describe('Potentiometer — divider deck emission', () => {
+  function dividerDeck(wiperPct: number): string[] {
+    const circuit = makePotCircuit()
+    const instruments: Instrument[] = [
+      { kind: 'ground-ref', netId: 3 },
+      { kind: 'potentiometer', mode: 'divider', id: 'p2', netHi: 1, netW: 2, netLo: 3, totalOhms: 10000, wiperPct },
+    ]
+    return generateDeck({ circuit, resolutions: [], instruments, groundNetId: 3 })
+  }
+
+  test('wiperPct 0.5 → two equal 5000Ω resistors with stable names, correct nets', () => {
+    const deck = dividerDeck(0.5)
+    // upper: netHi–netW = totalOhms*(1-wiperPct); lower: netW–netLo = totalOhms*wiperPct
+    expect(deck.find(l => l.startsWith('rpot_p2_a '))).toBe('rpot_p2_a hi w 5000')
+    expect(deck.find(l => l.startsWith('rpot_p2_b '))).toBe('rpot_p2_b w 0 5000')
+  })
+
+  test('wiperPct 0 → upper full (10000), lower clamped to RMIN (1)', () => {
+    const deck = dividerDeck(0)
+    expect(cardValue(deck, 'rpot_p2_a')).toBe('10000')
+    expect(cardValue(deck, 'rpot_p2_b')).toBe('1')
+  })
+
+  test('wiperPct 1 → upper clamped to RMIN (1), lower full (10000)', () => {
+    const deck = dividerDeck(1)
+    expect(cardValue(deck, 'rpot_p2_a')).toBe('1')
+    expect(cardValue(deck, 'rpot_p2_b')).toBe('10000')
+  })
+})
+
+// ─── alterPlan — potentiometer ────────────────────────────────────────────────
+
+describe('alterPlan — potentiometer wiperPct → alter', () => {
+  test('rheostat wiperPct change → alter targeting rpot_<id> with new ohms (NOT reload)', () => {
+    const prev: Instrument = { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 1, netW: 2, totalOhms: 10000, wiperPct: 0.5 }
+    const next: Instrument = { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 1, netW: 2, totalOhms: 10000, wiperPct: 0.8 }
+    const result = alterPlan(prev, next)
+    expect(result.kind).toBe('alter')
+    if (result.kind === 'alter') {
+      expect(result.commands).toHaveLength(1)
+      expect(result.commands[0]).toBe('alter rpot_p1 8000')
+    }
+  })
+
+  test('divider wiperPct change → two alters on rpot_<id>_a / _b with new ohms (NOT reload)', () => {
+    const prev: Instrument = { kind: 'potentiometer', mode: 'divider', id: 'p2', netHi: 1, netW: 2, netLo: 3, totalOhms: 10000, wiperPct: 0.5 }
+    const next: Instrument = { kind: 'potentiometer', mode: 'divider', id: 'p2', netHi: 1, netW: 2, netLo: 3, totalOhms: 10000, wiperPct: 0.25 }
+    const result = alterPlan(prev, next)
+    expect(result.kind).toBe('alter')
+    if (result.kind === 'alter') {
+      expect(result.commands).toContain('alter rpot_p2_a 7500')  // totalOhms*(1-0.25)
+      expect(result.commands).toContain('alter rpot_p2_b 2500')  // totalOhms*0.25
+    }
+  })
+
+  test('wiperPct change to extreme clamps to RMIN in the alter command', () => {
+    const prev: Instrument = { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 1, netW: 2, totalOhms: 10000, wiperPct: 0.5 }
+    const next: Instrument = { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 1, netW: 2, totalOhms: 10000, wiperPct: 0 }
+    const result = alterPlan(prev, next)
+    expect(result.kind).toBe('alter')
+    if (result.kind === 'alter') {
+      expect(result.commands[0]).toBe('alter rpot_p1 1')
+    }
+  })
+
+  test('changing totalOhms → reload (not alter)', () => {
+    const prev: Instrument = { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 1, netW: 2, totalOhms: 10000, wiperPct: 0.5 }
+    const next: Instrument = { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 1, netW: 2, totalOhms: 50000, wiperPct: 0.5 }
+    const result = alterPlan(prev, next)
+    expect(result.kind).toBe('reload')
+  })
+
+  test('changing a net → reload', () => {
+    const prev: Instrument = { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 1, netW: 2, totalOhms: 10000, wiperPct: 0.5 }
+    const next: Instrument = { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 4, netW: 2, totalOhms: 10000, wiperPct: 0.5 }
+    const result = alterPlan(prev, next)
+    expect(result.kind).toBe('reload')
+  })
+
+  test('changing mode → reload', () => {
+    const prev: Instrument = { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 1, netW: 2, totalOhms: 10000, wiperPct: 0.5 }
+    const next: Instrument = { kind: 'potentiometer', mode: 'divider', id: 'p1', netHi: 1, netW: 2, netLo: 3, totalOhms: 10000, wiperPct: 0.5 }
+    const result = alterPlan(prev, next)
+    expect(result.kind).toBe('reload')
+  })
+
+  test('alter command carries no letter suffix (valid ngspice ohms)', () => {
+    const prev: Instrument = { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 1, netW: 2, totalOhms: 10000, wiperPct: 0.5 }
+    const next: Instrument = { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 1, netW: 2, totalOhms: 10000, wiperPct: 0.33 }
+    const result = alterPlan(prev, next)
+    if (result.kind === 'alter') {
+      expect(result.commands[0]).not.toMatch(/\d+[a-z]/i)
+    }
+  })
+})
+
 // ─── instrumentSpiceName ──────────────────────────────────────────────────────
 
 describe('instrumentSpiceName', () => {
