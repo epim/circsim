@@ -144,7 +144,12 @@ describe('Spec §12 — no-source guided empty state', () => {
     mock = createMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
-    // Ground is auto-suggested. No instruments attached.
+    // Ground is auto-suggested; fixture-rc's VIN is now recognised as a supply, so
+    // a default supply auto-attaches on open. Remove every auto-attached
+    // instrument to reach the "no source" guided-empty state this block tests.
+    for (const inst of [...store.getState().instruments]) {
+      if ('id' in inst) store.getState().removeInstrument(inst.id)
+    }
   })
 
   it('powerOn() returns null (no source) without sending commands', async () => {

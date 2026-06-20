@@ -70,6 +70,13 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
     void store.getState().powerOn()
   }, [store])
 
+  // First Light (L3): the one inviting verb. energize() auto-attaches a ground +
+  // supply when missing, then runs the op solve so the LEDs glow — so it's live
+  // as soon as a board is open (it does its own rigging), unlike Power On.
+  const handleEnergize = useCallback(() => {
+    void store.getState().energize()
+  }, [store])
+
   const handleRunPause = useCallback(() => {
     const st = store.getState()
     if (st.simState === 'running') st.pause()
@@ -89,6 +96,15 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
 
   return (
     <div style={barStyle}>
+      <button
+        style={energizeBtn}
+        onClick={handleEnergize}
+        title="Attach power & ground if needed, then light it up"
+        data-testid="energize-btn"
+      >
+        ⚡ Energize
+      </button>
+
       <button
         style={canPowerOn ? primaryBtn : disabledBtn}
         disabled={!canPowerOn}
@@ -169,6 +185,12 @@ const baseBtn: React.CSSProperties = {
   cursor: 'pointer',
   fontSize: 13,
   color: '#eee',
+}
+const energizeBtn: React.CSSProperties = {
+  ...baseBtn,
+  background: '#7a5a12',
+  borderColor: '#caa11a',
+  fontWeight: 600,
 }
 const primaryBtn: React.CSSProperties = { ...baseBtn, background: '#2a4a6a', borderColor: '#3a6a9a' }
 const runBtn: React.CSSProperties = { ...baseBtn, background: '#1a5a2a', borderColor: '#2a7a3a' }

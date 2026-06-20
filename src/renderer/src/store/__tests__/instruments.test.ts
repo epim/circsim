@@ -85,6 +85,12 @@ describe('Task22 — addInstrument / removeInstrument', () => {
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
     outId = store.getState().circuit!.nets.find(n => n.kicadName === 'OUT')!.id
+    // fixture-rc's VIN is now recognised as a supply, so a default supply
+    // auto-attaches on open. Clear instruments so these add/remove count tests
+    // start from an empty rack.
+    for (const inst of [...store.getState().instruments]) {
+      if ('id' in inst) store.getState().removeInstrument(inst.id)
+    }
   })
 
   it('addInstrument dc-supply → appears in instruments, deckDirty = true', () => {

@@ -34,8 +34,14 @@ import {
   type BomData,
 } from '../../../core/models/resolve'
 import type { LibraryEntry, PinMap, Resolution } from '../../../core/models/types'
-import { generateDeck, alterPlan, buildLedSpiceNames } from '../../../core/spicegen/generate'
+import { generateDeck, alterPlan, buildLedSpiceNames, isLedPart } from '../../../core/spicegen/generate'
 import type { Instrument } from '../../../core/spicegen/instruments'
+import {
+  diagnoseDarkLeds,
+  type CoachLed,
+  type DarkLedNote,
+  type DiagnoseInput,
+} from '../../../core/live/coach'
 import { parseBom } from '../../../core/bom/parseBom'
 import type { BoardModel } from '../../../core/kicad/types'
 
@@ -215,6 +221,13 @@ export interface AppState {
    * viewport's per-LED emissive intensity. Reset on board change.
    */
   currentsByRef: Map<string, number>
+  /**
+   * Plain-language "why isn't my LED glowing?" coach notes (First Light, L3).
+   * Rebuilt after every op solve from diagnoseDarkLeds(buildCoachInput(...)).
+   * Empty when every LED is lit (or there are no LEDs). Surfaced as a small
+   * non-blocking panel (CoachNotes.tsx, data-testid="coach-note").
+   */
+  coachNotes: DarkLedNote[]
   ngspiceVersion: string | null
   /** Real-time pacing factor (0.1× / 1× / 'max'). */
   paceFactor: number | 'max'
@@ -311,6 +324,14 @@ export interface AppState {
   /** Update an instrument; routes through alterPlan (alter-safe vs reload). */
   updateInstrument(id: string, next: Instrument): void
 
+  /**
+   * Test/synchronisation seam: resolves once the energized re-op coalescer is
+   * quiescent (no op in flight and no pending re-op). When nothing is in flight
+   * it resolves on the next microtask. Lets tests await the settled state
+   * deterministically instead of guessing at timers/wall-clock.
+   */
+  whenReopSettled(): Promise<void>
+
   // sim orchestration (Task 24)
   /**
    * Provide the imperative board hooks (viewport seam). The renderer entrypoint
@@ -320,6 +341,16 @@ export interface AppState {
 
   /** Generate deck → loadCircuit → runOp; resolves with the op voltages. */
   powerOn(): Promise<Map<number, number> | null>
+
+  /**
+   * First Light (L3) — the one inviting verb. A friendly wrapper over the
+   * power-on / op flow: ensure a designated ground AND a driving supply are
+   * attached (auto-attaching a default DC supply on the top suggested supply net
+   * when none exists, mirroring openBoardFromText), then run the operating-point
+   * solve so the LEDs glow. Resolves with the op voltages (or null if nothing on
+   * the board can be energized — e.g. no ground/supply net could be found).
+   */
+  energize(): Promise<Map<number, number> | null>
 
   /**
    * Start (or resume) the live transient bench (Spec §4 step 5, §7.5).
@@ -424,6 +455,58 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   let boardHooks: BoardHooks | null = null
   const ringBuffers = new Map<string /* probe id */, RingBuffer>()
 
+  // ── energized re-op coalescing (First Light dimmer — Spec §4) ─────────────────
+  // A knob drag fires a flood of updateInstrument() calls. Re-solving the op on
+  // every one would (a) overload SimHost and (b) drop the FINAL value when the
+  // last change lands while an op is still in flight. We coalesce: at most one op
+  // is in flight; while it runs, further changes set `reopRequested` and the op,
+  // on completion, re-solves ONCE for the latest instrument state — but only if
+  // the instruments actually changed since the last solve started (no-op guard
+  // against an infinite loop). `reopSettled` lets tests await the quiescent point.
+  let reopInFlight = false
+  let reopRequested = false
+  /** Snapshot of the instruments the in-flight (or last) op was solved for. */
+  let lastSolvedInstruments: Instrument[] | null = null
+  let reopSettledResolvers: Array<() => void> = []
+
+  /** Resolve everyone awaiting whenReopSettled() now that the queue is drained. */
+  function flushReopSettled(): void {
+    const resolvers = reopSettledResolvers
+    reopSettledResolvers = []
+    for (const r of resolvers) r()
+  }
+
+  /**
+   * Run the energized re-op loop: solve once for the current instrument state,
+   * then — if more changes arrived while solving AND they differ from what we just
+   * solved — solve again. Coalesces a burst of changes into the minimum number of
+   * op solves, always ending on the LATEST value. Re-entrancy-safe via reopInFlight.
+   */
+  async function runCoalescedReop(): Promise<void> {
+    if (reopInFlight) {
+      // An op is already running; mark that another solve is wanted and return.
+      reopRequested = true
+      return
+    }
+    reopInFlight = true
+    try {
+      do {
+        reopRequested = false
+        lastSolvedInstruments = store.getState().instruments
+        await store.getState().powerOn()
+        // Loop again only if a change arrived during the solve AND it left the
+        // instruments different from what we just solved (no-op guard).
+      } while (
+        reopRequested &&
+        !sameInstruments(lastSolvedInstruments, store.getState().instruments)
+      )
+    } finally {
+      reopInFlight = false
+      reopRequested = false
+      flushReopSettled()
+    }
+  }
+
   /** Ensure a ring buffer exists for every current voltage-probe; prune the rest. */
   function syncRingBuffers(instruments: Instrument[]): void {
     const liveIds = new Set<string>()
@@ -464,6 +547,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     opVoltages: null,
     voltageRange: null,
     currentsByRef: new Map(),
+    coachNotes: [],
     ngspiceVersion: null,
     paceFactor: 1,
     achievedRealtimeFactor: null,
@@ -490,6 +574,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         opVoltages: null,
         voltageRange: null,
         currentsByRef: new Map(),
+        coachNotes: [],
         instruments: [],
         stubOverrides: new Map(),
         pinMapOverrides: new Map(),
@@ -731,10 +816,23 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     },
 
     updateInstrument(id, next) {
-      const { instruments, resolutions, simState } = get()
+      const { instruments, resolutions, simState, opVoltages } = get()
       const prev = instruments.find(i => 'id' in i && i.id === id)
       const updated = instruments.map(i => ('id' in i && i.id === id ? next : i))
       set({ instruments: updated })
+
+      // "Energized" = an op result is currently shown and we're NOT mid-transient
+      // (a transient run is 'running'/'paused'). After energize()/powerOn the
+      // store sits at 'idle' with opVoltages populated. When the user nudges an
+      // instrument in that state (the supply DragKnob, a pot wiper, …), re-run the
+      // operating-point solve so currentsByRef + the LED glow + the coach update
+      // live — e.g. lowering the supply voltage dims the LED (First Light, L3).
+      //
+      // `reopInFlight` keeps us energized DURING a coalesced re-op: the re-op's own
+      // powerOn flips simState to 'op', so a knob change that lands mid-solve would
+      // otherwise read as not-energized and be dropped. Including reopInFlight lets
+      // that change queue (runCoalescedReop's no-op guard prevents loops).
+      const energized = (simState === 'idle' || reopInFlight) && opVoltages !== null
 
       // Route through alterPlan: alter-safe → live alter; reload-required → dirty.
       if (prev && 'id' in prev) {
@@ -754,6 +852,21 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       } else {
         get().markDeckDirty()
       }
+
+      // Re-op while energized: regenerate the deck with the new instrument values
+      // and re-solve. Coalesced so a knob-drag flood collapses to the minimum
+      // number of op solves and always ends on the FINAL value (runCoalescedReop):
+      // if an op is in flight the latest value is queued and solved once it lands.
+      if (energized) {
+        void runCoalescedReop()
+      }
+    },
+
+    whenReopSettled() {
+      if (!reopInFlight && !reopRequested) return Promise.resolve()
+      return new Promise<void>(resolve => {
+        reopSettledResolvers.push(resolve)
+      })
     },
 
     // ── sim orchestration ──────────────────────────────────────────────────────
@@ -801,11 +914,58 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       const voltageRange = computeVoltageRange(opVoltages)
       const currentsByRef = applyOpCurrents(boardHooks, result.values, resolutions, circuit)
 
-      set({ opVoltages, voltageRange, currentsByRef, deckDirty: false, simState: 'idle' })
+      // Coach: explain any dark LEDs in plain language (First Light, L3).
+      const coachNotes = diagnoseDarkLeds(
+        buildCoachInput(
+          circuit,
+          currentsByRef,
+          opVoltages,
+          hasSupplyAttached(instruments, groundNetId),
+          resolutions,
+        ),
+      )
+
+      set({ opVoltages, voltageRange, currentsByRef, coachNotes, deckDirty: false, simState: 'idle' })
 
       // Push onto the 3D board: floating voltage labels + copper voltage tint.
       applyOpToBoard(boardHooks, opVoltages, voltageRange)
       return opVoltages
+    },
+
+    async energize() {
+      const { circuit } = get()
+      if (!circuit) return null
+
+      // 1) Ensure a designated ground. openBoardFromText already runs the ground
+      //    heuristic, but if the user cleared it (or none was found) re-suggest.
+      if (get().groundNetId === null) {
+        const gnd = suggestGround(circuit.nets)
+        if (gnd) get().setGround(gnd.id)
+      }
+      const groundNetId = get().groundNetId
+      if (groundNetId === null) return null // nothing we can tie to 0 V
+
+      // 2) Ensure a driving source. Reuse the open-time auto-supply: attach a
+      //    default 5 V DC supply on the top suggested supply net (≠ ground) when
+      //    no source is present yet. Editable/removable afterwards.
+      const hasSource = get().instruments.some(
+        i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
+      )
+      if (!hasSource) {
+        const supplyNetId = chooseEnergizeSupplyNet(circuit, groundNetId)
+        if (supplyNetId !== undefined) {
+          get().addInstrument({
+            kind: 'dc-supply',
+            id: AUTO_SUPPLY_ID,
+            netId: supplyNetId,
+            volts: 5,
+            seriesOhms: 0.1, // Spec §9 default
+          })
+        }
+      }
+
+      // 3) Run the operating-point solve so the LEDs glow (and the coach speaks).
+      return get().powerOn()
     },
 
     run() {
@@ -1013,12 +1173,22 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           }))
           break
         case 'opResult': {
-          const circuit = get().circuit
+          const { circuit, resolutions, instruments, groundNetId } = get()
           if (!circuit) break
           const opVoltages = mapOpResultToNetVoltages(event.values, circuit)
           const voltageRange = computeVoltageRange(opVoltages)
-          const currentsByRef = applyOpCurrents(boardHooks, event.values, get().resolutions, circuit)
-          set({ opVoltages, voltageRange, currentsByRef })
+          const currentsByRef = applyOpCurrents(boardHooks, event.values, resolutions, circuit)
+          // Coach: rebuild the plain-language dark-LED notes for this op too.
+          const coachNotes = diagnoseDarkLeds(
+            buildCoachInput(
+              circuit,
+              currentsByRef,
+              opVoltages,
+              hasSupplyAttached(instruments, groundNetId),
+              resolutions,
+            ),
+          )
+          set({ opVoltages, voltageRange, currentsByRef, coachNotes })
           // Keep the board in sync after a replayed/standalone op too.
           applyOpToBoard(boardHooks, opVoltages, voltageRange)
           break
@@ -1157,15 +1327,21 @@ export function mapOpResultToNetVoltages(
 }
 
 /**
- * Map an op result's device-current vectors onto part refs.
+ * Map an op result's LED-ammeter branch currents onto part refs.
  *
- * ngspice exposes a saved device current `@d_d1[i]` in opResult.values under a
- * bare key. Across ngspice/encodings the key may appear as `@d_d1[i]`, `i(d_d1)`,
- * or a vector-named variant — so we accept any value key that references the LED's
- * SPICE device name and looks like a current. `ledSpiceNames` is the ref →
- * spiceName map from the deck generator (buildLedSpiceNames); we reverse it.
+ * Each LED is emitted with a 0 V series ammeter `vsense_<ref>` on its anode (the
+ * diode's own `@d_<ref>[i]` vector carries no data on ngspice 46 — see
+ * src/simhost/__tests__/diode-op-current.integration.test.ts), so the glow data
+ * source is the ammeter's branch current. The op result normalizer (protocol.ts
+ * normalizeVectorKey) turns `vsense_<ref>#branch` → `i(vsense_<ref>)`, so that is
+ * the canonical key; we also accept the raw `#branch` form defensively.
  *
- * Returns ref → amps. Refs whose current is absent from the result are omitted.
+ * `ledSpiceNames` is the ref → ammeter-name map from the deck generator
+ * (buildLedSpiceNames → ledSenseName); we reverse it. The ABS value is stored
+ * (ledIntensity uses magnitude, and a 0 V source's branch current sign just
+ * reflects which way the ammeter was wired).
+ *
+ * Returns ref → amps (magnitude). Refs whose current is absent are omitted.
  */
 export function mapOpResultToCurrents(
   values: Record<string, number>,
@@ -1176,19 +1352,168 @@ export function mapOpResultToCurrents(
   const lower = new Map<string, number>()
   for (const [k, v] of Object.entries(values)) lower.set(k.toLowerCase(), v)
 
-  for (const [ref, spiceName] of ledSpiceNames) {
-    const dev = spiceName.toLowerCase()
-    // Accepted encodings of a device current for this LED.
-    const candidates = [`@${dev}[i]`, `i(${dev})`, `${dev}#branch`, `i(@${dev})`]
+  for (const [ref, senseName] of ledSpiceNames) {
+    const dev = senseName.toLowerCase()
+    // Accepted encodings of the LED ammeter's branch current.
+    const candidates = [`i(${dev})`, `${dev}#branch`, `@${dev}[i]`, `i(@${dev})`]
     for (const c of candidates) {
       const v = lower.get(c)
       if (v !== undefined) {
-        out.set(ref, v)
+        out.set(ref, Math.abs(v))
         break
       }
     }
   }
   return out
+}
+
+// ─── coach input construction (First Light, L3) ──────────────────────────────────
+
+/**
+ * Anode/cathode pad numbers for an LED footprint. KiCad LED footprints number
+ * pad 1 = anode (+), pad 2 = cathode (−) — the convention the bundled samples
+ * (blinker-555, first-light) follow. Used to read each LED's anode/cathode net.
+ */
+const LED_ANODE_PAD = '1'
+const LED_CATHODE_PAD = '2'
+
+/**
+ * Build the pure `DiagnoseInput` the coach reasons over, from the live circuit +
+ * latest op state. For every LED part (isLedPart) we read its anode net (pad 1)
+ * and cathode net (pad 2); LEDs whose anode/cathode net can't be determined are
+ * skipped (the coach can't reason about them). `hasSupply` is true when a ground
+ * net is designated AND at least one driving source is attached — the same
+ * "can this board be energized?" test powerOn/energize use.
+ *
+ * `resolutions` (optional) is threaded through to isLedPart so the LED test sees
+ * the resolved subckt/model-card NAME — exactly as buildLedSpiceNames does (which
+ * drives the glow). Passing it keeps the coach's LED set identical to the glow
+ * set: an LED resolved only by its model name (value/libId silent) is recognised
+ * by both, never one but not the other.
+ *
+ * Pure + deterministic (LEDs in circuit-part order); exported for unit testing.
+ */
+export function buildCoachInput(
+  circuit: Circuit | null,
+  currentsByRef: Map<string, number>,
+  netVoltages: Map<number, number> | null,
+  hasSupply: boolean,
+  resolutions?: Resolution[],
+): DiagnoseInput {
+  // ref → resolved subckt name (when the part resolved to a subckt/model-card),
+  // mirroring buildLedSpiceNames so isLedPart sees the same evidence.
+  const subcktNameByRef = new Map<string, string>()
+  for (const res of resolutions ?? []) {
+    if (res.model && res.model.kind === 'subckt') subcktNameByRef.set(res.ref, res.model.subcktName)
+  }
+
+  const leds: CoachLed[] = []
+  if (circuit) {
+    for (const part of circuit.parts) {
+      if (
+        !isLedPart({
+          ref: part.ref,
+          value: part.value,
+          libId: part.libId,
+          subcktName: subcktNameByRef.get(part.ref),
+        })
+      )
+        continue
+      const anodeNet = part.padNet.get(LED_ANODE_PAD)
+      const cathodeNet = part.padNet.get(LED_CATHODE_PAD)
+      if (anodeNet === undefined || cathodeNet === undefined) continue
+      leds.push({ ref: part.ref, anodeNet, cathodeNet })
+    }
+  }
+  return {
+    leds,
+    currentsByRef,
+    netVoltages: netVoltages ?? undefined,
+    hasSupply,
+  }
+}
+
+/**
+ * True when this board can be energized: a ground net is designated AND at least
+ * one driving source (dc-supply / function-gen / logic-input) is attached. This
+ * is the shared "hasSupply" predicate for both the coach input and energize().
+ */
+export function hasSupplyAttached(
+  instruments: Instrument[],
+  groundNetId: number | null,
+): boolean {
+  if (groundNetId === null) return false
+  return instruments.some(
+    i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
+  )
+}
+
+/**
+ * Pick the net energize() should drop its auto-supply on. Prefers a heuristic
+ * supply rail (suggestSupplies — VCC / +5V / VIN / …) that isn't the ground net;
+ * when none is named like a rail, falls back to the most-connected non-ground net
+ * so a board with an unconventional rail name still lights up. The fallback
+ * EXCLUDES any net wired directly to an LED pad (anode/cathode) so it can never
+ * drop the supply on the node between a current limiter and an LED (which would
+ * put the full supply across the LED, bypassing the limiter). Returns undefined
+ * only when there is no usable non-ground net.
+ *
+ * Pure + deterministic (ties broken by lowest net id); exported for tests.
+ */
+export function chooseEnergizeSupplyNet(
+  circuit: Circuit,
+  groundNetId: number,
+): number | undefined {
+  // 1) A net that *looks* like a supply rail wins.
+  const named = suggestSupplies(circuit.nets).map(s => s.id).find(id => id !== groundNetId)
+  if (named !== undefined) return named
+
+  // Nets wired straight to an LED pad are unsafe fallback targets — driving them
+  // directly bypasses any series limiter. Collect them so the degree-based
+  // fallback skips them.
+  const ledNets = new Set<number>()
+  for (const part of circuit.parts) {
+    if (!isLedPart({ ref: part.ref, value: part.value, libId: part.libId })) continue
+    for (const netId of part.padNet.values()) ledNets.add(netId)
+  }
+
+  // 2) Fallback: the non-ground, non-LED net touched by the most pads (a rail
+  //    typically fans out to several parts), ties broken by lowest id.
+  let best: { id: number; degree: number } | undefined
+  for (const net of circuit.nets) {
+    if (net.id === groundNetId) continue
+    if (ledNets.has(net.id)) continue
+    const degree = net.padRefs.length
+    if (degree === 0) continue
+    if (
+      best === undefined ||
+      degree > best.degree ||
+      (degree === best.degree && net.id < best.id)
+    ) {
+      best = { id: net.id, degree }
+    }
+  }
+  return best?.id
+}
+
+/**
+ * Shallow structural equality for an instrument list — used by the energized
+ * re-op coalescer's no-op guard so it never loops on an unchanged instrument set.
+ * Compares each instrument's own enumerable scalar fields (the instrument shapes
+ * are flat records of primitives), in order.
+ */
+export function sameInstruments(a: Instrument[], b: Instrument[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const ia = a[i] as Record<string, unknown>
+    const ib = b[i] as Record<string, unknown>
+    const keys = new Set([...Object.keys(ia), ...Object.keys(ib)])
+    for (const k of keys) {
+      if (ia[k] !== ib[k]) return false
+    }
+  }
+  return true
 }
 
 /** Min/max across a netId→volts map (for the voltage legend). */
@@ -1245,6 +1570,15 @@ function applyOpCurrents(
  *   2. forward the raw batch to the scope emitter (decoupled, no React churn),
  *   3. drive the live copper overlay from the LATEST sample per probed net,
  *      keeping un-probed nets on their op tint.
+ *
+ * NOTE — LED glow is OPERATING-POINT-ONLY in v1 (no live glow during a transient).
+ * This sample path drives the per-net VOLTAGE overlay only; it does NOT update the
+ * per-LED current glow, because a device's own `@dev[i]` current does NOT stream
+ * over the transient SendData channel (proven in led-current.integration.test.ts:
+ * including it makes ngspice skip the whole run — zero samples). Live transient
+ * glow would need a series 0 V ammeter per LED (whose `<src>#branch` current DOES
+ * stream) — a later phase. So glow is refreshed only on each op solve (powerOn /
+ * the energized re-op), via applyOpCurrents in the opResult path.
  *
  * Exported for unit testing of the sample → ring-buffer → overlay path.
  */

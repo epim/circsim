@@ -16,6 +16,7 @@ import GroundSetup from './panels/GroundSetup'
 import InstrumentRack from './panels/InstrumentRack'
 import Toolbar from './panels/Toolbar'
 import WarningsBar from './panels/WarningsBar'
+import CoachNotes from './panels/CoachNotes'
 import SimLog from './panels/SimLog'
 import Scope from './panels/Scope'
 import About from './panels/About'
@@ -99,6 +100,22 @@ function Shell(): React.ReactElement {
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('[circsim] Failed to open sample project:', err)
+    }
+  }, [store])
+
+  /** Open the bundled "First Light" demo (minimal DC LED dimmer — First Light L1). */
+  const handleOpenFirstLight = useCallback(async () => {
+    try {
+      const demoPath = await window.circsim.getFirstLightDemoPath()
+      const opened = await openProjectFromPath(demoPath, window.circsim.readFile)
+      store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+        schematicText: opened.schematicText,
+        schematicFileName: opened.schematicFileName,
+        bomText: opened.bomText,
+      })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[circsim] Failed to open First Light demo:', err)
     }
   }, [store])
 
@@ -253,8 +270,14 @@ function Shell(): React.ReactElement {
                 overlay={overlay}
               />
             ) : (
-              <EmptyState onOpen={handleOpen} onOpenSample={handleOpenSample} />
+              <EmptyState
+                onOpen={handleOpen}
+                onOpenSample={handleOpenSample}
+                onOpenFirstLight={handleOpenFirstLight}
+              />
             )}
+            {/* Plain-language dark-LED coach (non-blocking overlay). */}
+            {board && <CoachNotes />}
             {selectedRef && (
               <div style={selectionBadge}>Selected: {selectedRef}</div>
             )}
@@ -281,7 +304,15 @@ function Shell(): React.ReactElement {
   )
 }
 
-function EmptyState({ onOpen, onOpenSample }: { onOpen: () => void; onOpenSample: () => void }): React.ReactElement {
+function EmptyState({
+  onOpen,
+  onOpenSample,
+  onOpenFirstLight,
+}: {
+  onOpen: () => void
+  onOpenSample: () => void
+  onOpenFirstLight: () => void
+}): React.ReactElement {
   return (
     <div style={emptyStateStyle}>
       <div style={{ fontSize: 18, marginBottom: 8 }}>No board loaded</div>
@@ -293,6 +324,13 @@ function EmptyState({ onOpen, onOpenSample }: { onOpen: () => void; onOpenSample
           Open…
         </button>
         <button
+          style={{ ...toolbarBtn, padding: '8px 16px', background: '#3a2e12', borderColor: '#5a4a22' }}
+          onClick={onOpenFirstLight}
+          data-testid="open-first-light-btn"
+        >
+          Open First Light demo
+        </button>
+        <button
           style={{ ...toolbarBtn, padding: '8px 16px', background: '#1e3a2e', borderColor: '#2a5a3a' }}
           onClick={onOpenSample}
           data-testid="open-sample-btn"
@@ -301,7 +339,8 @@ function EmptyState({ onOpen, onOpenSample }: { onOpen: () => void; onOpenSample
         </button>
       </div>
       <div style={{ color: '#555', marginTop: 10, fontSize: 12 }}>
-        Try the bundled 555 LED blinker to see the full simulation flow.
+        First Light is a one-LED dimmer — press Energize to watch it glow. Or try the
+        555 blinker for the full simulation flow.
       </div>
     </div>
   )

@@ -366,25 +366,37 @@ describe('orchestration — SimHost crash replay', () => {
   })
 })
 
-describe('mapOpResultToCurrents — op device currents → part refs', () => {
-  it('maps an LED ref to its device current via the ref↔spicename map', () => {
-    const ledSpiceNames = new Map<string, string>([['D1', 'd_d1']])
-    const values = { vin: 5, out: 2.5, '@d_d1[i]': 0.011 }
+describe('mapOpResultToCurrents — LED ammeter branch currents → part refs', () => {
+  it('maps an LED ref to its ammeter branch current via the ref↔sensename map', () => {
+    const ledSpiceNames = new Map<string, string>([['D1', 'vsense_d1']])
+    const values = { vin: 5, out: 2.5, 'i(vsense_d1)': 0.011 }
     const currents = mapOpResultToCurrents(values, ledSpiceNames)
     expect(currents.get('D1')).toBeCloseTo(0.011)
     expect(currents.size).toBe(1)
   })
 
-  it('accepts the i(dev) encoding and is case-insensitive', () => {
-    const ledSpiceNames = new Map<string, string>([['D2', 'd_d2']])
-    const currents = mapOpResultToCurrents({ 'I(D_D2)': -0.008 }, ledSpiceNames)
-    expect(currents.get('D2')).toBeCloseTo(-0.008)
+  it('accepts the #branch encoding, is case-insensitive, and stores the magnitude', () => {
+    const ledSpiceNames = new Map<string, string>([['D2', 'vsense_d2']])
+    // A 0V ammeter's branch current can read back negative depending on wiring;
+    // the store keeps the magnitude (ledIntensity uses magnitude).
+    const currents = mapOpResultToCurrents({ 'VSENSE_D2#branch': -0.008 }, ledSpiceNames)
+    expect(currents.get('D2')).toBeCloseTo(0.008)
   })
 
   it('omits refs whose current is absent from the result', () => {
-    const ledSpiceNames = new Map<string, string>([['D1', 'd_d1'], ['D9', 'd_d9']])
-    const currents = mapOpResultToCurrents({ '@d_d1[i]': 0.01 }, ledSpiceNames)
+    const ledSpiceNames = new Map<string, string>([['D1', 'vsense_d1'], ['D9', 'vsense_d9']])
+    const currents = mapOpResultToCurrents({ 'i(vsense_d1)': 0.01 }, ledSpiceNames)
     expect(currents.has('D1')).toBe(true)
     expect(currents.has('D9')).toBe(false)
+  })
+
+  it('populates currentsByRef from the LED ammeter branch current (magnitude)', () => {
+    // An op result that carries the LED's 0V series-ammeter branch current under
+    // the normalized key i(vsense_<ref>) → mapOpResultToCurrents stores the
+    // magnitude in currentsByRef keyed by the part ref (the glow data source).
+    const ledSpiceNames = new Map<string, string>([['D1', 'vsense_d1']])
+    const opResult = { vin: 5, leda: 1.8, 'i(vsense_d1)': -0.0104 }
+    const currentsByRef = mapOpResultToCurrents(opResult, ledSpiceNames)
+    expect(currentsByRef.get('D1')).toBeCloseTo(0.0104, 6)
   })
 })

@@ -182,13 +182,15 @@ export function suggestGround(nets: CircuitNet[]): CircuitNet | undefined {
 
 /**
  * Suggest which nets are power supply rails.
- * Matches (case-insensitive): VCC, VDD, 3V3, 5V, +5V, +3.3V, 12V, and general
- * patterns like \+?\d+V\d* or \d+V\d* — including hierarchical forms like
- * "/VCC" or "/Power/+5V".
+ * Matches (case-insensitive): VCC, VDD, 3V3, 5V, +5V, +3.3V, 12V, common input
+ * rails (VIN, VBUS, VBAT, V+), and general voltage-like patterns such as
+ * \+?\d+V\d* — including hierarchical forms like "/VCC", "/Power/+5V", or "/VBUS".
  */
 export function suggestSupplies(nets: CircuitNet[]): CircuitNet[] {
-  // Named keywords (case-insensitive)
-  const SUPPLY_NAMES = /^(vcc|vdd|3v3|5v|12v)$/i
+  // Named keywords (case-insensitive). Includes common input rails (vin/vbus/
+  // vbat) and the bare positive-rail label "v+" so a board's driving net is
+  // recognised even when it isn't named vcc/vdd.
+  const SUPPLY_NAMES = /^(vcc|vdd|vin|vbus|vbat|v\+|3v3|5v|12v)$/i
   // Voltage-like patterns: optional + then digits, V, optional more digits/decimal
   const SUPPLY_VOLTAGE = /^\+?\d+(\.\d+)?v\d*$/i
 

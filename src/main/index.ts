@@ -126,6 +126,15 @@ function registerIpcHandlers(): void {
   })
 
   /**
+   * Return the absolute path to the bundled "First Light" demo .kicad_pcb — the
+   * minimal DC LED dimmer (VIN → R1 → D1 → GND) used by the Energize / first-run
+   * experience. Same dev/packaged resolution as getSampleProjectPath.
+   */
+  ipcMain.handle('circsim:getFirstLightDemoPath', () => {
+    return resourcePath('sample', 'first-light.kicad_pcb')
+  })
+
+  /**
    * Open the "what circsim can tell you" fidelity doc.
    * In packaged builds, open the bundled docs/what-circsim-can-tell-you.md
    * via shell.openPath (rendered as plain text). In dev, open it from the

@@ -526,6 +526,22 @@ describe('suggestSupplies()', () => {
     expect(suggestSupplies(nets)).toHaveLength(1)
   })
 
+  it('matches input-rail names: VIN, /VBUS, VBAT, V+', () => {
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'VIN', spiceNode: 'vin', padRefs: [] },
+      { id: 2, kicadName: '/VBUS', spiceNode: '_vbus', padRefs: [] },
+      { id: 3, kicadName: 'VBAT', spiceNode: 'vbat', padRefs: [] },
+      { id: 4, kicadName: 'V+', spiceNode: 'v_', padRefs: [] },
+      { id: 5, kicadName: 'SIGNAL', spiceNode: 'signal', padRefs: [] },
+    ]
+    const names = suggestSupplies(nets).map(n => n.kicadName)
+    expect(names).toContain('VIN')
+    expect(names).toContain('/VBUS')
+    expect(names).toContain('VBAT')
+    expect(names).toContain('V+')
+    expect(names).not.toContain('SIGNAL')
+  })
+
   it('returns empty array when no supply candidate found', () => {
     const nets: CircuitNet[] = [
       { id: 1, kicadName: 'OUT', spiceNode: 'out', padRefs: [] },

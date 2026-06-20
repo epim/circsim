@@ -92,6 +92,32 @@ describe('Task 26 — sample project guard', () => {
     }
   })
 
+  it('first-light.kicad_pcb resolves with 0 unresolved parts; nets VIN/LEDA/GND present', () => {
+    const boardText = readSampleFile('first-light.kicad_pcb')
+    const library = loadBundledLibrary()
+
+    // Parse + extract (with the ground heuristic), then resolve against the library.
+    const board = parseBoard(boardText)
+    const probe = extract(board)
+    const gnd = suggestGround(probe.nets)
+    const circuit = gnd ? extract(board, { groundNetId: gnd.id }) : probe
+
+    const resolutions = resolveAll(circuit, undefined, undefined, library)
+
+    // Both parts present and resolved (R1 = primitive resistor, D1 = LED model-card).
+    expect(resolutions.length).toBeGreaterThanOrEqual(2)
+    const unresolved = resolutions.filter(r => r.status === 'unresolved')
+    expect(unresolved, `Unresolved parts: ${unresolved.map(r => r.ref).join(', ')}`).toHaveLength(0)
+    expect(resolutions.find(r => r.ref === 'R1')!.status).not.toBe('unresolved')
+    expect(resolutions.find(r => r.ref === 'D1')!.status).not.toBe('unresolved')
+
+    // The three named nets survived extraction.
+    const netNames = circuit.nets.map(n => n.kicadName)
+    expect(netNames).toContain('VIN')
+    expect(netNames).toContain('LEDA')
+    expect(netNames).toContain('GND')
+  })
+
   it('blinker-555 has U1=NE555 resolved via tier 1 (Sim.* fields)', () => {
     const boardText = readSampleFile('blinker-555.kicad_pcb')
     const schText = readSampleFile('blinker-555.kicad_sch')

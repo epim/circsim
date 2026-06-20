@@ -201,6 +201,14 @@ contextBridge.exposeInMainWorld('circsim', {
   },
 
   /**
+   * Return the absolute path to the bundled "First Light" demo .kicad_pcb (the
+   * minimal DC LED dimmer). Used by the "Open First Light demo" button.
+   */
+  getFirstLightDemoPath: (): Promise<string> => {
+    return ipcRenderer.invoke('circsim:getFirstLightDemoPath') as Promise<string>
+  },
+
+  /**
    * Open the "what circsim can tell you" fidelity documentation in the
    * system browser. Used by the fidelity banner and About panel (Task 28).
    * Returns a promise that resolves once the open is dispatched.

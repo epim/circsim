@@ -653,7 +653,7 @@ describe('generateDeck — inlines model definitions when modelTexts is provided
     expect(deckText).not.toContain('.include')
   })
 
-  test('LED model-card: emits a diode device + inlines its (multi-line) .model card', () => {
+  test('LED model-card: splices a 0V ammeter on the anode + emits the diode + inlines its (multi-line) .model card', () => {
     const circuit = make555LedCircuit()
     const deck = generateDeck({
       circuit,
@@ -663,9 +663,13 @@ describe('generateDeck — inlines model definitions when modelTexts is provided
       modelTexts,
     })
     const deckText = deck.join('\n')
-    // D1 pinMap {1:"2",2:"1"} → position 1 (anode)=pad2=GND(0); position 2 (cathode)=pad1=led_a
+    // D1 pinMap {1:"2",2:"1"} → position 1 (anode)=pad2=GND(0); position 2 (cathode)=pad1=led_a.
+    // The anode is spliced through a 0V series ammeter vsense_d1 into an internal
+    // node, so the diode now drives from the internal node (ngspice-46 glow source).
+    const senseLine = deck.find(l => l.startsWith('vsense_d1'))
+    expect(senseLine).toBe('vsense_d1 0 0__ledsense_d1 DC 0')
     const dLine = deck.find(l => l.startsWith('d_d1'))
-    expect(dLine).toBe('d_d1 0 led_a LED_RED')
+    expect(dLine).toBe('d_d1 0__ledsense_d1 led_a LED_RED')
     // The matching .model card is inlined, with its continuation joined.
     expect(deckText).toMatch(/\.model LED_RED D\(.*eg=1\.9.*\)/)
     // The unused LED_GREEN card is NOT pulled in (only referenced models inline).
@@ -713,7 +717,7 @@ describe('generateDeck — inlines model definitions when modelTexts is provided
     expect(deckText).not.toMatch(/^\.model LED_RED/m)
   })
 
-  test('LED device current is saved in the OP deck (.save @d_d1[i])', () => {
+  test('LED ammeter branch current is saved in the OP deck (.save i(vsense_d1))', () => {
     const circuit = make555LedCircuit()
     const deck = generateDeck({
       circuit,
@@ -722,16 +726,19 @@ describe('generateDeck — inlines model definitions when modelTexts is provided
       groundNetId: 2,
       modelTexts,
     })
-    // The diode device is d_d1 → its current vector is saved for glow.
-    expect(deck).toContain('.save @d_d1[i]')
+    // The LED's 0V series ammeter is vsense_d1 → its branch current is saved for
+    // glow. The diode's own @d_d1[i] vector is NEVER saved (carries no data on
+    // ngspice 46, and saving it kills the live transient stream).
+    expect(deck).toContain('.save i(vsense_d1)')
+    expect(deck.some(l => /^\.save @d_d1\[i\]/.test(l))).toBe(false)
     // Non-LED parts (the NE555 subckt) get no extra current save.
-    expect(deck.filter(l => /^\.save @/.test(l))).toEqual(['.save @d_d1[i]'])
+    expect(deck.filter(l => /^\.save i\(vsense_/.test(l))).toEqual(['.save i(vsense_d1)'])
   })
 
-  test('buildLedSpiceNames maps each LED ref → its diode device name', () => {
+  test('buildLedSpiceNames maps each LED ref → its 0V ammeter (vsense) name', () => {
     const circuit = make555LedCircuit()
     const map = buildLedSpiceNames(make555LedResolutions(), circuit)
-    expect(map.get('D1')).toBe('d_d1')
+    expect(map.get('D1')).toBe('vsense_d1')
     // The NE555 (a non-LED subckt) is not an LED.
     expect(map.has('U1')).toBe(false)
   })

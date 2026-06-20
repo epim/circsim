@@ -54,6 +54,11 @@ declare global {
       platformPaths(): Promise<CircsimPlatformPaths>
       getSampleProjectPath(): Promise<string>
       /**
+       * Absolute path to the bundled "First Light" demo .kicad_pcb (minimal DC
+       * LED dimmer). Used by the "Open First Light demo" button.
+       */
+      getFirstLightDemoPath(): Promise<string>
+      /**
        * Open the "what circsim can tell you" fidelity doc in the system viewer.
        * Wired from the fidelity banner and About panel (Task 28, Spec §12, §16 risk 7).
        */

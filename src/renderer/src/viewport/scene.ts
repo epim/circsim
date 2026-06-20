@@ -32,7 +32,43 @@ import { buildSilkscreenEntries, createSilkscreenTexts } from './silkscreen'
 import { createPicker, type PickCallback } from './picking'
 import { createOverlayController, type OverlayController, type OverlayMode, type LegendData } from './overlay'
 import { createMarkerController, type MarkerController, type AnnotationLabel, type ProbeMarker, type ProbeMarkerOpts } from './markers'
-import { createLedGlowController, isLed, ledColorFor, type LedGlowController } from './ledGlow'
+import { createLedGlowController, isLed, ledColorFor, ledIntensity, type LedGlowController } from './ledGlow'
+
+// ─── E2E LED-glow hook (First Light, L5) ─────────────────────────────────────────
+
+/**
+ * Shape published on `window.__circsimLedGlow` after every LED-current update so
+ * an E2E (Playwright) can assert an LED is lit — and DIMMED when the supply
+ * voltage drops. `byRef` maps part ref → glow intensity (0..1, the same
+ * perceptual curve the glow controller drives the emissive channel with); `max`
+ * is the brightest LED's intensity (0 when all are dark).
+ */
+export interface LedGlowSnapshot {
+  byRef: Record<string, number>
+  max: number
+}
+
+/**
+ * Compute per-ref glow intensities + the max, then publish them on
+ * `window.__circsimLedGlow` (and mirror `max` onto a `data-led-glow-max`
+ * attribute on <html> so a test can read either). Best-effort + side-effect-only:
+ * a no-op when there is no `window`/`document` (headless unit tests).
+ */
+function publishLedGlow(currentsByRef: Map<string, number>): void {
+  if (typeof window === 'undefined') return
+  const byRef: Record<string, number> = {}
+  let max = 0
+  for (const [ref, current] of currentsByRef) {
+    const intensity = ledIntensity(current)
+    byRef[ref] = intensity
+    if (intensity > max) max = intensity
+  }
+  const snapshot: LedGlowSnapshot = { byRef, max }
+  ;(window as unknown as { __circsimLedGlow?: LedGlowSnapshot }).__circsimLedGlow = snapshot
+  if (typeof document !== 'undefined' && document.documentElement) {
+    document.documentElement.setAttribute('data-led-glow-max', max.toFixed(4))
+  }
+}
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -631,6 +667,11 @@ export function createSceneManager(): SceneManager {
 
     applyLedCurrents(currentsByRef: Map<string, number>): void {
       ledGlowController?.applyCurrents(currentsByRef)
+      // E2E testability hook (First Light, L5): publish the per-ref glow + the max
+      // emissive intensity (0..1 via the same ledIntensity curve the controller
+      // uses) so a Playwright test can assert the LED is lit — and dimmed when the
+      // supply voltage drops. Best-effort; no-op outside a DOM/window.
+      publishLedGlow(currentsByRef)
       dirty = true
     },
   }

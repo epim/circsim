@@ -308,21 +308,38 @@ export function isLedPart(args: {
 }
 
 /**
- * The SPICE device-current name for an LED diode in the OP deck.
+ * The SPICE diode device name for an LED in the OP deck.
  *
  * LED model-card parts are emitted as a top-level diode primitive `d_<ref>`
- * (see the model-card path below), so the device-current vector is `@d_<ref>[i]`.
- * This builder returns the bare device name (`d_<ref>`); callers append `[i]`.
+ * (see the model-card path below). Returns the bare device name (`d_<ref>`).
+ *
+ * NOTE: on ngspice 46 a diode's `@d_<ref>[i]` vector carries NO data, so the glow
+ * data source is NOT this device current — it is the 0 V series ammeter
+ * `vsense_<ref>` spliced on the LED's anode (see ledSenseName). This helper is
+ * retained for emitting the diode element name itself.
  */
 export function ledSpiceName(ref: string): string {
   return `d_${ref.toLowerCase()}`
 }
 
 /**
- * Build a ref → SPICE device-name map for every LED part in the circuit.
+ * The SPICE name of the 0 V series ammeter ("sense" source) spliced in series
+ * with an LED's anode. A 0 V source is an ideal ammeter with no circuit effect;
+ * its branch current reads back via the WORKING source-branch path in OP
+ * (`i(vsense_<ref>)` / `vsense_<ref>#branch`) AND streams in transient — the
+ * uniform, robust glow data source. Shared by the deck generator AND the store
+ * (mapOpResultToCurrents) so the names can never drift.
+ */
+export function ledSenseName(ref: string): string {
+  return `vsense_${ref.toLowerCase()}`
+}
+
+/**
+ * Build a ref → LED-ammeter SPICE-name map for every LED part in the circuit.
  *
- * The store reverses this map to translate an op result's device-current vector
- * (`@d_d1[i]` / `i(d_d1)`) back to the part ref. Only LED parts are included.
+ * The store reverses this map to translate an op result's ammeter branch-current
+ * vector (`i(vsense_<ref>)` / `vsense_<ref>#branch`) back to the part ref. Only
+ * LED parts are included.
  */
 export function buildLedSpiceNames(
   resolutions: Resolution[],
@@ -342,7 +359,7 @@ export function buildLedSpiceNames(
         subcktName,
       })
     ) {
-      out.set(res.ref, ledSpiceName(res.ref))
+      out.set(res.ref, ledSenseName(res.ref))
     }
   }
   return out
@@ -799,7 +816,30 @@ export function generateDeck(opts: GenerateOptions): string[] {
         const deviceLetter = PRIMITIVE_PREFIX_TO_LETTER[refdesPrefix(part.ref)] ?? 'x'
         const nodes = buildPositionalNodeList(part, netIdToNode, pinMap)
         const devName = `${deviceLetter}_${part.ref.toLowerCase()}`
-        lines.push(`${devName} ${nodes.join(' ')} ${model.subcktName}`)
+
+        // LED glow data source: splice a 0 V series ammeter on the LED's anode
+        // (node[0] of the diode card). A diode's own `@d_<ref>[i]` vector carries
+        // NO data on ngspice 46, so the ammeter's branch current is the robust,
+        // op+transient-uniform glow source (see ledSenseName). Non-LED diodes
+        // (rectifiers) and other model-card devices are emitted unchanged.
+        const isLed = isLedPart({
+          ref: part.ref,
+          value: part.value,
+          libId: part.libId,
+          subcktName: model.subcktName,
+        })
+        if (isLed && nodes.length >= 2) {
+          const senseName = ledSenseName(part.ref)
+          const origAnode = nodes[0]
+          const internalAnode = `${origAnode}__ledsense_${part.ref.toLowerCase()}`
+          // vsense_<ref> origAnode internalAnode DC 0  (ideal 0 V ammeter)
+          lines.push(`${senseName} ${origAnode} ${internalAnode} DC 0`)
+          // diode now drives from the internal node: d_<ref> internalAnode cathode model
+          const spliced = [internalAnode, ...nodes.slice(1)]
+          lines.push(`${devName} ${spliced.join(' ')} ${model.subcktName}`)
+        } else {
+          lines.push(`${devName} ${nodes.join(' ')} ${model.subcktName}`)
+        }
         queueDef(`model:${libFile}:${model.subcktName.toLowerCase()}`, [modelCard])
         continue
       }
@@ -887,18 +927,20 @@ export function generateDeck(opts: GenerateOptions): string[] {
     }
   }
 
-  // LED operating-point glow: save each LED's diode device current so the
-  // viewport can drive emissive intensity from the real OP current. The OP path
-  // reads device-current vectors fine; this is additive and LED-only, so a
-  // current probe is NOT required (and these are deduplicated against any probe
-  // already saved on the same device).
-  const savedDevs = new Set(
-    lines.filter(l => l.startsWith('.save @')).map(l => l.slice('.save '.length)),
+  // LED operating-point glow: save each LED's 0 V series-ammeter branch current
+  // so the viewport can drive emissive intensity from the real LED current. The
+  // diode's own `@d_<ref>[i]` vector carries NO data on ngspice 46 (saving it
+  // would also kill the live transient stream), so the glow source is the
+  // ammeter branch current. The OP path already captures source-branch currents,
+  // so this `.save` is what guarantees the SAME source streams in transient too.
+  // LED-only + deduplicated against anything already saved.
+  const savedVecs = new Set(
+    lines.filter(l => l.startsWith('.save ')).map(l => l.slice('.save '.length)),
   )
-  for (const [, spiceName] of buildLedSpiceNames(resolutions, circuit)) {
-    const vec = `@${spiceName}[i]`
-    if (savedDevs.has(vec)) continue
-    savedDevs.add(vec)
+  for (const [, senseName] of buildLedSpiceNames(resolutions, circuit)) {
+    const vec = `i(${senseName})`
+    if (savedVecs.has(vec)) continue
+    savedVecs.add(vec)
     lines.push(`.save ${vec}`)
   }
 

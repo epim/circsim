@@ -62,8 +62,25 @@ export function createRendererStore(): AppStore {
     .then(({ entries, texts }) => {
       store.getState().setModelLibrary(entries, texts)
     })
-    .catch(() => {
-      // No bundled library available — tier-3 stays disabled; UI still works.
+    .catch((err: unknown) => {
+      // The bundled model library failed to load — tier-3 resolution is disabled,
+      // so LEDs / ICs (and any subckt/model-card/digital part) will show as
+      // UNRESOLVED and their definitions won't be inlined into the deck. Surface
+      // this instead of swallowing it silently, so the failure is diagnosable.
+      const detail = err instanceof Error ? err.message : String(err)
+      // eslint-disable-next-line no-console
+      console.warn('[circsim] bundled model library failed to load:', detail)
+      store.setState(s => ({
+        logLines: [
+          ...s.logLines,
+          {
+            level: 'warn' as const,
+            text:
+              'Bundled model library failed to load — LEDs and ICs will be unresolved ' +
+              `until it is available (${detail}).`,
+          },
+        ].slice(-2000),
+      }))
     })
 
   return store
