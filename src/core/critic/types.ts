@@ -69,6 +69,15 @@ export interface CriticOptions {
   decouplingFarMm: number
   /** Ambient temperature for thermal-rise reporting. Default 25 °C. */
   ambientC: number
+  /**
+   * Loop-area heuristic thresholds (mm²) for clock/high-speed nets: estimated
+   * signal↔return loop area above warn is worth checking; above err it very
+   * likely radiates / picks up EMI. Defaults 100 / 500 mm² — order-of-magnitude
+   * EMC rules of thumb (≲100 mm² is the commonly cited "keep it under" figure
+   * for fast edges), deliberately loose because the v1 estimate is coarse.
+   */
+  loopAreaWarnMm2: number
+  loopAreaErrMm2: number
 }
 
 export const DEFAULT_CRITIC_OPTIONS: CriticOptions = {
@@ -79,6 +88,8 @@ export const DEFAULT_CRITIC_OPTIONS: CriticOptions = {
   decouplingNearMm: 5,
   decouplingFarMm: 15,
   ambientC: 25,
+  loopAreaWarnMm2: 100,
+  loopAreaErrMm2: 500,
 }
 
 /**

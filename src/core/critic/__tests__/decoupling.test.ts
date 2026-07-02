@@ -150,6 +150,8 @@ describe('checkDecoupling', () => {
         decouplingNearMm: 5,
         decouplingFarMm: 15,
         ambientC: 25,
+        loopAreaWarnMm2: 100,
+        loopAreaErrMm2: 500,
       },
       refToFootprint: new Map(b.footprints.map((fp) => [fp.ref, fp])),
       refToPart: new Map(c.parts.map((p) => [p.ref, p])),
