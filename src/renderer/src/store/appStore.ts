@@ -34,7 +34,7 @@ import {
   type BomData,
 } from '../../../core/models/resolve'
 import type { LibraryEntry, PinMap, Resolution } from '../../../core/models/types'
-import { generateDeck, alterPlan, buildLedSpiceNames, isLedPart } from '../../../core/spicegen/generate'
+import { generateDeck, alterPlan, buildLedSpiceNames, isLedPart, ledSenseName } from '../../../core/spicegen/generate'
 import type { Instrument } from '../../../core/spicegen/instruments'
 import {
   diagnoseDarkLeds,
@@ -48,7 +48,7 @@ import { runCritic } from '../../../core/critic/run'
 import type { CriticReport, Finding, OpResult } from '../../../core/critic/types'
 
 import type { SimClient } from '../ipc/simClient'
-import type { SimCommand, SimEvent } from '../../../simhost/protocol'
+import { normalizeVectorKey, type SimCommand, type SimEvent } from '../../../simhost/protocol'
 import { createRingBuffer, feedSamples, type RingBuffer } from '../scope/ringBuffer'
 import { scopeSamplesEmitter } from '../scope/sampleEmitter'
 
@@ -1274,9 +1274,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           break
         case 'samples': {
           // Feed each probed net's samples into its ring buffer (the scope reads
-          // these), forward the raw batch to the scope emitter, and drive the live
-          // copper overlay off the LATEST sample per probed net (Spec §4 step 5).
-          ingestSamples(event, get, boardHooks, ringBuffers)
+          // these), forward the raw batch to the scope emitter, drive the live
+          // copper overlay off the LATEST sample per probed net (Spec §4 step 5),
+          // and drive the live LED glow off the LATEST sense-ammeter sample (L1b).
+          ingestSamples(event, get, set, boardHooks, ringBuffers)
           break
         }
         case 'benchRestarted':
@@ -1441,6 +1442,36 @@ export function mapOpResultToCurrents(
     }
   }
   return out
+}
+
+/**
+ * The LED sense-ammeter name prefix ("vsense_") — derived from ledSenseName (the
+ * single source of the spelling in spicegen/generate.ts) so the two can never drift.
+ */
+const LED_SENSE_PREFIX = ledSenseName('')
+
+/**
+ * Map a single vector name to the LED part ref whose sense-ammeter current it
+ * carries, or null for anything else (node voltages, scale vectors, non-LED
+ * source currents, …).
+ *
+ * GOTCHA (led-current.integration.test.ts): op results arrive with NORMALIZED
+ * keys (`i(vsense_<ref>)`), but transient `samples` batches carry ngspice's RAW
+ * vector names (`vsense_<ref>#branch`) — the streaming path never calls
+ * normalizeVectorKey. This helper accepts both spellings, case-insensitively,
+ * by normalizing first. Refs are returned UPPERCASE (ledSenseName lowercases
+ * them into the device name), matching the refs mapOpResultToCurrents produces.
+ *
+ * Pure + allocation-light (runs per vector column per ~60 Hz batch); exported
+ * for unit testing.
+ */
+export function mapVectorNameToLedRef(name: string): string | null {
+  // Raw "<dev>#branch" (and "@<dev>[i]") fold to "i(<dev>)", lowercased; a bare
+  // node name stays bare — so only genuine current vectors can match below.
+  const key = normalizeVectorKey(name)
+  if (!key.startsWith(`i(${LED_SENSE_PREFIX}`) || !key.endsWith(')')) return null
+  const ref = key.slice(2 + LED_SENSE_PREFIX.length, -1)
+  return ref.length > 0 ? ref.toUpperCase() : null
 }
 
 // ─── critic OpResult construction (Spec §7) ──────────────────────────────────────
@@ -1684,22 +1715,29 @@ function applyOpCurrents(
  *   1. route each vector's column into its probe ring buffer (the scope reads these),
  *   2. forward the raw batch to the scope emitter (decoupled, no React churn),
  *   3. drive the live copper overlay from the LATEST sample per probed net,
- *      keeping un-probed nets on their op tint.
+ *      keeping un-probed nets on their op tint,
+ *   4. drive the live LED glow from the LATEST sample of each LED sense-ammeter
+ *      column — the SAME path the op result uses (currentsByRef +
+ *      applyLedCurrents/publishLedGlow), so the LED blinks in step with the
+ *      transient (L1b).
  *
- * NOTE — LED glow is OPERATING-POINT-ONLY in v1 (no live glow during a transient).
- * This sample path drives the per-net VOLTAGE overlay only; it does NOT update the
- * per-LED current glow, because a device's own `@dev[i]` current does NOT stream
- * over the transient SendData channel (proven in led-current.integration.test.ts:
- * including it makes ngspice skip the whole run — zero samples). Live transient
- * glow would need a series 0 V ammeter per LED (whose `<src>#branch` current DOES
- * stream) — a later phase. So glow is refreshed only on each op solve (powerOn /
- * the energized re-op), via applyOpCurrents in the opResult path.
+ * NOTE — the glow data source is the 0 V series ammeter `vsense_<ref>` the deck
+ * generator splices in front of every LED (ledSenseName): a diode's own `@dev[i]`
+ * current does NOT stream over the transient SendData channel (proven in
+ * led-current.integration.test.ts: saving it makes ngspice skip the whole run —
+ * zero samples), but the ammeter's `<src>#branch` current streams cleanly.
+ * GOTCHA: unlike op results, transient vector names are NOT normalized — the
+ * batch carries the RAW ngspice name ("vsense_d1#branch", never "i(vsense_d1)")
+ * — so the mapping (mapVectorNameToLedRef) accepts both spellings. Runs per
+ * batch (~60 Hz): the currentsByRef copy is made lazily, only when the batch
+ * actually carries a sense column.
  *
- * Exported for unit testing of the sample → ring-buffer → overlay path.
+ * Exported for unit testing of the sample → ring-buffer → overlay/glow path.
  */
 export function ingestSamples(
   event: Extract<SimEvent, { type: 'samples' }>,
   get: () => AppState,
+  set: (partial: Partial<AppState>) => void,
   hooks: BoardHooks | null,
   ringBuffers: Map<string, RingBuffer>,
 ): void {
@@ -1723,10 +1761,29 @@ export function ingestSamples(
   // the latest probed-net samples on top.
   const liveVoltages = new Map<number, number>(state.opVoltages ?? [])
 
+  // Live LED currents, lazily copied from the current map so LEDs absent from
+  // this batch keep their last-known current. Stays null when the batch carries
+  // no sense column — the common no-LED case pays nothing and the glow path
+  // (store + scene) is left completely untouched.
+  let ledCurrents: Map<string, number> | null = null
+
   for (let ci = 0; ci < event.vectorNames.length; ci++) {
     const vecName = event.vectorNames[ci]
     const column = event.columns[ci]
     if (!column) continue
+
+    // LED sense-ammeter column? (RAW transient name, e.g. "vsense_d1#branch" —
+    // see the docstring gotcha.) Newest timepoint wins; magnitude, matching
+    // mapOpResultToCurrents (a 0 V source's sign just reflects its wiring).
+    const ledRef = mapVectorNameToLedRef(vecName)
+    if (ledRef !== null) {
+      if (column.length > 0) {
+        ledCurrents ??= new Map(state.currentsByRef)
+        ledCurrents.set(ledRef, Math.abs(column[column.length - 1]))
+      }
+      continue // a branch current is never a node voltage
+    }
+
     const netId = nodeToNet.get(vecName) ?? nodeToNet.get(vecName.toLowerCase())
     if (netId === undefined) continue
 
@@ -1752,6 +1809,14 @@ export function ingestSamples(
   if (hooks && liveVoltages.size > 0) {
     const range = computeVoltageRange(liveVoltages)
     if (range) hooks.applyNetVoltages(liveVoltages, range.min, range.max)
+  }
+
+  // Live LED glow off the newest sense-ammeter samples — the same store field +
+  // scene hook the op result drives (applyLedCurrents → publishLedGlow), so the
+  // op path, the E2E snapshot, and the live bench can never disagree (L1b).
+  if (ledCurrents) {
+    set({ currentsByRef: ledCurrents })
+    hooks?.applyLedCurrents?.(ledCurrents)
   }
 }
 

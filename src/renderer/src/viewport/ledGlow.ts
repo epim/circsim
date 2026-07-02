@@ -1,12 +1,13 @@
 /**
  * viewport/ledGlow.ts
  *
- * LED operating-point glow — pure helpers + a scene-side controller.
+ * LED glow — pure helpers + a scene-side controller.
  *
- * Scope: DC operating-point glow only. Given a part's real OP current, an LED
- * lights with an emissive channel proportional to current, plus a soft additive
- * halo Sprite above it. Additive over the existing voltage overlay / op
- * annotations — it never mutates copper materials or net tints.
+ * Driven from a part's real current — the DC operating point (energize) or the
+ * newest transient sample (live bench, L1b); the controller is agnostic to the
+ * source. An LED lights with an emissive channel proportional to current, plus
+ * a soft additive halo Sprite above it. Additive over the existing voltage
+ * overlay / op annotations — it never mutates copper materials or net tints.
  *
  * Pure pieces (unit-tested, no GL):
  *   isLed(part)            — classify a footprint/refdes as an LED
