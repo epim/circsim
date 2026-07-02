@@ -204,7 +204,7 @@ function Shell(): React.ReactElement {
     >
       <header style={headerStyle}>
         <strong>circsim</strong>
-        <span style={{ fontSize: 12, color: '#888' }}>v0.1.0</span>
+        <span style={{ fontSize: 12, color: '#888' }}>v{__APP_VERSION__}</span>
         <button style={toolbarBtn} onClick={handleOpen}>
           Open…
         </button>

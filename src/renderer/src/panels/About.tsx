@@ -66,7 +66,7 @@ export default function About({ open, onClose }: AboutProps): React.ReactElement
 
   if (!open) return null
 
-  const version = texts?.appVersion ?? '0.1.0'
+  const version = texts?.appVersion ?? __APP_VERSION__
   const modelProvenance = texts?.modelProvenance || FALLBACK_PROVENANCE
   const ngspiceCopying = texts?.ngspiceCopying || ''
 

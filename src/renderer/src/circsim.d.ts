@@ -7,6 +7,7 @@
  * pull electron types into its program.
  */
 
+
 interface CircsimOpenDialogOptions {
   title?: string
   filters?: { name: string; extensions: string[] }[]
@@ -45,6 +46,12 @@ interface CircsimModelLibrary {
 }
 
 declare global {
+  /**
+   * Compile-time constant injected by electron.vite.config.ts (renderer
+   * `define`) from package.json — the ONE version string shown in UI chrome.
+   */
+  const __APP_VERSION__: string
+
   interface Window {
     circsim: {
       openFileDialog(opts?: CircsimOpenDialogOptions): Promise<CircsimOpenDialogResult>
