@@ -183,14 +183,20 @@ test.describe('circsim smoke E2E', () => {
     await supplyInput.fill('9')
     await supplyInput.press('Enter')
 
-    // Power On again to get fresh op result
+    // Power On again and POLL until the fresh op result lands (no fixed sleep:
+    // with the blinker's LED now correctly forward-biased, the 9 V op can take
+    // several seconds — ngspice's gmin/source-stepping retry ladder engages on
+    // the astable + conducting-diode circuit before it converges).
     await powerOnBtn.click()
-    await page.waitForTimeout(5000)
-
-    // Read annotations after
-    const annotationsAfter = await page.locator('[data-testid="op-annotation"]').allTextContents()
+    await expect
+      .poll(
+        async () => page.locator('[data-testid="op-annotation"]').allTextContents(),
+        { timeout: 30_000 },
+      )
+      .not.toEqual(annotationsBefore)
 
     // The annotations must have changed (e.g. VCC went from ~5 to ~9)
+    const annotationsAfter = await page.locator('[data-testid="op-annotation"]').allTextContents()
     expect(annotationsAfter).not.toEqual(annotationsBefore)
   })
 })
