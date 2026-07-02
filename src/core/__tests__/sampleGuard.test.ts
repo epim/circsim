@@ -118,6 +118,30 @@ describe('Task 26 — sample project guard', () => {
     expect(netNames).toContain('GND')
   })
 
+  it('bundled LED boards wire D1 forward (library pinMap: pad 1 = cathode)', () => {
+    // The bundled library pinMap for LED_* footprints is {"1":"2","2":"1"} —
+    // the KiCad convention (pad 1 = cathode). A sample board that puts pad 1 on
+    // the drive net therefore generates a REVERSE-biased diode: dark LED, ~µA
+    // leakage (this shipped in v0.2.0 on first-light.kicad_pcb). Guard both
+    // demo boards: pad 1 must sit on GND, pad 2 on the LED's drive net.
+    const cases = [
+      { file: 'blinker-555.kicad_pcb', driveNet: 'LED_A' },
+      { file: 'first-light.kicad_pcb', driveNet: 'LEDA' },
+    ]
+    for (const { file, driveNet } of cases) {
+      const board = parseBoard(readSampleFile(file))
+      const d1 = board.footprints.find(fp => fp.ref === 'D1')
+      expect(d1, `${file}: D1 footprint`).toBeDefined()
+      const netName = (padNumber: string): string | undefined => {
+        const pad = d1!.pads.find(p => p.number === padNumber)
+        if (!pad || pad.netId === undefined) return undefined
+        return board.netById.get(pad.netId)?.name
+      }
+      expect(netName('1'), `${file}: D1 pad 1 (cathode) net`).toBe('GND')
+      expect(netName('2'), `${file}: D1 pad 2 (anode) net`).toBe(driveNet)
+    }
+  })
+
   it('blinker-555 has U1=NE555 resolved via tier 1 (Sim.* fields)', () => {
     const boardText = readSampleFile('blinker-555.kicad_pcb')
     const schText = readSampleFile('blinker-555.kicad_sch')

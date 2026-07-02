@@ -7,7 +7,8 @@
  * fixture: a real one-LED dimmer.
  *
  * Covered:
- *   - buildCoachInput: LED anode(pad1)/cathode(pad2) nets, hasSupply, voltages
+ *   - buildCoachInput: LED anode/cathode nets from the resolved pinMap (falling
+ *     back to the KiCad convention pad 1 = cathode), hasSupply, voltages
  *   - hasSupplyAttached: ground + ≥1 source predicate
  *   - energize(): auto-attaches a supply when none, runs the op, lights the LED
  *   - re-op-on-change while energized: nudging the supply re-solves; lowering the
@@ -32,7 +33,10 @@ const firstLight = readFileSync(join(sampleDir, 'first-light.kicad_pcb'), 'utf-8
 
 // ─── pure helpers ────────────────────────────────────────────────────────────────
 
-/** A minimal synthetic circuit with one LED D1 (pad1→net10, pad2→net20). */
+/**
+ * A minimal synthetic circuit with one LED D1 wired per the KiCad convention:
+ * pad 1 (cathode) → GND(net20), pad 2 (anode) → LEDA(net10).
+ */
 function makeLedCircuit(): Circuit {
   return {
     nets: [
@@ -45,7 +49,7 @@ function makeLedCircuit(): Circuit {
         value: 'LED',
         libId: 'LED_SMD:LED_0805_2012Metric',
         layer: 'F',
-        padNet: new Map([['1', 10], ['2', 20]]),
+        padNet: new Map([['1', 20], ['2', 10]]),
         properties: {},
       },
       {
@@ -62,11 +66,41 @@ function makeLedCircuit(): Circuit {
 }
 
 describe('buildCoachInput', () => {
-  it('reads each LED anode(pad1)/cathode(pad2) net; skips non-LED parts', () => {
+  it('KiCad-convention fallback: pad 2 = anode, pad 1 = cathode; skips non-LED parts', () => {
+    // No resolutions passed → the pad-role fallback must match the bundled
+    // library pinMap {"1":"2","2":"1"} (pad 1 = cathode), i.e. the SAME wiring
+    // generateDeck produces — a coach that assumed pad 1 = anode would call a
+    // correctly-wired, glowing LED "in backwards".
     const input = buildCoachInput(makeLedCircuit(), new Map(), null, false)
     expect(input.leds).toEqual([{ ref: 'D1', anodeNet: 10, cathodeNet: 20 }])
     expect(input.hasSupply).toBe(false)
     expect(input.netVoltages).toBeUndefined()
+  })
+
+  it('a resolved pinMap overrides the convention (pad → SPICE position: "1"=anode)', () => {
+    // Non-standard part whose pinMap declares pad 1 = position 1 (anode).
+    const input = buildCoachInput(
+      makeLedCircuit(),
+      new Map(),
+      null,
+      false,
+      [
+        {
+          ref: 'D1',
+          status: 'ok',
+          tier: 3,
+          warnings: [],
+          model: {
+            kind: 'subckt',
+            libFile: 'leds.lib',
+            subcktName: 'LED_GENERIC',
+            pinMap: { '1': '1', '2': '2' },
+          },
+        },
+      ],
+    )
+    // pad 1 → net 20 is now the ANODE; pad 2 → net 10 the cathode.
+    expect(input.leds).toEqual([{ ref: 'D1', anodeNet: 20, cathodeNet: 10 }])
   })
 
   it('passes through currents + voltages + hasSupply', () => {

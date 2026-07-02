@@ -1520,14 +1520,22 @@ export function buildCriticOpResult(
  * pad 1 = anode (+), pad 2 = cathode (−) — the convention the bundled samples
  * (blinker-555, first-light) follow. Used to read each LED's anode/cathode net.
  */
-const LED_ANODE_PAD = '1'
-const LED_CATHODE_PAD = '2'
+// KiCad LED footprint convention (and the bundled library's LED_* pinMap
+// {"1":"2","2":"1"}): pad 1 is the CATHODE, pad 2 the anode. Used only as the
+// fallback when a part has no resolved pinMap — the pinMap is the deck truth.
+const LED_ANODE_PAD = '2'
+const LED_CATHODE_PAD = '1'
 
 /**
  * Build the pure `DiagnoseInput` the coach reasons over, from the live circuit +
- * latest op state. For every LED part (isLedPart) we read its anode net (pad 1)
- * and cathode net (pad 2); LEDs whose anode/cathode net can't be determined are
- * skipped (the coach can't reason about them). `hasSupply` is true when a ground
+ * latest op state. For every LED part (isLedPart) we read its anode/cathode
+ * nets via the part's RESOLVED pinMap (pad → SPICE node position; a diode's
+ * position 1 is the anode, 2 the cathode) — the same mapping generateDeck
+ * orders the device nodes by, so the coach's polarity verdict always matches
+ * what was actually simulated. Parts without a resolved pinMap fall back to
+ * the KiCad convention (pad 1 = cathode). LEDs whose anode/cathode net can't
+ * be determined are skipped (the coach can't reason about them). `hasSupply`
+ * is true when a ground
  * net is designated AND at least one driving source is attached — the same
  * "can this board be energized?" test powerOn/energize use.
  *
@@ -1547,10 +1555,15 @@ export function buildCoachInput(
   resolutions?: Resolution[],
 ): DiagnoseInput {
   // ref → resolved subckt name (when the part resolved to a subckt/model-card),
-  // mirroring buildLedSpiceNames so isLedPart sees the same evidence.
+  // mirroring buildLedSpiceNames so isLedPart sees the same evidence — plus the
+  // resolved pinMap, which decides which pad is the anode (see doc above).
   const subcktNameByRef = new Map<string, string>()
+  const pinMapByRef = new Map<string, PinMap>()
   for (const res of resolutions ?? []) {
-    if (res.model && res.model.kind === 'subckt') subcktNameByRef.set(res.ref, res.model.subcktName)
+    if (res.model && res.model.kind === 'subckt') {
+      subcktNameByRef.set(res.ref, res.model.subcktName)
+      pinMapByRef.set(res.ref, res.model.pinMap)
+    }
   }
 
   const leds: CoachLed[] = []
@@ -1565,8 +1578,19 @@ export function buildCoachInput(
         })
       )
         continue
-      const anodeNet = part.padNet.get(LED_ANODE_PAD)
-      const cathodeNet = part.padNet.get(LED_CATHODE_PAD)
+      // Pad roles from the resolved pinMap (SPICE diode: position 1 = anode,
+      // 2 = cathode) when present; KiCad-convention fallback otherwise.
+      let anodePad = LED_ANODE_PAD
+      let cathodePad = LED_CATHODE_PAD
+      const pinMap = pinMapByRef.get(part.ref)
+      if (pinMap) {
+        for (const [pad, pos] of Object.entries(pinMap)) {
+          if (pos === '1') anodePad = pad
+          else if (pos === '2') cathodePad = pad
+        }
+      }
+      const anodeNet = part.padNet.get(anodePad)
+      const cathodeNet = part.padNet.get(cathodePad)
       if (anodeNet === undefined || cathodeNet === undefined) continue
       leds.push({ ref: part.ref, anodeNet, cathodeNet })
     }
