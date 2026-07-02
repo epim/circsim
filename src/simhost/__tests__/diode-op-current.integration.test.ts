@@ -101,7 +101,7 @@ describe.skipIf(!haveNgspice)('SimHost op — diode forward current reads back (
       const opEvent = events.find((e) => e.type === 'opResult')
       expect(opEvent).toBeDefined()
     } finally {
-      host.dispose()
+      await host.dispose()
     }
   }, 30_000)
 })

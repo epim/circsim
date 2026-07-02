@@ -44,6 +44,18 @@ jobs:
           VERSION="$(node -e "console.log(require('./package.json').config?.circsim?.ngspiceVersion ?? '46')")"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
+      # ngspice runs on EVERY leg: Windows fetches the prebuilt DLL, macOS/Linux
+      # build libngspice from source (same script as the release job). The
+      # earlier Windows-only restriction is gone — its two root causes are
+      # fixed: the vitest 6 h hang was an AB-BA deadlock between ngspice's bg
+      # thread (holding fputsMutex while waiting on a koffi callback relay) and
+      # a SYNCHRONOUS ngSpice_Command on the JS main thread (all commands are
+      # now issued via koffi's async form, serialized — see ngspiceFfi.ts), and
+      # SimHost.dispose() now drains the bg thread before unloading the library
+      # so no callback relay is in flight at Node env teardown.
+      # Cache-key suffix -r2: earlier source builds shipped a manifest whose
+      # cmFiles held only the LAST .cm (env-var bug in build-ngspice.sh) —
+      # bumped so runners rebuild with the fixed script.
       - name: Cache ngspice binaries (Windows)
         if: runner.os == 'Windows'
         uses: actions/cache@v4
@@ -52,22 +64,48 @@ jobs:
           path: resources/ngspice/win32-x64
           key: ngspice-win32-x64-v${{ steps.ngspice-version.outputs.version }}
 
-      # ngspice setup is WINDOWS-ONLY in the test matrix. The real-libngspice
-      # integration tests run only on Windows: the prebuilt DLL is reliable AND
-      # the Node test process exits cleanly there. On macOS/Linux every
-      # ngspice-dependent test is gated by .skipIf(!ngspiceResourcesAvailable())
-      # / .skipIf(!resourcesExist), so with no ngspice present those legs run the
-      # UNIT suite only — fast and deterministic. This deliberately avoids two
-      # real cross-platform problems: the macOS source build fails on '<omp.h>'
-      # (Apple clang), and on Linux ngspice's native callbacks/bg-thread keep
-      # vitest from exiting after the integration tests, hanging the run to the
-      # 6h ceiling. macOS/Linux ngspice is still built + packaged by the
-      # tag-triggered release job below (which does NOT run the test suite).
-      # TODO(follow-up): free the koffi callbacks in SimHost.dispose() so the
-      # Node process exits on Unix, then restore cross-platform integration here.
+      - name: Cache ngspice binaries (macOS x64)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        uses: actions/cache@v4
+        id: cache-ngspice-darwin-x64
+        with:
+          path: resources/ngspice/darwin-x64
+          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}-r2
+
+      - name: Cache ngspice binaries (macOS arm64)
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        uses: actions/cache@v4
+        id: cache-ngspice-darwin-arm64
+        with:
+          path: resources/ngspice/darwin-arm64
+          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}-r2
+
+      - name: Cache ngspice binaries (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        id: cache-ngspice-linux
+        with:
+          path: resources/ngspice/linux-x64
+          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r2
+
+      - name: Install macOS build tools (macOS only)
+        if: runner.os == 'macOS' && (steps.cache-ngspice-darwin-x64.outputs.cache-hit != 'true' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true')
+        run: brew install autoconf automake libtool
+
+      - name: Install Linux build tools (Linux only)
+        if: runner.os == 'Linux' && steps.cache-ngspice-linux.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y autoconf automake libtool libfftw3-dev bison flex
+
       - name: Fetch ngspice DLL (Windows)
         if: runner.os == 'Windows' && steps.cache-ngspice-win.outputs.cache-hit != 'true'
         run: npm run fetch:ngspice
+
+      - name: Build ngspice from source (macOS / Linux)
+        if: runner.os != 'Windows' && (steps.cache-ngspice-darwin-x64.outputs.cache-hit != 'true' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true' && steps.cache-ngspice-linux.outputs.cache-hit != 'true')
+        shell: bash
+        run: bash scripts/build-ngspice.sh
 
       # -----------------------------------------------------------------------
       # Build + Test
@@ -154,7 +192,7 @@ jobs:
         id: cache-ngspice-darwin-x64
         with:
           path: resources/ngspice/darwin-x64
-          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}
+          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}-r2
 
       - name: Cache ngspice binaries (macOS arm64)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
@@ -162,7 +200,7 @@ jobs:
         id: cache-ngspice-darwin-arm64
         with:
           path: resources/ngspice/darwin-arm64
-          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}
+          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}-r2
 
       - name: Cache ngspice binaries (Linux)
         if: runner.os == 'Linux'
@@ -170,7 +208,7 @@ jobs:
         id: cache-ngspice-linux
         with:
           path: resources/ngspice/linux-x64
-          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}
+          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r2
 
       - name: Install macOS build tools (macOS only)
         if: runner.os == 'macOS' && (steps.cache-ngspice-darwin-x64.outputs.cache-hit != 'true' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true')

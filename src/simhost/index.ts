@@ -156,6 +156,17 @@ export class SimHost {
 
   private engineUnsub: (() => void) | null = null
 
+  /**
+   * Background-thread liveness as reported by ngspice's BGThreadRunning
+   * callback. Distinct from engine.isRunning(): the flag flips false BEFORE
+   * the final callbacks finish relaying to the JS thread, whereas observing
+   * the bgRunning:false EVENT proves that relay has been serviced. Both are
+   * needed by the dispose drain (see dispose()).
+   */
+  private bgThreadRunning = false
+  /** True once any background run was started — gates the dispose settle. */
+  private bgEverRan = false
+
   constructor(opts: SimHostOptions = {}) {
     this.engine =
       opts.engine ?? new NgspiceFfiEngine({ resourcesBaseDir: opts.resourcesBaseDir })
@@ -217,6 +228,11 @@ export class SimHost {
           text: `ngspice ControlledExit status=${ev.status} immediate=${ev.immediate}`
         })
         break
+      case 'bgRunning':
+        this.bgThreadRunning = ev.running
+        if (ev.running) this.bgEverRan = true
+        this.noteProgress()
+        break
       case 'initData':
         if (this.tran) {
           const scale = ev.names.find(isScaleVectorName) ?? 'time'
@@ -242,13 +258,40 @@ export class SimHost {
     }
   }
 
-  /** Tear down (best effort). */
-  dispose(): void {
+  /**
+   * Tear down (best effort). Async because it must DRAIN the engine before
+   * releasing it: engine.dispose() unloads the shared library, and koffi
+   * callback relays still in flight at that point (or at Node env teardown)
+   * crash the process on Linux — the flaky-CI half of the 6 h-hang bug. Order:
+   *   1. bg_halt (async, serialized) and wait until ngSpice_running() is false;
+   *   2. wait for the FINAL BGThreadRunning callback to be observed — the
+   *      running flag flips before the last relays are serviced, so step 1
+   *      alone is not enough;
+   *   3. a short settle for straggler SendChar relays (only if a background
+   *      run ever happened — op-only sessions have nothing in flight);
+   *   4. unsubscribe + engine.dispose() (unregisters callbacks, unloads).
+   * Safe on a never-started host: command() throws, which is swallowed.
+   */
+  async dispose(): Promise<void> {
     this.stopWatchdog()
     this.stopPeriodicTimers()
     if (this.alterTimer) {
       clearTimeout(this.alterTimer)
       this.alterTimer = null
+    }
+    this.tran = null
+    try {
+      await this.engine.command('bg_halt', false)
+      await this.waitForHalt()
+      const deadline = Date.now() + 500
+      while (this.bgThreadRunning && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5))
+      }
+      if (this.bgEverRan) {
+        await new Promise((r) => setTimeout(r, 150))
+      }
+    } catch {
+      /* engine not initialized (or already torn down) — nothing to drain */
     }
     if (this.engineUnsub) {
       this.engineUnsub()

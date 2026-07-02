@@ -148,8 +148,11 @@ fi
 
 echo "Found: ${FOUND_LIB}"
 
-# Verify it IS a shared library (not an executable or static archive)
-FILE_OUTPUT="$(file "${FOUND_LIB}")"
+# Verify it IS a shared library (not an executable or static archive).
+# -L: follow symlinks — `make install` links libngspice.so → libngspice.so.0...,
+# and plain `file` on the symlink says "symbolic link", failing this check
+# (observed on Ubuntu 24.04).
+FILE_OUTPUT="$(file -L "${FOUND_LIB}")"
 echo "file says: ${FILE_OUTPUT}"
 
 case "${OS}" in
@@ -253,12 +256,15 @@ FETCHED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 CM_JSON="{}"
 for NAME in "${COPIED_CM[@]}"; do
   HASH="$( { sha256sum "${CM_DEST_DIR}/${NAME}" 2>/dev/null || shasum -a 256 "${CM_DEST_DIR}/${NAME}"; } | cut -d' ' -f1)"
-  # Simple JSON append using node (already required)
-  CM_JSON="$(node -e "
+  # Simple JSON append using node (already required). The env assignment MUST
+  # precede the command: a trailing CM_JSON="..." is a node ARGUMENT, not an
+  # env var, so every iteration saw an empty object and the manifest ended up
+  # with only the LAST .cm file (broke ngspice-resources.test on macOS/Linux).
+  CM_JSON="$(CM_JSON="${CM_JSON}" node -e "
     const obj = JSON.parse(process.env.CM_JSON || '{}');
     obj['${NAME}'] = '${HASH}';
     console.log(JSON.stringify(obj));
-  " CM_JSON="${CM_JSON}")"
+  ")"
 done
 
 node -e "

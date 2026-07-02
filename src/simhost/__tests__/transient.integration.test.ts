@@ -138,7 +138,7 @@ describe.skipIf(!haveNgspice)('SimHost transient streaming (real libngspice)', (
         expect(relErr).toBeLessThan(0.02)
       }
     } finally {
-      host.dispose()
+      await host.dispose()
     }
   }, 30_000)
 
@@ -170,7 +170,7 @@ describe.skipIf(!haveNgspice)('SimHost transient streaming (real libngspice)', (
       // eslint-disable-next-line no-console
       console.log(`[batches] ${col.batches.length} batches, ${col.time.length} total points`)
     } finally {
-      host.dispose()
+      await host.dispose()
     }
   }, 30_000)
 
@@ -216,7 +216,7 @@ describe.skipIf(!haveNgspice)('SimHost transient streaming (real libngspice)', (
       expect(finalOut).toBeGreaterThan(9.5)
       expect(finalOut).toBeLessThan(10.5)
     } finally {
-      host.dispose()
+      await host.dispose()
     }
   }, 30_000)
 })

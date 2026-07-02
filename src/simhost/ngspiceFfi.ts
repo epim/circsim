@@ -293,6 +293,36 @@ export function decodeVecvaluesallRow(
   return { row, scaleName }
 }
 
+// ─── engine-command serialization ─────────────────────────────────────────────
+
+/**
+ * Serialize async engine calls: the returned function runs `task` only after
+ * every previously-enqueued task has settled, preserving strict enqueue order.
+ * A rejected task rejects its own caller but never breaks the chain.
+ *
+ * Why this exists (the Linux CI hang, gdb-verified): ngspice's background
+ * thread holds its internal fputsMutex while it waits for the JS MAIN thread
+ * to service a koffi cross-thread callback relay (SendChar etc.). If the main
+ * thread meanwhile enters a SYNCHRONOUS ngSpice_Command call, it blocks on
+ * that same mutex → AB-BA deadlock; the vitest fork worker bricks and CI hangs
+ * to its 6 h ceiling (reproducible under CPU starvation, i.e. busy runners).
+ * So every command MUST go through koffi's .async form — the main thread then
+ * stays in the event loop and always services relays. But async calls run on a
+ * worker pool and could otherwise overlap/reorder inside the non-thread-safe
+ * engine — this serializer restores the strict ordering the old sync path had.
+ */
+export function createCallSerializer(): (task: () => Promise<void>) => Promise<void> {
+  let chain: Promise<void> = Promise.resolve()
+  return (task) => {
+    const p = chain.then(task)
+    chain = p.then(
+      () => undefined,
+      () => undefined
+    )
+    return p
+  }
+}
+
 // ─── adapter implementation ──────────────────────────────────────────────────
 
 export interface NgspiceFfiOptions {
@@ -314,6 +344,9 @@ export class NgspiceFfiEngine implements SpiceEngine {
 
   // Keep registered callbacks alive for the life of the engine (GC anchors).
   private registeredCallbacks: koffi.IKoffiRegisteredCallback[] = []
+
+  // Strict-order queue for ngSpice_Command calls (see createCallSerializer).
+  private serialize = createCallSerializer()
 
   constructor(opts: NgspiceFfiOptions = {}) {
     this.opts = opts
@@ -520,21 +553,23 @@ export class NgspiceFfiEngine implements SpiceEngine {
     }
   }
 
-  command(cmd: string, blocking: boolean): Promise<void> {
+  command(cmd: string, _blocking: boolean): Promise<void> {
     this.ensureInit()
-    if (!blocking) {
-      // bg_* and other non-blocking commands return immediately; sync is fine.
-      this.fn.ngSpice_Command(cmd)
-      return Promise.resolve()
-    }
-    // Blocking command (op/tran/run/...) → koffi async form so the JS event loop
-    // and the watchdog timer keep running while ngspice computes (Spec §7.4 #4).
-    return new Promise<void>((resolve, reject) => {
-      this.fn.ngSpice_Command.async(cmd, (err: unknown) => {
-        if (err) reject(err instanceof Error ? err : new Error(String(err)))
-        else resolve()
-      })
-    })
+    // ALL commands — blocking and non-blocking alike — go through koffi's
+    // .async form, serialized in enqueue order (see createCallSerializer):
+    // a sync ngSpice_Command on the JS main thread can deadlock against the
+    // bg thread's fputsMutex↔callback-relay cycle (the Linux CI 6 h hang),
+    // and async keeps the event loop + watchdog running during op/tran
+    // (Spec §7.4 #4). The `blocking` flag no longer changes the mechanism.
+    return this.serialize(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          this.fn.ngSpice_Command.async(cmd, (err: unknown) => {
+            if (err) reject(err instanceof Error ? err : new Error(String(err)))
+            else resolve()
+          })
+        })
+    )
   }
 
   currentPlot(): string {
@@ -583,7 +618,20 @@ export class NgspiceFfiEngine implements SpiceEngine {
       }
     }
     this.registeredCallbacks = []
-    // koffi has no explicit unload requirement; drop references.
+    // Unload (dlclose/FreeLibrary) the engine. Koffi cross-thread callback
+    // relays still pending when Node tears the environment down SIGABRT the
+    // process AFTER a clean `exit` event (probe-bisected on Linux: 28/48
+    // teardown crashes without unload → 1/6 with it; ~0 combined with the
+    // SimHost drain that precedes this call). Callers MUST have drained the
+    // background thread first — unloading a library with a live thread is an
+    // instant crash. A later init() re-loads the library from scratch.
+    if (this.lib) {
+      try {
+        this.lib.unload()
+      } catch {
+        /* best effort */
+      }
+    }
     this.lib = null
     this.initialized = false
   }

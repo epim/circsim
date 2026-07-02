@@ -120,7 +120,7 @@ async function runTransient(deckLines: string[]): Promise<SampleCollector> {
     await host.whenIdle()
     await waitUntilStopped(host, 15_000)
   } finally {
-    host.dispose()
+    await host.dispose()
   }
   return col
 }

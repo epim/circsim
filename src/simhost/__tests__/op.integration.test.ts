@@ -33,7 +33,7 @@ describe.skipIf(!haveNgspice)('SimHost op analysis (real libngspice)', () => {
       const passed = await host.runStartupSmokeCheck()
       expect(passed).toBe(true)
     } finally {
-      host.dispose()
+      await host.dispose()
     }
   }, 30_000)
 
@@ -67,7 +67,7 @@ describe.skipIf(!haveNgspice)('SimHost op analysis (real libngspice)', () => {
       const opEvent = events.find((e) => e.type === 'opResult')
       expect(opEvent).toBeDefined()
     } finally {
-      host.dispose()
+      await host.dispose()
     }
   }, 30_000)
 })

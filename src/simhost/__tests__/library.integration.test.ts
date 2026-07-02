@@ -162,7 +162,7 @@ describe.skipIf(!haveNgspice)('bundled model library loads in real ngspice', () 
           loaded.push(`${entry.id} (${entry.model.name}/${found.type}) ${detail}`)
         }
       } finally {
-        host.dispose()
+        await host.dispose()
       }
     }
 

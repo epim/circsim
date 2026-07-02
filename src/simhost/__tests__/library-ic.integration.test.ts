@@ -63,7 +63,7 @@ async function runOp(deck: string[]): Promise<{ errs: string[]; v: Record<string
     >[]).map((e) => e.text)
     return { errs, v }
   } finally {
-    host.dispose()
+    await host.dispose()
   }
 }
 
@@ -101,7 +101,7 @@ async function runTran(
     >[]).map((e) => e.text)
     return { errs, series, t }
   } finally {
-    host.dispose()
+    await host.dispose()
   }
 }
 
