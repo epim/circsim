@@ -6,7 +6,7 @@
  * Owns:
  *  - the serial command queue (drained from a setImmediate loop; FFI callbacks
  *    only ever enqueue — Spec §7.4 gotcha 2)
- *  - the 10 s watchdog (process.exit(86) on stall — Spec §7.4 gotcha 7); viable
+ *  - the 60 s watchdog (process.exit(86) on stall — Spec §7.4 gotcha 7); viable
  *    only because blocking commands use koffi's async form so the event loop runs
  *  - `destroy all` before every loadCircuit (Spec §7.4 gotcha 5)
  *  - device-token lowercasing before alter (Spec §7.4 gotcha 1)
@@ -35,7 +35,15 @@ import {
 
 // ─── tunables ────────────────────────────────────────────────────────────────
 
-const WATCHDOG_MS = 10_000
+/**
+ * Stall watchdog threshold. Catches a WEDGED engine (supervisor respawns on
+ * exit 86) — it must never kill a busy one. ngspice's op retry ladder can
+ * grind with NO callback traffic for >10 s on a slow machine (CI's shared
+ * Windows runners hit this mid-op), so the threshold sits well above any
+ * legitimate silent solve phase. Progress = queue-item boundaries + every
+ * char/stat/log/data callback (see onEngineEvent).
+ */
+const WATCHDOG_MS = 60_000
 const WATCHDOG_EXIT_CODE = 86
 
 /** Default bench window (sim-time seconds) for a bounded transient (Spec §7.5). */
