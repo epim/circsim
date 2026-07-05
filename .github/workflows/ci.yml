@@ -224,15 +224,24 @@ jobs:
         if: runner.os == 'Windows'
         run: npx electron-builder --dir
 
+      # OMP_*: the Windows ngspice DLL links OpenMP (libomp140); on shared
+      # 4-vCPU runners its default spin-waiting worker threads starve the
+      # solver thread and stretch op solves past every timeout. One passive
+      # thread makes the tiny demo boards solve fastest anyway.
       - name: Run Playwright E2E (Windows)
         if: runner.os == 'Windows'
         run: npm run test:e2e
+        env:
+          OMP_NUM_THREADS: '1'
+          OMP_WAIT_POLICY: 'PASSIVE'
 
       - name: Run Playwright E2E (Linux, xvfb)
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum -- npm run test:e2e
         env:
           ELECTRON_DISABLE_SANDBOX: '1'
+          OMP_NUM_THREADS: '1'
+          OMP_WAIT_POLICY: 'PASSIVE'
 
       - name: Upload Playwright report + screenshots (on failure)
         if: failure()
