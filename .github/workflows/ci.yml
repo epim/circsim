@@ -7,6 +7,12 @@ on:
   pull_request:
     branches: [main, master]
 
+# Superseded pushes/PR updates cancel their in-flight run; tag (release) runs
+# are never cancelled.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   test:
     name: Test (${{ matrix.os }})
@@ -127,6 +133,118 @@ jobs:
         continue-on-error: false
 
   # ===========================================================================
+  # E2E job — Playwright drives the BUILT app (out/) via _electron.launch with
+  # real ngspice underneath (same binary caches as the test job).
+  #
+  # Legs:
+  #   windows-latest → smoke + first-light + packaged-smoke (electron-builder
+  #                    --dir provides dist/win-unpacked so the packaged spec
+  #                    exercises the installer-critical resource paths:
+  #                    asar-external ngspice.dll + .cm, bundled sample/models)
+  #   ubuntu-latest  → smoke + first-light under xvfb (packaged spec self-skips;
+  #                    it is Windows-only by path). The Chromium SUID sandbox is
+  #                    unavailable on GitHub's ubuntu-24.04 runners (AppArmor
+  #                    restricts unprivileged user namespaces), so the run sets
+  #                    ELECTRON_DISABLE_SANDBOX=1.
+  #
+  # Runs in parallel with `test`; the release job gates on BOTH.
+  # ===========================================================================
+  e2e:
+    name: E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Read ngspice version
+        id: ngspice-version
+        shell: bash
+        run: |
+          VERSION="$(node -e "console.log(require('./package.json').config?.circsim?.ngspiceVersion ?? '46')")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # Same cache keys as the test/release jobs, so this job normally restores
+      # a prebuilt ngspice and never compiles.
+      - name: Cache ngspice binaries (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        id: cache-ngspice-win
+        with:
+          path: resources/ngspice/win32-x64
+          key: ngspice-win32-x64-v${{ steps.ngspice-version.outputs.version }}
+
+      - name: Cache ngspice binaries (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        id: cache-ngspice-linux
+        with:
+          path: resources/ngspice/linux-x64
+          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r2
+
+      - name: Fetch ngspice DLL (Windows)
+        if: runner.os == 'Windows' && steps.cache-ngspice-win.outputs.cache-hit != 'true'
+        run: npm run fetch:ngspice
+
+      - name: Install Linux build tools (Linux, cache miss only)
+        if: runner.os == 'Linux' && steps.cache-ngspice-linux.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y autoconf automake libtool libfftw3-dev bison flex
+
+      - name: Build ngspice from source (Linux, cache miss only)
+        if: runner.os == 'Linux' && steps.cache-ngspice-linux.outputs.cache-hit != 'true'
+        shell: bash
+        run: bash scripts/build-ngspice.sh
+
+      - name: Install xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: command -v xvfb-run > /dev/null || (sudo apt-get update -q && sudo apt-get install -y xvfb)
+
+      - name: Build app bundles
+        run: npm run build
+
+      - name: Package unpacked app (Windows, for packaged-smoke spec)
+        if: runner.os == 'Windows'
+        run: npx electron-builder --dir
+
+      - name: Run Playwright E2E (Windows)
+        if: runner.os == 'Windows'
+        run: npm run test:e2e
+
+      - name: Run Playwright E2E (Linux, xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum -- npm run test:e2e
+        env:
+          ELECTRON_DISABLE_SANDBOX: '1'
+
+      - name: Upload Playwright report + screenshots (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.os }}
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+
+  # ===========================================================================
   # Release job (Task 27, Spec §15) — tag-triggered only.
   #
   # Builds the installer matrix and attaches the artifacts to the GitHub release
@@ -144,8 +262,9 @@ jobs:
   release:
     name: Release (${{ matrix.os }})
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
+    needs: [test, e2e]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     permissions:
       contents: write # attach artifacts to the GitHub release
     strategy:
