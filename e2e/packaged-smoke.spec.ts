@@ -15,6 +15,7 @@
 import { test, expect, _electron as electron } from '@playwright/test'
 import { join } from 'path'
 import { existsSync } from 'fs'
+import { pipeAppOutput } from './util'
 
 const PACKAGED_EXE = join(__dirname, '..', 'dist', 'win-unpacked', 'circsim.exe')
 
@@ -22,6 +23,7 @@ test('packaged app: open sample → power on → op annotations (real ngspice fr
   test.skip(!existsSync(PACKAGED_EXE), 'packaged binary not built (run npm run package:dir)')
 
   const app = await electron.launch({ executablePath: PACKAGED_EXE, args: [] })
+  pipeAppOutput(app)
   try {
     const page = await app.firstWindow()
     await page.waitForLoadState('load')

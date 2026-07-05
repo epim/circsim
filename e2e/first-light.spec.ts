@@ -28,6 +28,7 @@
 import { test, expect } from '@playwright/test'
 import { _electron as electron, type ElectronApplication } from '@playwright/test'
 import { join } from 'path'
+import { pipeAppOutput } from './util'
 
 const APP_MAIN = join(__dirname, '..', 'out', 'main', 'index.js')
 
@@ -54,6 +55,7 @@ async function launchApp(): Promise<{ app: ElectronApplication; page: import('@p
     // Pass an env flag so the app can detect it is running under test
     env: { ...process.env, CIRCSIM_E2E: '1' },
   })
+  pipeAppOutput(app)
   const page = await app.firstWindow()
   // Wait for network idle which indicates the JS bundle has finished loading.
   // The store boot sequence awaits the SimHost port handshake before rendering,
