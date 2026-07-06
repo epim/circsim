@@ -238,6 +238,23 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     expect(r.v['out']).toBeCloseTo(4.2, 1)
   }, 60_000)
 
+  it('TL431 shunt reference: cathode-ref tied + 1k pullup from 5V regulates near 2.495V', async () => {
+    const deck = [
+      '* TL431 two-terminal reference (cathode tied to ref)',
+      'vcc vcc 0 dc 5',
+      'rpu vcc k 1k',
+      'x1 k 0 k TL431',
+      ...regLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    // eslint-disable-next-line no-console
+    console.log(`\n[TL431 shunt ref] k=${r.v['k']?.toFixed(4)}V (target 2.495V)\n`)
+    expect(r.errs).toEqual([])
+    expect(r.v['k']).toBeCloseTo(2.495, 2)
+  }, 60_000)
+
   it('NE555 astable: period within 20% of 0.693*(R1+2R2)*C', async () => {
     const R1 = 1e3
     const R2 = 10e3
