@@ -467,3 +467,176 @@ describe('resolveAll tier 3 — Task 14a/14b bundled index entries match expecte
     }
   })
 })
+
+// ─── Tier 3 value-as-MPN fallback ─────────────────────────────────────────────
+
+describe('resolveAll tier 3 — value used as MPN candidate when no mpn property', () => {
+  // Real boards (KiCad 9 / JLC parts) often carry the MPN in the part VALUE
+  // field ("1N4148W", "MMBT3904", "AO3401") with no mpn property at all.
+  // When properties provide no mpn/MPN, the part's value is passed as the MPN
+  // candidate — matchLibraryEntry normalizes it, so package suffixes still strip.
+
+  async function realIndex(): Promise<import('../types').LibraryEntry[]> {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const index = JSON.parse(readFileSync(join(process.cwd(), 'resources/models/index.json'), 'utf8')) as {
+      entries: import('../types').LibraryEntry[]
+    }
+    return index.entries
+  }
+
+  it('D1 value "1N4148W" (no mpn property) → diode-1n4148 via value-as-MPN', async () => {
+    const part = makePart('D1', '1N4148W', 'Diode_SMD:D_SOD-123')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('D1N4148')
+    }
+  })
+
+  it('Q1 value "MMBT3904" (no mpn property) → bjt-2n3904 via value-as-MPN', async () => {
+    const part = makePart('Q1', 'MMBT3904', 'Package_TO_SOT_SMD:SOT-23')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('Q2N3904')
+    }
+  })
+
+  it('Q2 value "AO3401" (no mpn property) → mosfet-pmos-generic via value-as-MPN', async () => {
+    const part = makePart('Q2', 'AO3401', 'Package_TO_SOT_SMD:SOT-23')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('MPMOS_GEN')
+    }
+  })
+
+  it('mpn property still wins over the value field when both are present', async () => {
+    // value says 1N4148W but the mpn property says MMBT3904 — property wins.
+    const part = makePart('Q3', '1N4148W', 'Package_TO_SOT_SMD:SOT-23', { mpn: 'MMBT3904' })
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('Q2N3904')
+    }
+  })
+
+  it('plain R value does NOT suddenly match: parseable value stays tier 2', async () => {
+    const part = makePart('R1', '10k', 'Resistor_SMD:R_0805_2012Metric')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(2)
+    expect(res.status).toBe('ok')
+  })
+
+  it('unparseable R value used as MPN candidate matches nothing → unresolved', async () => {
+    // Falls past tier 2 (unparseable), reaches tier 3 with value as the MPN
+    // candidate; no library entry lists a resistor MPN → stays unresolved.
+    const part = makePart('R2', '0805W8F1002T5E', 'Resistor_SMD:R_0805_2012Metric')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.status).toBe('unresolved')
+  })
+
+  // ── Milestone 1 library additions resolve end-to-end ──────────────────────
+
+  it('D1 value "BAS16" → diode-1n4148 (1N4148-equivalent)', async () => {
+    const part = makePart('D1', 'BAS16', 'Diode_SMD:D_SOD-123')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('D1N4148')
+    }
+  })
+
+  it('D2 value "SS14" → diode-1n5819 (1A/40V Schottky class)', async () => {
+    const part = makePart('D2', 'SS14', 'Diode_SMD:D_SMA')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('D1N5819')
+    }
+  })
+
+  it('D3 value "3.0V" → zener-3v0 via valueRegex', async () => {
+    const part = makePart('D3', '3.0V', 'Diode_SMD:D_SOD-123')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('DZ3V0')
+    }
+  })
+
+  it('D4 value "3V0" → zener-3v0 via value-as-MPN (part values only — nets never match)', async () => {
+    const part = makePart('D4', '3V0', 'Diode_SMD:D_SOD-123')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('DZ3V0')
+    }
+  })
+
+  it('BT1 value "3V" (battery symbol) stays unresolved — bare "3V" must not match zener-3v0', async () => {
+    // valueRegex matching is not refdes-gated, so a coin-cell battery whose
+    // VALUE is "3V" would resolve as a 3.0 V zener if the regex accepted the
+    // bare form. Only "3.0V" (value) and "3V0"/"BZX84C3V0" (mpn) may match.
+    const part = makePart('BT1', '3V', 'Battery:BatteryHolder_Keystone_3034_1x20mm')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.status).toBe('unresolved')
+  })
+
+  it('U2 value "LM339" on SOIC-14 → comparator-lm339 (LM393 cell, unit-1 pinMap)', async () => {
+    const part = makePart('U2', 'LM339', 'Package_SO:SOIC-14_3.9x8.7mm_P1.27mm')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('LM393')
+      expect(res.model.pinMap['5']).toBe('inp')
+      expect(res.model.pinMap['4']).toBe('inn')
+      expect(res.model.pinMap['2']).toBe('out')
+      expect(res.model.pinMap['3']).toBe('vcc')
+      expect(res.model.pinMap['12']).toBe('vee')
+    }
+  })
+
+  it('U8 value "CD4011" on SOP-14 must stay unresolved (no lm339 fallback misresolution)', async () => {
+    // Regression: comparator-lm339 must match on mpn/value ONLY. With refdes/
+    // footprint fallback rules it silently misresolved a CD4011 quad NAND in
+    // SOP-14 as an LM393 comparator on a real board.
+    const part = makePart('U8', 'CD4011', 'Package_SO:SOP-14_3.9x8.7mm_P1.27mm')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.status).toBe('unresolved')
+  })
+
+  it('U3 value "TL431" on SOT-23 → ref-tl431 shunt reference', async () => {
+    const part = makePart('U3', 'TL431', 'Package_TO_SOT_SMD:SOT-23')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('TL431')
+    }
+  })
+})

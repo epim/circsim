@@ -21,15 +21,42 @@
  *   - Trailing unit:      "10uF", "22uH", "10R" (unit letter stripped)
  *   - Meg/MEG:            "2.2Meg", "3.3MEG"
  *   - Plain numbers:      "470", "0.1"
+ *   - Rating/tolerance:   "100nF/50V" → 100nF, "2.0k/0.5%" → 2.0k,
+ *                         "100nF 50V", "10uF,25V" (suffix segment stripped)
  *   - Returns undefined:  "DNP", "N/A", "~", ""
  */
+
+/**
+ * Strip trailing voltage-rating / tolerance segments from a value field.
+ * Real-board value fields often append a rating after the value:
+ * "100nF/50V", "10uF,25V", "2.0k/0.5%", "100nF 50V". Take the leading value
+ * token and drop trailing /-, comma- or space-delimited segments that are
+ * just a voltage rating (\d+(\.\d+)?V) or tolerance (\d+(\.\d+)?%).
+ * A bare "5V" (no delimiter) is untouched — a lone rating is not a value.
+ */
+function stripRatingSuffix(trimmed: string): string {
+  const segments = trimmed.split(/[\s/,]+/).filter(s => s.length > 0)
+  if (segments.length < 2) return trimmed
+
+  const ratingOrTolerance = /^\d+(\.\d+)?(V|%)$/i
+  while (segments.length > 1 && ratingOrTolerance.test(segments[segments.length - 1])) {
+    segments.pop()
+  }
+  // Only apply when the leading value token is all that remains — anything
+  // else (e.g. "100nF X7R") is not a recognized value+rating form.
+  return segments.length === 1 ? segments[0] : trimmed
+}
+
 export function parseValue(text: string, _kind: 'R' | 'C' | 'L'): number | undefined {
-  const trimmed = text.trim()
+  const raw = text.trim()
 
   // Empty, placeholder, or non-numeric strings → undefined
-  if (!trimmed || trimmed === '~' || /^(DNP|N\/A|NA|TBD|--+|none)$/i.test(trimmed)) {
+  if (!raw || raw === '~' || /^(DNP|N\/A|NA|TBD|--+|none)$/i.test(raw)) {
     return undefined
   }
+
+  // Drop a trailing voltage-rating / tolerance segment ("100nF/50V" → "100nF")
+  const trimmed = stripRatingSuffix(raw)
 
   // Prefix multipliers. Note case sensitivity:
   //   M = mega (1e6), m = milli (1e-3), Meg/MEG = mega (1e6)

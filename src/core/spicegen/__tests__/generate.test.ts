@@ -485,6 +485,31 @@ describe('Stub-open part', () => {
     const hasR1Card = deck.some(l => l.startsWith('r_r1'))
     expect(hasR1Card).toBe(false)
   })
+
+  test('connector resolution (status ok, stub open) emits comment, no element cards', () => {
+    // Connector auto-resolution emits { status: 'ok', model: stub open } —
+    // the deck generator must treat it identically to a user stub-open.
+    const circuit = makeRcCircuit(3)
+    const resolutions: Resolution[] = [
+      {
+        ref: 'R1',
+        status: 'ok',
+        model: { kind: 'stub', mode: 'open' },
+        tier: 6,
+        warnings: ['R1 is a connector — stubbed open'],
+      },
+      makeRcResolutions()[1],
+    ]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 3 }],
+      groundNetId: 3,
+    })
+    const deckText = deck.join('\n')
+    expect(deckText).toContain('R1: stubbed open')
+    const hasR1Card = deck.some(l => l.startsWith('r_r1'))
+    expect(hasR1Card).toBe(false)
+  })
 })
 
 describe('Stub-short part', () => {

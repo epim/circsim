@@ -204,6 +204,110 @@ describe('bundled model library — Task 14b IC + digital entries (Spec §8.5)',
   })
 })
 
+// ─── Milestone 1: resolution quick-win library additions ─────────────────────
+
+describe('bundled model library — Milestone 1 additions (JLC/KiCad-9 board coverage)', () => {
+  const index = readIndex()
+  const byId = new Map(index.entries.map((e) => [e.id, e]))
+
+  it('diode-1n4148 also matches BAS16 / BAS16W (100V/150mA switching, 1N4148-equivalent)', () => {
+    const mpns = byId.get('diode-1n4148')?.match.mpn ?? []
+    expect(mpns).toContain('BAS16')
+    expect(mpns).toContain('BAS16W')
+  })
+
+  it('diode-1n5819 also matches B5819W / SS14 (1A/40V-class Schottky)', () => {
+    const mpns = byId.get('diode-1n5819')?.match.mpn ?? []
+    expect(mpns).toContain('B5819W')
+    expect(mpns).toContain('SS14')
+  })
+
+  it('zener-3v0 entry: 3.0V zener model card in diodes.lib', () => {
+    const e = byId.get('zener-3v0')
+    expect(e, 'zener-3v0 entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('model-card')
+    expect(e!.model.file).toBe('diodes.lib')
+    expect(definedNames('diodes.lib').has(e!.model.name.toUpperCase())).toBe(true)
+    expect(e!.match.mpn).toContain('BZX84C3V0')
+    expect(e!.match.mpn).toContain('3V0')
+  })
+
+  it('zener-3v0 model card sets bv=3.0 (reverse breakdown at the zener voltage)', () => {
+    const text = readFileSync(join(MODELS_DIR, 'diodes.lib'), 'utf8').replace(/\r?\n\+/g, ' ')
+    const card = text.match(/^\s*\.model\s+DZ3V0\s+D\([^)]*\)/im)?.[0] ?? ''
+    expect(card, 'DZ3V0 card must exist in diodes.lib').toBeTruthy()
+    expect(card).toMatch(/\bbv=3(\.0)?\b/i)
+    expect(card).toMatch(/\bibv=1m\b/i)
+  })
+
+  it('zener-3v0 valueRegex matches part value "3.0V" only (bare "3V" is ambiguous with battery values; not 3V3, 5V, or net-ish names)', () => {
+    const e = byId.get('zener-3v0')!
+    let pattern = e.match.valueRegex as string
+    expect(pattern).toBeTruthy()
+    let flags = ''
+    if (pattern.startsWith('(?i)')) {
+      pattern = pattern.slice(4)
+      flags = 'i'
+    }
+    const re = new RegExp(pattern, flags)
+    expect(re.test('3.0V')).toBe(true)
+    expect(re.test('3.0v')).toBe(true)
+    // Bare "3V" also appears as a battery VALUE (refdes BT) — valueRegex is not
+    // refdes-gated, so the ambiguous form must NOT match (the mpn "3V0" and the
+    // explicit "3.0V" value are the unambiguous spellings).
+    expect(re.test('3V')).toBe(false)
+    expect(re.test('3v')).toBe(false)
+    expect(re.test('3V3')).toBe(false)
+    expect(re.test('5V')).toBe(false)
+    expect(re.test('3V0_RAIL')).toBe(false)
+  })
+
+  it('comparator-lm339 reuses the LM393 cell with the LM339 quad 14-pin pinMap (unit 1)', () => {
+    const e = byId.get('comparator-lm339')
+    expect(e, 'comparator-lm339 entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('subckt')
+    expect(e!.model.file).toBe('opamp.lib')
+    // Same model cell as comparator-lm393 (open-collector dual comparator core).
+    expect(e!.model.name).toBe('LM393')
+    for (const m of ['LM339', 'LM339D', 'LM2901', 'LM339N']) {
+      expect(e!.match.mpn, `mpn list must include ${m}`).toContain(m)
+    }
+    // MPN/value matching ONLY — refdes/footprint fallback rules silently
+    // misresolved a CD4011 (quad NAND, SOP-14) as an LM393 on a real board.
+    expect(e!.match.refdesPrefix).toBeUndefined()
+    expect(e!.match.footprintRegex).toBeUndefined()
+    // Unit-1 map per the LM339 pinout: IN1+=5, IN1-=4, OUT1=2, VCC=3, GND=12.
+    const key = Object.keys(e!.pinMaps).find((k) => /14/.test(k))
+    expect(key, '14-pin pinMap key must exist').toBeTruthy()
+    const map = e!.pinMaps[key!]
+    expect(map['5']).toBe('inp')
+    expect(map['4']).toBe('inn')
+    expect(map['2']).toBe('out')
+    expect(map['3']).toBe('vcc')
+    expect(map['12']).toBe('vee')
+    // The footprint pattern must cover SOP-14 / SOIC-14 / TSSOP-14 / DIP-14.
+    for (const fp of [
+      'Package_SO:SOIC-14_3.9x8.7mm_P1.27mm',
+      'Package_SO:TSSOP-14_4.4x5mm_P0.65mm',
+      'Package_SO:SOP-14_3.9x8.7mm_P1.27mm',
+      'Package_DIP:DIP-14_W7.62mm',
+    ]) {
+      expect(new RegExp(key!, 'i').test(fp), `pinMap key must match ${fp}`).toBe(true)
+    }
+  })
+
+  it('ref-tl431 entry: behavioral shunt reference subckt in regulators.lib', () => {
+    const e = byId.get('ref-tl431')
+    expect(e, 'ref-tl431 entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('subckt')
+    expect(e!.model.file).toBe('regulators.lib')
+    expect(definedNames('regulators.lib').has(e!.model.name.toUpperCase())).toBe(true)
+    for (const m of ['TL431', 'TL431A', 'TL432', 'AZ431']) {
+      expect(e!.match.mpn, `mpn list must include ${m}`).toContain(m)
+    }
+  })
+})
+
 describe('logic74hc.json — XSPICE template structure (Spec §8.5)', () => {
   const j = JSON.parse(readFileSync(join(MODELS_DIR, 'logic74hc.json'), 'utf8')) as {
     templates: Record<

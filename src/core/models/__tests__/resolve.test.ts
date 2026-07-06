@@ -182,6 +182,40 @@ describe('Tier 2: primitive inference from refdes prefix + value', () => {
     expect(r.status).not.toBe('ok')
   })
 
+  it('C with rated value 100nF/50V → tier 2 primitive, value 1e-7', () => {
+    const circuit = makeCircuit([makePart('C1', '100nF/50V', 'Device:C')])
+    const resolutions = resolveAll(circuit)
+    const r = resolutions[0]
+    expect(r.status).toBe('ok')
+    expect(r.tier).toBe(2)
+    expect(r.model?.kind).toBe('primitive')
+    if (r.model?.kind === 'primitive') {
+      expect(r.model.card).toContain('1e-7')
+    }
+  })
+
+  it('R with toleranced value 2.0k/0.5% → tier 2 primitive, value 2000', () => {
+    const circuit = makeCircuit([makePart('R1', '2.0k/0.5%')])
+    const resolutions = resolveAll(circuit)
+    const r = resolutions[0]
+    expect(r.status).toBe('ok')
+    expect(r.tier).toBe(2)
+    if (r.model?.kind === 'primitive') {
+      expect(r.model.card).toContain('2000')
+    }
+  })
+
+  it('C with comma-rated value 10uF,25V → tier 2 primitive, value 1e-5', () => {
+    const circuit = makeCircuit([makePart('C1', '10uF,25V', 'Device:C')])
+    const resolutions = resolveAll(circuit)
+    const r = resolutions[0]
+    expect(r.status).toBe('ok')
+    expect(r.tier).toBe(2)
+    if (r.model?.kind === 'primitive') {
+      expect(r.model.card).toContain('1e-5')
+    }
+  })
+
   it('primitive card uses node names from circuit nets', () => {
     const part = makePart('R1', '10k')
     // padNet: pad 1 → netId 1 (spiceNode 'vin'), pad 2 → netId 2 (spiceNode 'out')
@@ -341,6 +375,66 @@ describe('Unresolved parts', () => {
     const r = resolutions[0]
     // No tier 1 or 2 for diodes without library
     expect(r.status).toBe('unresolved')
+  })
+})
+
+// ─── Connector auto-resolution ────────────────────────────────────────────────
+
+describe('Connector auto-resolution — open-circuit stub, status ok', () => {
+  // A bare-board connector is electrically open; power arrives via bench
+  // instruments on nets, not connector models. J/P parts with connector-ish
+  // libIds resolve 'ok' with an explicit stub-open model.
+
+  it('J1 with Connector libId → status ok, stub open, note says connector', () => {
+    const circuit = makeCircuit([makePart('J1', 'Conn_01x02', 'Connector_JST:JST_PH_S2B-PH-K_1x02_P2.00mm_Horizontal')])
+    const [r] = resolveAll(circuit)
+    expect(r.status).toBe('ok')
+    expect(r.model?.kind).toBe('stub')
+    if (r.model?.kind === 'stub') {
+      expect(r.model.mode).toBe('open')
+    }
+    expect(r.warnings.some(w => w.toLowerCase().includes('connector'))).toBe(true)
+  })
+
+  it('J2 with PinHeader libId → status ok, stub open', () => {
+    const circuit = makeCircuit([makePart('J2', 'Conn_01x04', 'Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical')])
+    const [r] = resolveAll(circuit)
+    expect(r.status).toBe('ok')
+    expect(r.model?.kind).toBe('stub')
+    if (r.model?.kind === 'stub') {
+      expect(r.model.mode).toBe('open')
+    }
+  })
+
+  it('P1 with Conn libId → status ok, stub open', () => {
+    const circuit = makeCircuit([makePart('P1', 'Conn_01x06', 'Connector_Generic:Conn_01x06')])
+    const [r] = resolveAll(circuit)
+    expect(r.status).toBe('ok')
+    expect(r.model?.kind).toBe('stub')
+  })
+
+  it('J prefix with non-connector libId → NOT auto-resolved (falls through)', () => {
+    const circuit = makeCircuit([makePart('J1', 'ESP32', 'Package:ESP32-WROOM-32')])
+    const [r] = resolveAll(circuit)
+    expect(r.status).toBe('unresolved')
+  })
+
+  it('U prefix with Connector-ish libId → NOT auto-resolved (refdes must be J/P)', () => {
+    const circuit = makeCircuit([makePart('U1', 'SomeIC', 'Connector_JST:JST_PH_S2B')])
+    const [r] = resolveAll(circuit)
+    expect(r.status).toBe('unresolved')
+  })
+
+  it('user stub override still wins over connector auto-resolution', () => {
+    const circuit = makeCircuit([makePart('J1', 'Conn_01x02', 'Connector_JST:JST_PH_S2B')])
+    const userOverrides = new Map<string, { kind: 'stub'; mode: 'open' | 'short' | 'interactive-pins' }>([
+      ['J1', { kind: 'stub', mode: 'short' }],
+    ])
+    const [r] = resolveAll(circuit, undefined, undefined, undefined, userOverrides)
+    expect(r.status).toBe('stubbed')
+    if (r.model?.kind === 'stub') {
+      expect(r.model.mode).toBe('short')
+    }
   })
 })
 

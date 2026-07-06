@@ -104,3 +104,56 @@ describe('parseValue', () => {
     expect(parseValue('33nF', 'C')).toBeCloseTo(3.3e-8, 15)
   })
 })
+
+describe('parseValue — rating/tolerance suffix stripping (real-board value fields)', () => {
+  it('"100nF/50V" → 1e-7 (voltage rating after slash)', () => {
+    expect(parseValue('100nF/50V', 'C')).toBeCloseTo(1e-7, 15)
+  })
+
+  it('"10uF/50V" → 1e-5', () => {
+    expect(parseValue('10uF/50V', 'C')).toBeCloseTo(1e-5, 15)
+  })
+
+  it('"1uF/25V" → 1e-6', () => {
+    expect(parseValue('1uF/25V', 'C')).toBeCloseTo(1e-6, 15)
+  })
+
+  it('"4.7uF/25V" → 4.7e-6', () => {
+    expect(parseValue('4.7uF/25V', 'C')).toBeCloseTo(4.7e-6, 15)
+  })
+
+  it('"2.0k/0.5%" → 2000 (tolerance after slash)', () => {
+    expect(parseValue('2.0k/0.5%', 'R')).toBeCloseTo(2000, 10)
+  })
+
+  it('"53.6k/0.5%" → 53600', () => {
+    expect(parseValue('53.6k/0.5%', 'R')).toBeCloseTo(53600, 10)
+  })
+
+  it('" 100nF 50V" → 1e-7 (space-separated rating)', () => {
+    expect(parseValue(' 100nF 50V', 'C')).toBeCloseTo(1e-7, 15)
+  })
+
+  it('"10uF,25V" → 1e-5 (comma-separated rating)', () => {
+    expect(parseValue('10uF,25V', 'C')).toBeCloseTo(1e-5, 15)
+  })
+
+  it('"100nF/50V/10%" → 1e-7 (rating and tolerance both stripped)', () => {
+    expect(parseValue('100nF/50V/10%', 'C')).toBeCloseTo(1e-7, 15)
+  })
+
+  it('"5V" alone → undefined (no delimiter — a bare rating is not a value)', () => {
+    expect(parseValue('5V', 'C')).toBeUndefined()
+  })
+
+  it('"100nF X7R" → undefined (trailing segment is not a rating/tolerance)', () => {
+    expect(parseValue('100nF X7R', 'C')).toBeUndefined()
+  })
+
+  it('plain values still parse: "10k", "4u7", "100n", "1meg"', () => {
+    expect(parseValue('10k', 'R')).toBeCloseTo(1e4, 10)
+    expect(parseValue('4u7', 'C')).toBeCloseTo(4.7e-6, 15)
+    expect(parseValue('100n', 'C')).toBeCloseTo(1e-7, 15)
+    expect(parseValue('1meg', 'R')).toBeCloseTo(1e6, 5)
+  })
+})

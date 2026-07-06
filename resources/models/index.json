@@ -4,7 +4,7 @@
     {
       "id": "diode-1n4148",
       "match": {
-        "mpn": ["1N4148", "1N914", "1N4148W", "1N4148WS"],
+        "mpn": ["1N4148", "1N914", "1N4148W", "1N4148WS", "BAS16", "BAS16W"],
         "refdesPrefix": ["D"],
         "footprintRegex": "D_(SOD|SMA|SMB|0805|MELF|DO-35|DO-204)"
       },
@@ -32,7 +32,7 @@
     {
       "id": "diode-1n5819",
       "match": {
-        "mpn": ["1N5819", "1N5817", "1N5818", "SB5819"],
+        "mpn": ["1N5819", "1N5817", "1N5818", "SB5819", "B5819W", "SS14"],
         "refdesPrefix": ["D"],
         "footprintRegex": "D_(DO-41|SMA|SMB|DO-214|SOD)"
       },
@@ -56,6 +56,22 @@
       },
       "defaultPinMap": { "1": "2", "2": "1" },
       "provenance": "Written for circsim from BZX55C5V1 / 5V1 zener datasheet parameters (Vz=5.1V@5mA via bv/ibv), MIT."
+    },
+    {
+      "id": "zener-3v0",
+      "match": {
+        "mpn": ["BZX84C3V0", "3V0"],
+        "valueRegex": "(?i)^3\\.0V$",
+        "refdesPrefix": ["D", "Z", "ZD"],
+        "footprintRegex": "D_(SOD|MiniMELF|DO-35|SOT-23)"
+      },
+      "model": { "type": "model-card", "file": "diodes.lib", "name": "DZ3V0" },
+      "$comment": "valueRegex matches part VALUES only, and only the explicit '3.0V' (bare '3V' is ambiguous with battery values — refdes BT); a supply net named 3V0 never reaches the matcher.",
+      "pinMaps": {
+        "D_(SOD|MiniMELF|DO-35|MELF).*": { "1": "2", "2": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "1" },
+      "provenance": "Written for circsim from BZX84C3V0 / 3V0 zener datasheet parameters (Vz=3.0V@1mA via bv/ibv), MIT."
     },
     {
       "id": "led-generic",
@@ -316,6 +332,19 @@
       "provenance": "Behavioral comparator written for circsim from LM393 datasheet (open-collector output, response time ~1.3us), MIT."
     },
     {
+      "id": "comparator-lm339",
+      "match": {
+        "mpn": ["LM339", "LM339D", "LM2901", "LM339N"]
+      },
+      "model": { "type": "subckt", "file": "opamp.lib", "name": "LM393" },
+      "$comment": "Quad open-collector comparator — same behavioral cell as comparator-lm393 (subckt order inp inn out vcc vee). Unit 1 on a SOP/SOIC/TSSOP/DIP-14: 5(IN1+)/4(IN1-)/2(OUT1, open-collector), 3=VCC, 12=GND. Units 2-4 unmapped (same convention as the opamp-lm324 quad). External pull-up required. MPN/value matching only — a refdes/footprint fallback would silently claim any unknown 14-pin U part (e.g. a CD4011 in SOP-14). pinMaps keys are for pin mapping, not matching.",
+      "pinMaps": {
+        "(SOIC|DIP|TSSOP|SOP|SO)-?14.*": { "5": "inp", "4": "inn", "2": "out", "3": "vcc", "12": "vee" }
+      },
+      "defaultPinMap": { "5": "inp", "4": "inn", "2": "out", "3": "vcc", "12": "vee" },
+      "provenance": "Behavioral comparator written for circsim from LM339/LM2901 datasheet (open-collector output, response time ~1.3us) — reuses the LM393 cell in opamp.lib, MIT."
+    },
+    {
       "id": "reg-7805",
       "match": {
         "mpn": ["7805", "LM7805", "L7805", "MC7805", "78M05", "L78M05"],
@@ -391,6 +420,19 @@
       },
       "defaultPinMap": { "1": "gnd", "2": "vout", "3": "vin" },
       "provenance": "Behavioral LDO written for circsim from AMS1117-5.0 datasheet (Vout=5V, dropout~1.3V@1A), MIT."
+    },
+    {
+      "id": "ref-tl431",
+      "match": {
+        "mpn": ["TL431", "TL431A", "TL432", "AZ431"]
+      },
+      "model": { "type": "subckt", "file": "regulators.lib", "name": "TL431" },
+      "$comment": "Subckt node order: k a ref (cathode, anode, reference). TI SOT-23/TO-92 pinout pin1=REF, pin2=ANODE, pin3=CATHODE. Vendor pinouts differ, so no refdes/footprint fallback matching (MPN/value only) — verify pin order for non-TI variants.",
+      "pinMaps": {
+        "(SOT-23|TO-92).*": { "1": "ref", "2": "a", "3": "k" }
+      },
+      "defaultPinMap": { "1": "ref", "2": "a", "3": "k" },
+      "provenance": "Behavioral shunt reference written for circsim from TL431 datasheet parameters (Vref=2.495V, high-gain error stage + shunt element, off-state leakage), MIT."
     },
     {
       "id": "timer-ne555",

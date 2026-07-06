@@ -38,3 +38,9 @@
 * Reverse breakdown modeled via bv/ibv; forward path is an ordinary Si diode.
 .model DZ5V1 D(is=1n rs=0.5 n=1.7 tt=50n cjo=175p vj=0.75 m=0.333
 + bv=5.1 ibv=5m eg=1.11)
+
+* ---------------------------------------------------------------------------
+* BZX84C3V0 / 3V0 zener diode (Vz=3.0V @ 1mA - soft low-voltage knee).
+* Reverse breakdown modeled via bv/ibv; forward path is an ordinary Si diode.
+.model DZ3V0 D(is=1n rs=0.6 n=1.7 tt=50n cjo=450p vj=0.75 m=0.333
++ bv=3.0 ibv=1m eg=1.11)

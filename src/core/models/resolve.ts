@@ -410,6 +410,38 @@ function tryTier2(part: Part, circuit: Circuit): Resolution | null {
   }
 }
 
+// ─── Connector auto-resolution ────────────────────────────────────────────────
+
+/** Refdes prefixes that name connectors (J1, P2 …). */
+const CONNECTOR_PREFIXES = new Set(['J', 'P'])
+
+/**
+ * Returns true if the part is clearly a connector: refdes prefix J or P AND a
+ * connector-ish libId/footprint (Connector, JST, PinHeader, Conn — case-insensitive).
+ */
+function isConnector(part: Part): boolean {
+  if (!CONNECTOR_PREFIXES.has(refdesPrefix(part.ref))) return false
+  return /JST|PinHeader|Conn/i.test(part.libId ?? '')
+}
+
+/**
+ * Resolve a connector as an explicit open-circuit stub with status 'ok'.
+ * A bare-board connector is electrically open; power arrives via bench
+ * instruments on nets, not connector models — so this is a real resolution,
+ * not a fallback stub.
+ */
+function makeConnectorResolution(part: Part): Resolution {
+  return {
+    ref: part.ref,
+    status: 'ok',
+    model: { kind: 'stub', mode: 'open' },
+    tier: 6,
+    warnings: [
+      `${part.ref} is a connector — modeled as open circuit (bench instruments drive its nets)`,
+    ],
+  }
+}
+
 // ─── Tier 6: Stub (fallback) ──────────────────────────────────────────────────
 
 function makeTier6(
@@ -445,11 +477,18 @@ function tryTier3(
 ): Resolution | null {
   // Build a PartDescriptor for the matcher
   // MPN can come from part.properties['mpn'] or 'MPN' (case variants)
-  const mpn: string | undefined =
+  const mpnProp: string | undefined =
     part.properties['mpn'] ??
     part.properties['MPN'] ??
     part.properties['Mpn'] ??
     undefined
+
+  // Value-as-MPN fallback: real boards often carry the MPN in the VALUE field
+  // ("1N4148W", "MMBT3904", "AO3401") with no mpn property at all. When the
+  // properties provide no MPN, pass the value as the MPN candidate —
+  // matchLibraryEntry normalizes it, and a plain R/C value like "10k" matches
+  // no entry's mpn list, so false positives are unlikely.
+  const mpn = mpnProp ?? (part.value.trim() !== '' ? part.value : undefined)
 
   const descriptor: PartDescriptor = {
     mpn,
@@ -565,6 +604,11 @@ function resolvePart(
   // ── Tier 2: R/C/L primitive inference ─────────────────────────────────────
   const tier2 = tryTier2(part, circuit)
   if (tier2) return tier2
+
+  // ── Connector auto-resolution (J/P + connector-ish libId → open stub) ─────
+  if (isConnector(part)) {
+    return makeConnectorResolution(part)
+  }
 
   // ── Tier 3: Bundled library match ─────────────────────────────────────────
   if (_library && _library.length > 0) {
