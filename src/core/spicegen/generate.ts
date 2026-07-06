@@ -176,6 +176,27 @@ function getModelCard(idx: ModelTextIndex, file: string, name: string): string |
   return idx.modelsByFile.get(file)!.get(name.toLowerCase())
 }
 
+/**
+ * Subckt names instantiated inside a subckt body. Every `x…` card names the
+ * subckt it calls as the last token before an optional `params:` tail
+ * (`xa inp inn out vcc vee opamp_core`, `xr vin gnd vout reg_lin params: …`).
+ * Used to transitively inline a subckt's helper subckts (opamp_core inside the
+ * op-amps/comparators, reg_lin inside the 78xx/AMS1117 regulators) — without
+ * this, inlining only the top-level block leaves ngspice with "unknown subckt".
+ */
+function extractSubcktRefs(lines: string[]): string[] {
+  const refs: string[] = []
+  for (const line of lines) {
+    const t = line.trim()
+    if (!/^x/i.test(t)) continue
+    const toks = t.split(/\s+/)
+    const pIdx = toks.findIndex((tok) => /^params:$/i.test(tok))
+    const nameTok = pIdx > 0 ? toks[pIdx - 1] : toks[toks.length - 1]
+    if (nameTok) refs.push(nameTok)
+  }
+  return refs
+}
+
 // ─── Numeric emission ─────────────────────────────────────────────────────────
 
 /**
@@ -281,6 +302,43 @@ const PRIMITIVE_PREFIX_TO_LETTER: Record<string, string> = {
   Q: 'q',
   M: 'm',
   T: 'm',
+}
+
+/**
+ * SPICE element letter derived from a `.model NAME TYPE(...)` card's TYPE token.
+ *
+ * The model card authoritatively declares the device kind, so it is the primary
+ * source for the element letter — the refdes prefix is only a fallback. This
+ * matters when the refdes convention doesn't imply the type: a zener "DZ1" isn't
+ * in the prefix map, and worse, a VDMOS on a "Q" refdes (a common MOSFET
+ * convention) would otherwise emit a BJT `q` card for a VDMOS model. Returns
+ * undefined for an unrecognized type (caller falls back to the refdes map).
+ */
+function modelCardDeviceLetter(card: string): string | undefined {
+  const m = card.match(/\.model\s+\S+\s+([A-Za-z]+)/i)
+  if (!m) return undefined
+  switch (m[1].toUpperCase()) {
+    case 'D':
+      return 'd'
+    case 'NPN':
+    case 'PNP':
+    case 'LPNP':
+      return 'q'
+    case 'VDMOS':
+    case 'NMOS':
+    case 'PMOS':
+      return 'm'
+    case 'NJF':
+    case 'PJF':
+      return 'j'
+    default:
+      return undefined
+  }
+}
+
+/** True when the model card declares a VDMOS device (needs a 4th bulk terminal). */
+function isVdmosCard(card: string): boolean {
+  return /\.model\s+\S+\s+VDMOS\b/i.test(card)
 }
 
 // ─── LED classification + device-current naming ──────────────────────────────
@@ -627,6 +685,20 @@ export function generateDeck(opts: GenerateOptions): string[] {
     modelDefLines.push(...defLines)
   }
 
+  /**
+   * Inline a `.subckt` and every subckt it transitively instantiates, from the
+   * same lib text. Cycle-safe: queueDef records the key before we recurse, so a
+   * self- or mutually-referencing subckt is queued at most once.
+   */
+  const queueSubcktWithDeps = (file: string, name: string): void => {
+    const def = getSubcktDef(modelIndex, file, name)
+    if (!def) return
+    const key = `subckt:${file}:${name.toLowerCase()}`
+    if (emittedDefKeys.has(key)) return
+    queueDef(key, def.lines)
+    for (const dep of extractSubcktRefs(def.lines)) queueSubcktWithDeps(file, dep)
+  }
+
   // ── Line 0: title (SPICE requires first line to be a title comment) ────────
   lines.push(`* circsim deck${title ? ` — ${title}` : ''}`)
 
@@ -813,8 +885,17 @@ export function generateDeck(opts: GenerateOptions): string[] {
         // the pinMap value order (1-based terminal positions, per index.json).
         // model-card devices are top-level primitives → @<dev>[i] is native, so a
         // current probe needs no ammeter splice (the .save section handles it).
-        const deviceLetter = PRIMITIVE_PREFIX_TO_LETTER[refdesPrefix(part.ref)] ?? 'x'
+        // Device letter: the .model card's TYPE is authoritative (D→d, NPN/PNP→q,
+        // VDMOS/NMOS/PMOS→m); the refdes prefix is only a fallback. Deriving from
+        // the refdes alone mis-emits a VDMOS on a "Q" refdes as a BJT `q` card, and
+        // a zener "DZ1" (prefix not in the map) as an invalid `x_` subckt call.
+        const deviceLetter =
+          modelCardDeviceLetter(modelCard) ?? PRIMITIVE_PREFIX_TO_LETTER[refdesPrefix(part.ref)] ?? 'x'
         const nodes = buildPositionalNodeList(part, netIdToNode, pinMap)
+        // VDMOS device lines take 4 terminals (drain gate source bulk); the pinMap
+        // supplies D/G/S, so tie bulk to source — the standard discrete-MOSFET
+        // connection (matches the library integration harness's `m1 drn g 0 0`).
+        if (isVdmosCard(modelCard) && nodes.length === 3) nodes.push(nodes[2])
         const devName = `${deviceLetter}_${part.ref.toLowerCase()}`
 
         // LED glow data source: splice a 0 V series ammeter on the LED's anode
@@ -880,9 +961,11 @@ export function generateDeck(opts: GenerateOptions): string[] {
         const xName = `x_${part.ref.toLowerCase()}`
         lines.push(`${xName} ${nodeList} ${model.subcktName}`)
       }
-      // Inline the .subckt definition once (if we have it).
+      // Inline the .subckt definition once (if we have it), plus every subckt it
+      // transitively instantiates (opamp_core inside the op-amps/comparators,
+      // reg_lin inside the 78xx/AMS1117 regulators).
       if (subcktDef) {
-        queueDef(`subckt:${libFile}:${model.subcktName.toLowerCase()}`, subcktDef.lines)
+        queueSubcktWithDeps(libFile, model.subcktName)
       }
       continue
     }

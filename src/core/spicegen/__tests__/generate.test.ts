@@ -862,6 +862,207 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
   })
 })
 
+// ─── model-card device letter from an unconventional refdes ───────────────────
+
+describe('generateDeck — model-card device letter derives from the .model type', () => {
+  test('a DZ-prefixed zener (model-card) emits a diode d_ card, not an x_ subckt call', () => {
+    // DZ is a common zener refdes convention not in the primitive prefix map.
+    // Because the resolution is a .model card (not a .subckt), the device letter
+    // must come from the card's declared type (D → diode), never fall back to x_.
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'VREF', spiceNode: 'vref', padRefs: [] },
+      { id: 2, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const dz1: Part = {
+      ref: 'DZ1', value: '3.0V', libId: 'Diode_SMD:D_SOD-123', layer: 'F',
+      padNet: new Map([['1', 2], ['2', 1]]), // pad1→GND, pad2→VREF
+      properties: {},
+    }
+    const resolutions: Resolution[] = [
+      {
+        ref: 'DZ1', status: 'ok', tier: 3, warnings: [],
+        model: { kind: 'subckt', libFile: 'diodes.lib', subcktName: 'DZ3V0', pinMap: { '1': '2', '2': '1' } },
+      },
+    ]
+    const modelTexts = { 'diodes.lib': '.model DZ3V0 D(is=1n rs=0.6 bv=3.0 ibv=1m)' }
+    const deck = generateDeck({
+      circuit: { nets, parts: [dz1], warnings: [] },
+      resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 2 }],
+      groundNetId: 2,
+      modelTexts,
+    })
+    expect(deck.some(l => l.startsWith('x_dz1'))).toBe(false)
+    const dLine = deck.find(l => l.startsWith('d_dz1'))
+    expect(dLine).toBeDefined()
+    // pinMap {1:"2",2:"1"}: position1(anode)=pad2=VREF, position2(cathode)=pad1=GND.
+    expect(dLine).toBe('d_dz1 vref 0 DZ3V0')
+    // .model card inlined exactly once.
+    expect(deck.filter(l => /^\.model DZ3V0\b/i.test(l)).length).toBe(1)
+  })
+
+  test('a PNP BJT model-card on an odd refdes (TR1) still emits a q_ card', () => {
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'C', spiceNode: 'c', padRefs: [] },
+      { id: 2, kicadName: 'B', spiceNode: 'b', padRefs: [] },
+      { id: 3, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const tr1: Part = {
+      ref: 'TR1', value: 'BC557', libId: 'Package_TO_SOT_SMD:SOT-23', layer: 'F',
+      padNet: new Map([['1', 1], ['2', 2], ['3', 3]]),
+      properties: {},
+    }
+    const resolutions: Resolution[] = [
+      {
+        ref: 'TR1', status: 'ok', tier: 3, warnings: [],
+        model: { kind: 'subckt', libFile: 'bjt.lib', subcktName: 'QBC557', pinMap: { '1': '1', '2': '2', '3': '3' } },
+      },
+    ]
+    const modelTexts = { 'bjt.lib': '.model QBC557 PNP(bf=200 is=1e-14)' }
+    const deck = generateDeck({
+      circuit: { nets, parts: [tr1], warnings: [] },
+      resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 3 }],
+      groundNetId: 3,
+      modelTexts,
+    })
+    expect(deck.some(l => l.startsWith('x_tr1'))).toBe(false)
+    expect(deck.find(l => l.startsWith('q_tr1'))).toBeDefined()
+  })
+
+  test('a VDMOS model-card on a Q refdes emits an m_ card with 4 terminals (bulk=source)', () => {
+    // Q is a common MOSFET refdes; the refdes map would wrongly give a BJT `q`
+    // letter, and a VDMOS device line needs 4 nodes (D G S B), not 3.
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'DRAIN', spiceNode: 'drain', padRefs: [] },
+      { id: 2, kicadName: 'GATE', spiceNode: 'gate', padRefs: [] },
+      { id: 3, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const q3: Part = {
+      ref: 'Q3', value: 'AO3401', libId: 'Package_TO_SOT_SMD:SOT-23', layer: 'F',
+      // pmos-generic pinMap {1:"2",2:"3",3:"1"}: pad1→pos2(G), pad2→pos3(S), pad3→pos1(D)
+      padNet: new Map([['1', 2], ['2', 3], ['3', 1]]),
+      properties: {},
+    }
+    const resolutions: Resolution[] = [
+      {
+        ref: 'Q3', status: 'ok', tier: 3, warnings: [],
+        model: { kind: 'subckt', libFile: 'mosfet.lib', subcktName: 'MPMOS_GEN', pinMap: { '1': '2', '2': '3', '3': '1' } },
+      },
+    ]
+    const modelTexts = { 'mosfet.lib': '.model MPMOS_GEN VDMOS(pchan=1 vto=-1.1 kp=18)' }
+    const deck = generateDeck({
+      circuit: { nets, parts: [q3], warnings: [] },
+      resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 3 }],
+      groundNetId: 3,
+      modelTexts,
+    })
+    expect(deck.some(l => l.startsWith('q_q3'))).toBe(false)
+    const mLine = deck.find(l => l.startsWith('m_q3'))
+    expect(mLine).toBeDefined()
+    // Terminal order D G S + bulk(=S): drain gate 0 0
+    expect(mLine).toBe('m_q3 drain gate 0 0 MPMOS_GEN')
+  })
+})
+
+// ─── transitive subckt inlining ───────────────────────────────────────────────
+
+describe('generateDeck — inlines nested (transitive) subckt dependencies', () => {
+  // An op-amp/comparator/regulator subckt that internally instantiates a shared
+  // helper subckt (opamp_core, reg_lin). Inlining only the top-level block leaves
+  // ngspice with "unknown subckt: … opamp_core".
+  const OPAMP_LIB = [
+    '* opamp.lib',
+    '.subckt opamp_core inp inn out vcc vee',
+    'e1 out 0 inp inn 100k',
+    '.ends opamp_core',
+    '.subckt LM393 inp inn out vcc vee',
+    'xc inp inn dec vcc vee opamp_core',
+    'rload dec out 1k',
+    '.ends LM393',
+  ].join('\n')
+
+  function comparatorCircuit(): Circuit {
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'INP', spiceNode: 'inp', padRefs: [] },
+      { id: 2, kicadName: 'INN', spiceNode: 'inn', padRefs: [] },
+      { id: 3, kicadName: 'OUT', spiceNode: 'out', padRefs: [] },
+      { id: 4, kicadName: 'VCC', spiceNode: 'vcc', padRefs: [] },
+      { id: 5, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const u1: Part = {
+      ref: 'U1', value: 'LM393', libId: 'Package_SO:SOIC-8', layer: 'F',
+      padNet: new Map([['1', 1], ['2', 2], ['3', 3], ['4', 4], ['5', 5]]),
+      properties: {},
+    }
+    return { nets, parts: [u1], warnings: [] }
+  }
+
+  test('a subckt that instantiates a helper subckt inlines BOTH definitions', () => {
+    const resolutions: Resolution[] = [
+      {
+        ref: 'U1', status: 'ok', tier: 3, warnings: [],
+        model: {
+          kind: 'subckt', libFile: 'opamp.lib', subcktName: 'LM393',
+          pinMap: { '1': 'inp', '2': 'inn', '3': 'out', '4': 'vcc', '5': 'vee' },
+        },
+      },
+    ]
+    const deck = generateDeck({
+      circuit: comparatorCircuit(),
+      resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 5 }],
+      groundNetId: 5,
+      modelTexts: { 'opamp.lib': OPAMP_LIB },
+    })
+    const deckText = deck.join('\n')
+    // Both the top-level subckt AND its nested dependency are present, once each.
+    expect(deck.filter(l => /^\.subckt LM393\b/i.test(l)).length).toBe(1)
+    expect(deck.filter(l => /^\.subckt opamp_core\b/i.test(l)).length).toBe(1)
+    expect(deckText).toContain('.ends opamp_core')
+  })
+
+  test('resolves the nested subckt named before a `params:` tail (regulator form)', () => {
+    // The 78xx/AMS1117 regulators instantiate reg_lin as `xr … reg_lin params: …`;
+    // the dependency name is the token BEFORE params:, not the last token.
+    const REG_LIB = [
+      '* regulators.lib',
+      '.subckt reg_lin vin gnd vout params: vreg=5.0 drop=2.0',
+      'b1 vout gnd v=vreg',
+      '.ends reg_lin',
+      '.subckt 7805 vin gnd vout',
+      'xr vin gnd vout reg_lin params: vreg=5.0 drop=2.0',
+      '.ends 7805',
+    ].join('\n')
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'VIN', spiceNode: 'vin', padRefs: [] },
+      { id: 2, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+      { id: 3, kicadName: 'VOUT', spiceNode: 'vout', padRefs: [] },
+    ]
+    const u1: Part = {
+      ref: 'U1', value: '7805', libId: 'Package_TO_SOT_SMD:TO-220', layer: 'F',
+      padNet: new Map([['1', 1], ['2', 2], ['3', 3]]),
+      properties: {},
+    }
+    const resolutions: Resolution[] = [
+      {
+        ref: 'U1', status: 'ok', tier: 3, warnings: [],
+        model: { kind: 'subckt', libFile: 'regulators.lib', subcktName: '7805', pinMap: { '1': 'vin', '2': 'gnd', '3': 'vout' } },
+      },
+    ]
+    const deck = generateDeck({
+      circuit: { nets, parts: [u1], warnings: [] },
+      resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 2 }],
+      groundNetId: 2,
+      modelTexts: { 'regulators.lib': REG_LIB },
+    })
+    expect(deck.filter(l => /^\.subckt 7805\b/i.test(l)).length).toBe(1)
+    expect(deck.filter(l => /^\.subckt reg_lin\b/i.test(l)).length).toBe(1)
+  })
+})
+
 // ─── alterPlan ────────────────────────────────────────────────────────────────
 
 describe('alterPlan — dc-supply.volts', () => {
