@@ -303,7 +303,7 @@ export function isLedPart(args: {
   subcktName?: string
 }): boolean {
   if (refdesPrefix(args.ref) !== 'D') return false
-  const hay = `${args.value ?? ''} ${args.libId ?? ''} ${args.subcktName ?? ''}`.toUpperCase()
+  const hay = `${args.value ?? ''} ${args.libId ?? ''} ${args.subcktName ?? ''}`.toUpperCase()
   return hay.includes('LED')
 }
 
