@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { createAppStore } from '../appStore'
+import { createAppStore, AUTO_SUPPLY_ID } from '../appStore'
 import { createMockSimClient } from '../../ipc/simClient'
 
 const fixturesDir = join(__dirname, '../../../../../fixtures')
@@ -266,6 +266,144 @@ describe('Task22 — MCU interactive-pins instrument', () => {
     const updated = store.getState().instruments.find(i => 'id' in i && i.id === 'r1p1')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect((updated as any).level).toBe(1)
+  })
+})
+
+// ── Milestone 2: attachSupplyToNet (click-to-attach supply chips) ─────────────
+
+describe('Milestone2 — attachSupplyToNet', () => {
+  // Board whose nets carry NO rail-like names (IN / OUT / GND): nothing is
+  // suggested and no supply auto-attaches — the manual-designation case.
+  const noRailBoard = `(kicad_pcb (version 20221018) (generator pcbnew)
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (44 "Edge.Cuts" user))
+  (net 1 "IN")
+  (net 2 "OUT")
+  (net 3 "GND")
+  (footprint "Resistor_SMD:R_0805_2012Metric" (layer "F.Cu")
+    (at 10 10)
+    (fp_text reference "R1" (at 0 -1) (layer "F.SilkS")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (fp_text value "10k" (at 0 1) (layer "F.Fab")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at -0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "IN"))
+    (pad "2" smd rect (at 0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 2 "OUT"))
+  )
+  (footprint "Resistor_SMD:R_0805_2012Metric" (layer "F.Cu")
+    (at 14 10)
+    (fp_text reference "R2" (at 0 -1) (layer "F.SilkS")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (fp_text value "10k" (at 0 1) (layer "F.Fab")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at -0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 2 "OUT"))
+    (pad "2" smd rect (at 0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 3 "GND"))
+  )
+  (gr_line (start 0 0) (end 20 0) (layer "Edge.Cuts") (width 0.1))
+  (gr_line (start 20 0) (end 20 20) (layer "Edge.Cuts") (width 0.1))
+  (gr_line (start 20 20) (end 0 20) (layer "Edge.Cuts") (width 0.1))
+  (gr_line (start 0 20) (end 0 0) (layer "Edge.Cuts") (width 0.1))
+)`
+
+  let store: ReturnType<typeof createAppStore>
+
+  beforeEach(() => {
+    store = createAppStore({ simClient: createMockSimClient() })
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+  })
+
+  it('attaching to a fresh net creates a 5 V / 0.1 Ω dc-supply on it and selects it', () => {
+    const outId = store.getState().circuit!.nets.find(n => n.kicadName === 'OUT')!.id
+    store.getState().attachSupplyToNet(outId)
+
+    const s = store.getState()
+    const supplies = s.instruments.filter(
+      i => i.kind === 'dc-supply' && i.netId === outId,
+    ) as Extract<(typeof s.instruments)[number], { kind: 'dc-supply' }>[]
+    expect(supplies).toHaveLength(1)
+    expect(supplies[0].volts).toBe(5)
+    expect(supplies[0].seriesOhms).toBe(0.1)
+    expect(s.selectedInstrumentId).toBe(supplies[0].id)
+    expect(s.deckDirty).toBe(true)
+  })
+
+  it('attaching twice to the same net does not duplicate — it re-selects the existing supply', () => {
+    const outId = store.getState().circuit!.nets.find(n => n.kicadName === 'OUT')!.id
+    store.getState().attachSupplyToNet(outId)
+    const firstId = store.getState().selectedInstrumentId
+    expect(firstId).not.toBeNull()
+
+    // deselect, then attach again
+    store.getState().selectInstrument(null)
+    store.getState().attachSupplyToNet(outId)
+
+    const s = store.getState()
+    expect(s.instruments.filter(i => i.kind === 'dc-supply' && i.netId === outId)).toHaveLength(1)
+    expect(s.selectedInstrumentId).toBe(firstId)
+  })
+
+  it('attaching to the net that already has the auto supply just selects it (no new instrument)', () => {
+    // fixture-rc: VIN is recognised as a supply → the auto supply sits there.
+    const s0 = store.getState()
+    const vinId = s0.circuit!.nets.find(n => n.kicadName === 'VIN')!.id
+    expect(s0.instruments.filter(i => i.kind === 'dc-supply')).toHaveLength(1)
+
+    store.getState().selectInstrument(null)
+    store.getState().attachSupplyToNet(vinId)
+
+    const s = store.getState()
+    expect(s.instruments.filter(i => i.kind === 'dc-supply')).toHaveLength(1)
+    expect(s.selectedInstrumentId).toBe(AUTO_SUPPLY_ID)
+  })
+
+  it('attachSupplyToNet on the designated ground net is a no-op (no instrument added, selection unchanged)', () => {
+    const s0 = store.getState()
+    const gndId = s0.groundNetId!
+    const instrumentsBefore = s0.instruments
+    const selectedBefore = s0.selectedInstrumentId
+
+    store.getState().attachSupplyToNet(gndId)
+
+    const s = store.getState()
+    // No supply may land on SPICE node 0 — nothing added, nothing re-selected.
+    expect(s.instruments).toEqual(instrumentsBefore)
+    expect(
+      s.instruments.some(i => i.kind === 'dc-supply' && (i as { netId: number }).netId === gndId),
+    ).toBe(false)
+    expect(s.selectedInstrumentId).toBe(selectedBefore)
+  })
+
+  it('works when no auto supply was attached (the no-suggestions board case)', () => {
+    store.getState().openBoardFromText(noRailBoard, 'no-rail.kicad_pcb')
+    const s0 = store.getState()
+    expect(s0.suggestedSupplyNetIds).toEqual([])
+    expect(s0.instruments.filter(i => i.kind === 'dc-supply')).toHaveLength(0)
+
+    const inId = s0.circuit!.nets.find(n => n.kicadName === 'IN')!.id
+    store.getState().attachSupplyToNet(inId)
+
+    const s = store.getState()
+    const supplies = s.instruments.filter(
+      i => i.kind === 'dc-supply' && i.netId === inId,
+    ) as Extract<(typeof s.instruments)[number], { kind: 'dc-supply' }>[]
+    expect(supplies).toHaveLength(1)
+    expect(supplies[0].volts).toBe(5)
+    expect(supplies[0].seriesOhms).toBe(0.1)
+    expect(s.selectedInstrumentId).toBe(supplies[0].id)
+  })
+
+  it('openBoardFromText selects the auto-attached supply; removeInstrument clears the selection', () => {
+    // the auto supply is selected right after open (rack shows its props)
+    expect(store.getState().selectedInstrumentId).toBe(AUTO_SUPPLY_ID)
+
+    store.getState().removeInstrument(AUTO_SUPPLY_ID)
+    expect(store.getState().selectedInstrumentId).toBeNull()
+  })
+
+  it('selectInstrument sets and clears the selection', () => {
+    store.getState().selectInstrument('some-id')
+    expect(store.getState().selectedInstrumentId).toBe('some-id')
+    store.getState().selectInstrument(null)
+    expect(store.getState().selectedInstrumentId).toBeNull()
   })
 })
 

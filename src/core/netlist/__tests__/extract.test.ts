@@ -562,6 +562,174 @@ describe('suggestSupplies()', () => {
   })
 })
 
+// ─── suggestSupplies — extended rail heuristics + ranking (Milestone 2) ──────
+
+describe('suggestSupplies() — extended rail heuristics (Milestone 2)', () => {
+  let nextId = 0
+
+  /** Synthetic net with a given name and pad-degree (padRefs.length). */
+  function net(name: string, degree = 0): CircuitNet {
+    nextId += 1
+    return {
+      id: nextId,
+      kicadName: name,
+      spiceNode: name.toLowerCase(),
+      padRefs: Array.from({ length: degree }, (_, i) => ({
+        ref: `X${nextId}_${i}`,
+        pad: '1',
+      })),
+    }
+  }
+
+  function suggestedNames(nets: CircuitNet[]): string[] {
+    return suggestSupplies(nets).map(n => n.kicadName)
+  }
+
+  it('matches vcc/vdd/vbus/vbat/vsys/vpack as substring tokens', () => {
+    const keepers = ['/INTVCC', '/AVDD', '/VDD_CH', '/VBUS_C', 'VSYS_MAIN', 'VPACK_RAW', 'VBAT_PROT']
+    for (const name of keepers) {
+      expect(suggestedNames([net(name)]), name).toEqual([name])
+    }
+  })
+
+  it('matches names starting with vin / vout / v+', () => {
+    const keepers = ['/VIN_CHG', '/VOUT', 'VOUTA', 'V+RAIL']
+    for (const name of keepers) {
+      expect(suggestedNames([net(name)]), name).toEqual([name])
+    }
+  })
+
+  it('matches names ending with + (PACK+, BATT+, B+)', () => {
+    const keepers = ['/PACK+', 'BATT+', 'B+']
+    for (const name of keepers) {
+      expect(suggestedNames([net(name)]), name).toEqual([name])
+    }
+  })
+
+  it('"+" suffix still counts when the prefix reads as a power label (PACK+, B+, BATT+, VBAT+, CELL+, PWR+)', () => {
+    const keepers = ['PACK+', 'B+', 'BATT+', 'VBAT+', 'CELL+', 'PWR+']
+    for (const name of keepers) {
+      expect(suggestedNames([net(name)]), name).toEqual([name])
+    }
+  })
+
+  it('"+" suffix alone is NOT supply evidence: diff pairs, opamp inputs, LED polarity labels stay out', () => {
+    // D+ (USB), IN+/AIN+ (opamp/ADC inputs), LED+ (polarity label), USB_D+ —
+    // none of these are rails; suggesting them would let the 5 V auto-supply
+    // land on e.g. an LED anode at board open.
+    const traps = ['D+', 'IN+', 'AIN+', 'LED+', 'USB_D+']
+    expect(suggestedNames(traps.map(n => net(n, 8)))).toEqual([])
+  })
+
+  it('never suggests a ground-named net (GND, 0V) as a supply, even at high pad-degree', () => {
+    // A net named "0V" fully matches the voltage-like supply pattern, but it is
+    // a ground name (suggestGround matches it) — attaching a 5 V supply there
+    // would drive SPICE node 0. Ground names must never reach the suggestions.
+    const boardNets = [net('0V', 40), net('/0V', 30), net('GND', 40), net('VCC', 2)]
+    expect(suggestedNames(boardNets)).toEqual(['VCC'])
+  })
+
+  it('does NOT match plain signal names', () => {
+    const signals = ['OUT', 'SWCLK', 'LED_A', 'CTRL', 'NET7', '/VC3F', '/VGATED']
+    expect(suggestedNames(signals.map(n => net(n)))).toEqual([])
+  })
+
+  it('rejects candidates carrying a sense/feedback signature (sns|sense|fb|ref|div|mon|adc|det)', () => {
+    const traps = [
+      '/VBUS_SNS',   // vbus token, but _SNS
+      '/SENSE_HI',
+      '/V_DIV',
+      '/VREF2V5',
+      '/VFB_N',
+      '/VFBMAX_N',
+      '/SW_SENSE',
+      '/VPOT_REF',
+      'VDD_MON',     // vdd token, but _MON
+      'VBAT_ADC',    // vbat token, but _ADC
+      'VIN_DET',     // vin prefix, but _DET
+    ]
+    expect(suggestedNames(traps.map(n => net(n)))).toEqual([])
+  })
+
+  it('keeps every real rail from the census board (rules accept them one by one)', () => {
+    const keepers = ['/VBUS_C', '/VIN_CHG', '/VDD_CH', '/AVDD', '/INTVCC', '/PACK+', '/VOUT']
+    for (const name of keepers) {
+      expect(suggestedNames([net(name)]), name).toEqual([name])
+    }
+  })
+
+  it('ranks full-name matches (VCC/5V-style) above substring/suffix matches regardless of degree', () => {
+    const nets = [net('/PACK+', 12), net('VCC', 2)]
+    expect(suggestedNames(nets)).toEqual(['VCC', '/PACK+'])
+  })
+
+  it('ranks same-strength candidates by pad-degree descending', () => {
+    const nets = [net('/VBUS_C', 8), net('/PACK+', 23), net('/VOUT', 10)]
+    expect(suggestedNames(nets)).toEqual(['/PACK+', '/VOUT', '/VBUS_C'])
+  })
+
+  it('caps the returned list at 6 (highest-ranked survive)', () => {
+    const nets = [
+      net('/PACK+', 23),
+      net('/VOUT', 10),
+      net('/VBUS_C', 8),
+      net('/VIN_CHG', 8),
+      net('/INTVCC', 8),
+      net('/VDD_CH', 4),
+      net('/AVDD', 2),
+      net('BATT+', 1),
+    ]
+    const result = suggestSupplies(nets)
+    expect(result).toHaveLength(6)
+    expect(result.map(n => n.kicadName)).toEqual([
+      '/PACK+', '/VOUT', '/VBUS_C', '/VIN_CHG', '/INTVCC', '/VDD_CH',
+    ])
+  })
+
+  it('census board: PACK+ ranks first, traps stay out, cap holds', () => {
+    const boardNets = [
+      // real rails, with pad-degree from the census
+      net('/PACK+', 23),
+      net('/VOUT', 10),
+      net('/VBUS_C', 8),
+      net('/VIN_CHG', 8),
+      net('/INTVCC', 8),
+      net('/VDD_CH', 4),
+      net('/AVDD', 2),
+      // trap nets (sense / feedback / reference taps)
+      net('/VBUS_SNS', 6),
+      net('/SENSE_HI', 4),
+      net('/V_DIV', 3),
+      net('/VREF2V5', 5),
+      net('/VFB_N', 2),
+      net('/VFBMAX_N', 2),
+      net('/SW_SENSE', 2),
+      net('/VPOT_REF', 2),
+      net('/VC3F', 2),
+      // plain signals
+      net('/SW1', 4),
+      net('GND', 40),
+    ]
+    const result = suggestSupplies(boardNets)
+    const names = result.map(n => n.kicadName)
+
+    expect(names[0]).toBe('/PACK+')
+    expect(result.length).toBeLessThanOrEqual(6)
+    for (const trap of ['/VBUS_SNS', '/SENSE_HI', '/V_DIV', '/VREF2V5', '/VFB_N', '/VFBMAX_N', '/SW_SENSE', '/VPOT_REF', '/VC3F', 'GND', '/SW1']) {
+      expect(names, trap).not.toContain(trap)
+    }
+  })
+
+  it('regression: VCC, +3.3V and hierarchical /Power/+5V still match', () => {
+    const nets = [net('VCC'), net('+3.3V'), net('/Power/+5V'), net('OUT')]
+    const names = suggestedNames(nets)
+    expect(names).toContain('VCC')
+    expect(names).toContain('+3.3V')
+    expect(names).toContain('/Power/+5V')
+    expect(names).not.toContain('OUT')
+  })
+})
+
 // ─── collision suffix via extract() ──────────────────────────────────────────
 
 describe('collision suffix (_2) via extract()', () => {

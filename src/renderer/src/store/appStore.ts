@@ -217,6 +217,12 @@ export interface AppState {
   instruments: Instrument[]
   groundNetId: number | null
   suggestedSupplyNetIds: number[]
+  /**
+   * Id of the instrument selected in the rack (its properties panel is shown).
+   * Owned by the store (not the rack) so actions like attachSupplyToNet can
+   * reveal the supply they created/found. null = nothing selected.
+   */
+  selectedInstrumentId: string | null
 
   // ── sim state ────────────────────────────────────────────────────────────────
   simState: SimRunState
@@ -355,6 +361,15 @@ export interface AppState {
   removeInstrument(id: string): void
   /** Update an instrument; routes through alterPlan (alter-safe vs reload). */
   updateInstrument(id: string, next: Instrument): void
+  /** Select an instrument in the rack (null clears the selection). */
+  selectInstrument(id: string | null): void
+  /**
+   * Designate a net as a supply rail (Milestone 2 manual designation): if a
+   * dc-supply instrument already sits on that net, select it; otherwise attach
+   * a default supply (5 V, 0.1 Ω — same defaults as the auto supply) and
+   * select it so its properties are immediately editable.
+   */
+  attachSupplyToNet(netId: number): void
 
   /**
    * Test/synchronisation seam: resolves once the energized re-op coalescer is
@@ -574,6 +589,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     instruments: [],
     groundNetId: null,
     suggestedSupplyNetIds: [],
+    selectedInstrumentId: null,
     simState: 'idle',
     deckDirty: false,
     opVoltages: null,
@@ -610,6 +626,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         currentsByRef: new Map(),
         coachNotes: [],
         instruments: [],
+        selectedInstrumentId: null,
         stubOverrides: new Map(),
         pinMapOverrides: new Map(),
         simState: 'idle',
@@ -699,6 +716,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         groundNetId,
         suggestedSupplyNetIds,
         instruments,
+        // Reveal the auto supply's properties right away (the rack mirrors this).
+        selectedInstrumentId: topSupplyNetId !== undefined ? AUTO_SUPPLY_ID : null,
       })
 
       // Keep ring buffers in sync with the (possibly auto-attached) instruments.
@@ -880,9 +899,36 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     removeInstrument(id) {
       set(s => ({
         instruments: s.instruments.filter(i => !('id' in i) || i.id !== id),
+        // A removed instrument can't stay selected.
+        selectedInstrumentId: s.selectedInstrumentId === id ? null : s.selectedInstrumentId,
       }))
       syncRingBuffers(get().instruments)
       get().markDeckDirty()
+    },
+
+    selectInstrument(id) {
+      set({ selectedInstrumentId: id })
+    },
+
+    attachSupplyToNet(netId) {
+      // Never attach a supply to the designated ground net — that would drive
+      // SPICE node 0 (the reference) with a source.
+      if (netId === get().groundNetId) return
+      // Already powered by a supply? Just reveal it — never stack a second
+      // source on the same rail.
+      const existing = get().instruments.find(
+        i => i.kind === 'dc-supply' && i.netId === netId,
+      )
+      if (existing && 'id' in existing) {
+        get().selectInstrument(existing.id)
+        return
+      }
+      // Same defaults as the auto supply (5 V, 0.1 Ω — Spec §9). Deterministic
+      // id: attach → remove → attach reuses it, and the existing-supply guard
+      // above prevents any duplicate while it lives.
+      const id = `dc_supply_net_${netId}`
+      get().addInstrument({ kind: 'dc-supply', id, netId, volts: 5, seriesOhms: 0.1 })
+      get().selectInstrument(id)
     },
 
     updateInstrument(id, next) {

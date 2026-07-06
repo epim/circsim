@@ -150,6 +150,72 @@ describe('appStore — auto-attaches a DC supply on open (Spec §4 "60 seconds")
     expect(s.instruments.filter(i => i.kind === 'dc-supply')).toHaveLength(0)
   })
 
+  it('attaches the supply on the TOP-RANKED suggestion (PACK+-style rail beats a lower-degree rail)', () => {
+    // Battery-pack style board: /PACK+ is the main rail (3 pads), /VBUS_C is a
+    // secondary rail (1 pad), /VBUS_SNS is a sense tap that must never be
+    // suggested. With degree-aware ranking, suggestion[0] must be /PACK+ and the
+    // auto supply must land there.
+    const packBoard = `(kicad_pcb (version 20221018) (generator pcbnew)
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (44 "Edge.Cuts" user))
+  (net 1 "/VBUS_C")
+  (net 2 "/PACK+")
+  (net 3 "GND")
+  (net 4 "/VBUS_SNS")
+  (footprint "Resistor_SMD:R_0805_2012Metric" (layer "F.Cu")
+    (at 10 10)
+    (fp_text reference "R1" (at 0 -1) (layer "F.SilkS")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (fp_text value "10k" (at 0 1) (layer "F.Fab")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at -0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 2 "/PACK+"))
+    (pad "2" smd rect (at 0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 3 "GND"))
+  )
+  (footprint "Resistor_SMD:R_0805_2012Metric" (layer "F.Cu")
+    (at 14 10)
+    (fp_text reference "R2" (at 0 -1) (layer "F.SilkS")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (fp_text value "10k" (at 0 1) (layer "F.Fab")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at -0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 2 "/PACK+"))
+    (pad "2" smd rect (at 0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "/VBUS_C"))
+  )
+  (footprint "Resistor_SMD:R_0805_2012Metric" (layer "F.Cu")
+    (at 18 10)
+    (fp_text reference "R3" (at 0 -1) (layer "F.SilkS")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (fp_text value "10k" (at 0 1) (layer "F.Fab")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at -0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 2 "/PACK+"))
+    (pad "2" smd rect (at 0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 4 "/VBUS_SNS"))
+  )
+  (gr_line (start 0 0) (end 24 0) (layer "Edge.Cuts") (width 0.1))
+  (gr_line (start 24 0) (end 24 20) (layer "Edge.Cuts") (width 0.1))
+  (gr_line (start 24 20) (end 0 20) (layer "Edge.Cuts") (width 0.1))
+  (gr_line (start 0 20) (end 0 0) (layer "Edge.Cuts") (width 0.1))
+)`
+    store.getState().openBoardFromText(packBoard, 'pack-board.kicad_pcb')
+    const s = store.getState()
+
+    const pack = s.circuit!.nets.find(n => n.kicadName === '/PACK+')!
+    const vbusC = s.circuit!.nets.find(n => n.kicadName === '/VBUS_C')!
+    const vbusSns = s.circuit!.nets.find(n => n.kicadName === '/VBUS_SNS')!
+
+    // ranking: PACK+ (3 pads) first, VBUS_C (1 pad) after; the sense tap is out
+    expect(s.suggestedSupplyNetIds[0]).toBe(pack.id)
+    expect(s.suggestedSupplyNetIds).toContain(vbusC.id)
+    expect(s.suggestedSupplyNetIds).not.toContain(vbusSns.id)
+
+    // the auto supply landed on suggestion[0] (= PACK+)
+    const supplies = s.instruments.filter(i => i.kind === 'dc-supply')
+    expect(supplies).toHaveLength(1)
+    const supply = supplies[0] as Extract<typeof supplies[number], { kind: 'dc-supply' }>
+    expect(supply.id).toBe(AUTO_SUPPLY_ID)
+    expect(supply.netId).toBe(pack.id)
+    expect(supply.volts).toBe(5)
+    expect(supply.seriesOhms).toBe(0.1)
+  })
+
   it('re-opening a board replaces the auto supply (no accumulation)', () => {
     store.getState().openBoardFromText(readFixture('fixture-555.kicad_pcb'), 'fixture-555.kicad_pcb')
     expect(store.getState().instruments.filter(i => i.kind === 'dc-supply')).toHaveLength(1)

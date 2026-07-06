@@ -229,7 +229,13 @@ export default function InstrumentRack(): React.ReactElement {
   const circuit = useApp(s => s.circuit)
   const instruments = useApp(s => s.instruments)
   const resolutions = useApp(s => s.resolutions)
-  const [selectedInstId, setSelectedInstId] = useState<string | null>(null)
+  // Selection lives in the STORE (Milestone 2) so actions elsewhere — e.g.
+  // GroundSetup's click-to-attach supply chips — can reveal an instrument here.
+  const selectedInstId = useApp(s => s.selectedInstrumentId)
+  const setSelectedInstId = useCallback(
+    (id: string | null) => store.getState().selectInstrument(id),
+    [store],
+  )
   const [showNetList, setShowNetList] = useState(false)
 
   // Auto-select the supply that the store auto-attaches on open, so its
@@ -242,7 +248,7 @@ export default function InstrumentRack(): React.ReactElement {
   useEffect(() => {
     if (hasAutoSupply) setSelectedInstId(AUTO_SUPPLY_ID)
     else setSelectedInstId(null)
-  }, [hasAutoSupply])
+  }, [hasAutoSupply, setSelectedInstId])
 
   const netName = useCallback(
     (netId: number): string => circuit?.nets.find(n => n.id === netId)?.kicadName ?? String(netId),
@@ -335,8 +341,8 @@ export default function InstrumentRack(): React.ReactElement {
               isSelected={selectedInstId === id}
               onSelect={() => setSelectedInstId(selectedInstId === id ? null : id)}
               onRemove={() => {
+                // removeInstrument also clears the store selection when needed.
                 if ('id' in inst) store.getState().removeInstrument((inst as { id: string }).id)
-                if (selectedInstId === id) setSelectedInstId(null)
               }}
             />
           )

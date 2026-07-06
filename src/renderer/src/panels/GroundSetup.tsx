@@ -6,18 +6,21 @@
  * Shown after a board is loaded. Presents:
  *   - An auto-suggested ground net (from suggestGround heuristic) with a
  *     "click on the board to pick a different net" affordance.
- *   - A list of auto-suggested supply nets and any currently attached instruments
- *     for quick attachment shortcuts.
+ *   - Suggested supply nets as click-to-attach chips (Milestone 2): clicking a
+ *     chip attaches a default DC supply on that net (or selects the existing
+ *     one), and a "Choose…" picker designates ANY net as a supply — the manual
+ *     path for boards whose rail names defeat the heuristics.
  *   - A clear "ground is required before Run" message when no ground is designated.
  *
  * Ground can be confirmed by:
  *   (a) Clicking a suggested ground net in the list.
  *   (b) The parent wiring a viewport clickNet event to setGround.
  *
- * Validated by build + Phase 6 E2E (no headless GL needed here).
+ * Validated by GroundSetup.test.tsx (static render) + store-level tests for
+ * attachSupplyToNet, plus Phase 6 E2E (no headless GL needed here).
  */
 
-import React from 'react'
+import React, { useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
 
 export default function GroundSetup(): React.ReactElement | null {
@@ -25,15 +28,30 @@ export default function GroundSetup(): React.ReactElement | null {
   const circuit = useApp(s => s.circuit)
   const groundNetId = useApp(s => s.groundNetId)
   const suggestedSupplyNetIds = useApp(s => s.suggestedSupplyNetIds)
+  const instruments = useApp(s => s.instruments)
+  const [showSupplyPicker, setShowSupplyPicker] = useState(false)
 
   // Don't render until a board is loaded
   if (!circuit) return null
 
   const nets = circuit.nets
   const groundNet = groundNetId !== null ? nets.find(n => n.id === groundNetId) : undefined
-  const supplyNets = nets.filter(n => suggestedSupplyNetIds.includes(n.id))
+  // Never offer the designated ground net as a supply chip — attaching a
+  // supply there would drive SPICE node 0 (defense in depth; the extract-level
+  // heuristic and attachSupplyToNet guard this too).
+  const supplyNets = nets.filter(n => suggestedSupplyNetIds.includes(n.id) && n.id !== groundNetId)
 
-  // All nets (for the pick list — allow user to re-assign ground)
+  // Nets that already carry a DC supply — their chips render "attached".
+  const supplyAttachedNetIds = new Set(
+    instruments.filter(i => i.kind === 'dc-supply').map(i => (i as { netId: number }).netId),
+  )
+
+  const attachSupply = (netId: number): void => {
+    store.getState().attachSupplyToNet(netId)
+    setShowSupplyPicker(false)
+  }
+
+  // All nets (for the pick lists — allow user to re-assign ground / designate a supply)
   const allNets = nets.filter(n => n.id !== 0 && n.kicadName !== '')
 
   return (
@@ -95,19 +113,58 @@ export default function GroundSetup(): React.ReactElement | null {
         </div>
       )}
 
-      {/* Supply nets */}
-      {supplyNets.length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          <div style={labelStyle}>Suggested supply nets:</div>
-          <div style={chipRowStyle}>
-            {supplyNets.map(n => (
-              <span key={n.id} style={supplyChipStyle}>
+      {/* Supply nets — chips attach a default DC supply; Choose… designates any net */}
+      <div style={{ marginTop: 8 }}>
+        <div style={labelStyle}>
+          {supplyNets.length > 0 ? 'Suggested supply nets:' : 'Supply nets: none suggested'}
+        </div>
+        <div style={chipRowStyle}>
+          {supplyNets.map(n => {
+            const attached = supplyAttachedNetIds.has(n.id)
+            return (
+              <button
+                key={n.id}
+                data-testid="supply-chip"
+                data-supply-attached={attached ? 'true' : 'false'}
+                style={attached ? supplyChipAttachedStyle : supplyChipStyle}
+                onClick={() => attachSupply(n.id)}
+                title={
+                  attached
+                    ? `${n.kicadName} has a DC supply attached — click to edit it`
+                    : `Attach a 5 V DC supply to ${n.kicadName}`
+                }
+              >
+                {attached ? '✓ ' : ''}
                 {n.kicadName}
-              </span>
+              </button>
+            )
+          })}
+          <button
+            data-testid="supply-choose"
+            style={changeGroundBtnStyle}
+            onClick={() => setShowSupplyPicker(v => !v)}
+            title="Attach a DC supply to any net on the board"
+          >
+            Choose…
+          </button>
+        </div>
+        {showSupplyPicker && (
+          <div style={changeRowStyle}>
+            {allNets.map(n => (
+              <button
+                key={n.id}
+                data-testid="supply-pick"
+                style={netChipStyle}
+                onClick={() => attachSupply(n.id)}
+                title={`Attach a 5 V DC supply to ${n.kicadName}`}
+              >
+                {supplyAttachedNetIds.has(n.id) ? '✓ ' : ''}
+                {n.kicadName}
+              </button>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
@@ -213,4 +270,14 @@ const supplyChipStyle: React.CSSProperties = {
   fontFamily: 'monospace',
   fontSize: 11,
   padding: '2px 6px',
+  cursor: 'pointer',
+}
+
+// Filled variant for a chip whose net already carries a DC supply.
+const supplyChipAttachedStyle: React.CSSProperties = {
+  ...supplyChipStyle,
+  background: '#3a2410',
+  border: '1px solid #f96',
+  color: '#fc9',
+  fontWeight: 600,
 }
