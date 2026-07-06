@@ -808,7 +808,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     // ── resolution ──────────────────────────────────────────────────────────
     reResolve() {
-      const { circuit, schematicSimData, bom, library, stubOverrides, userModels } = get()
+      const { circuit, schematicSimData, bom, library, stubOverrides, pinMapOverrides, userModels } = get()
       if (!circuit) {
         set({ resolutions: [] })
         return
@@ -836,13 +836,29 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       }
 
       const effectiveLibrary = [...userModelEntries, ...library]
-      const resolutions = resolveAll(
+      const resolved = resolveAll(
         circuit,
         schematicSimData ?? undefined,
         bom ?? undefined,
         effectiveLibrary.length > 0 ? effectiveLibrary : undefined,
         stubOverrides.size > 0 ? stubOverrides : undefined,
       )
+
+      // Apply the Model Doctor's manual pin-map overrides. resolveAll doesn't take
+      // them (they correct a resolved model's terminal mapping, not which model is
+      // chosen), so we override model.pinMap post-resolution for every part the
+      // user has re-mapped — otherwise a Pin-map edit is stored but never reaches
+      // the deck (only pinmaps bundled inside a saveUserModel took effect before).
+      const resolutions =
+        pinMapOverrides.size > 0
+          ? resolved.map((r) => {
+              const override = pinMapOverrides.get(r.ref)
+              if (override && r.model && 'pinMap' in r.model) {
+                return { ...r, model: { ...r.model, pinMap: override } }
+              }
+              return r
+            })
+          : resolved
       set({ resolutions })
     },
 

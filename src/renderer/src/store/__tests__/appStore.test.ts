@@ -290,6 +290,49 @@ describe('appStore — pin-map edit re-resolves and sets deckDirty', () => {
   })
 })
 
+describe('appStore — pin-map override reaches the resolved model (M4)', () => {
+  const modelsDir = join(__dirname, '../../../../../resources/models')
+  const sampleDir = join(__dirname, '../../../../../resources/sample')
+
+  function d1PinMap(store: ReturnType<typeof createAppStore>): Record<string, string> | undefined {
+    const m = store.getState().resolutions.find(r => r.ref === 'D1')?.model
+    return m && 'pinMap' in m ? m.pinMap : undefined
+  }
+
+  function storeWithLibrary(): ReturnType<typeof createAppStore> {
+    const entries = JSON.parse(readFileSync(join(modelsDir, 'index.json'), 'utf-8')).entries
+    const store = createAppStore({ simClient: createMockSimClient(), library: entries })
+    store
+      .getState()
+      .openBoardFromText(readFileSync(join(sampleDir, 'first-light.kicad_pcb'), 'utf-8'), 'first-light.kicad_pcb')
+    return store
+  }
+
+  it('setPinMap override is threaded into the resolved model, not just stored', () => {
+    const store = storeWithLibrary()
+    const d1 = store.getState().resolutions.find(r => r.ref === 'D1')
+    expect(d1?.model?.kind).toBe('subckt') // LED → subckt-kind model with a pinMap
+    const original = d1PinMap(store)
+    expect(original).toBeDefined()
+
+    const override = { '1': '1', '2': '2' } // deliberately different from the library default
+    expect(override).not.toEqual(original)
+    store.getState().setPinMap('D1', override)
+
+    // Before the fix this stayed at the library default (override ignored by reResolve).
+    expect(d1PinMap(store)).toEqual(override)
+  })
+
+  it('clearPartOverride restores the library pinMap on the resolved model', () => {
+    const store = storeWithLibrary()
+    const original = d1PinMap(store)
+    store.getState().setPinMap('D1', { '1': '1', '2': '2' })
+    expect(d1PinMap(store)).toEqual({ '1': '1', '2': '2' })
+    store.getState().clearPartOverride('D1')
+    expect(d1PinMap(store)).toEqual(original)
+  })
+})
+
 describe('appStore — sim orchestration with mock simClient', () => {
   let store: ReturnType<typeof createAppStore>
   let mock: ReturnType<typeof createMockSimClient>
