@@ -29,6 +29,7 @@ export default function GroundSetup(): React.ReactElement | null {
   const groundNetId = useApp(s => s.groundNetId)
   const suggestedSupplyNetIds = useApp(s => s.suggestedSupplyNetIds)
   const instruments = useApp(s => s.instruments)
+  const schematicFileName = useApp(s => s.project.schematicFileName)
   const [showSupplyPicker, setShowSupplyPicker] = useState(false)
 
   // Don't render until a board is loaded
@@ -49,6 +50,20 @@ export default function GroundSetup(): React.ReactElement | null {
   const attachSupply = (netId: number): void => {
     store.getState().attachSupplyToNet(netId)
     setShowSupplyPicker(false)
+  }
+
+  // M3: manually attach a .kicad_sch to this board — the fix for routed boards
+  // whose schematic isn't a same-basename sibling of the .kicad_pcb (so open-time
+  // auto-pairing found nothing and there are no Sim.* fields). The store action
+  // reads the file and re-parses Sim.* → re-resolves.
+  const attachSchematic = async (): Promise<void> => {
+    const res = await window.circsim.openFileDialog({
+      title: 'Attach KiCad schematic',
+      filters: [{ name: 'KiCad schematic', extensions: ['kicad_sch'] }],
+      properties: ['openFile'],
+    })
+    if (res.cancelled || res.filePaths.length === 0) return
+    await store.getState().attachSchematicFromPath(res.filePaths[0])
   }
 
   // All nets (for the pick lists — allow user to re-assign ground / designate a supply)
@@ -164,6 +179,29 @@ export default function GroundSetup(): React.ReactElement | null {
             ))}
           </div>
         )}
+      </div>
+
+      {/* Schematic (M3): manually attach a .kicad_sch to restore Sim.* fields on
+          boards whose schematic isn't a same-basename sibling of the .kicad_pcb. */}
+      <div style={{ marginTop: 8 }}>
+        <div style={groundRowStyle}>
+          <span style={labelStyle}>Schematic:</span>
+          {schematicFileName ? (
+            <span style={confirmedStyle} title="Sim.* fields sourced from this schematic">
+              {schematicFileName}
+            </span>
+          ) : (
+            <span style={missingStyle}>No schematic — no Sim.* fields</span>
+          )}
+        </div>
+        <button
+          data-testid="attach-schematic-btn"
+          style={changeGroundBtnStyle}
+          onClick={() => void attachSchematic()}
+          title="Attach a .kicad_sch to load its Sim.* fields (for boards whose schematic isn't a sibling of the .kicad_pcb)"
+        >
+          {schematicFileName ? 'Replace schematic…' : 'Attach schematic…'}
+        </button>
       </div>
     </div>
   )

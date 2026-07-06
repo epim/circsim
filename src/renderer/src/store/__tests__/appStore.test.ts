@@ -15,7 +15,7 @@
  *     are sent through the injected client; opResult applies net voltages
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { createAppStore, resolutionSummary, parseAlterCommand, AUTO_SUPPLY_ID } from '../appStore'
@@ -413,6 +413,73 @@ describe('appStore — alter routing (alter-safe vs reload)', () => {
       outputOhms: 50,
     })
     expect(store.getState().deckDirty).toBe(true)
+  })
+})
+
+describe('appStore — attachSchematicFromPath (M3 manual schematic attach)', () => {
+  let store: ReturnType<typeof createAppStore>
+
+  beforeEach(() => {
+    store = createAppStore({ simClient: createMockSimClient() })
+  })
+
+  it('attaches a .kicad_sch by path → schematicSimData populated + reResolve ran (deckDirty)', async () => {
+    // A board opened WITHOUT a sibling schematic → no Sim.* data yet (the
+    // real-board gap: a routed board with a differently-named/relocated .kicad_sch).
+    store.getState().openBoardFromText(readFixture('fixture-555.kicad_pcb'), 'fixture-555.kicad_pcb')
+    expect(store.getState().schematicSimData).toBeNull()
+    expect(store.getState().deckDirty).toBe(false)
+
+    const schText = readFixture('fixture-555.kicad_sch')
+    const schPath = '/routed/revb-handtuned/../../led_lantern.kicad_sch'
+    const readFile = vi.fn(async (p: string) => {
+      if (p === schPath) return schText
+      throw new Error('ENOENT')
+    })
+
+    await store.getState().attachSchematicFromPath(schPath, readFile)
+
+    const s = store.getState()
+    // read went through the injected reader with the given path
+    expect(readFile).toHaveBeenCalledWith(schPath)
+    // Sim.* data now populated (fixture-555 schematic has 7 symbols)
+    expect(s.schematicSimData).not.toBeNull()
+    expect(s.schematicSimData!.size).toBeGreaterThan(0)
+    // reResolve + markDeckDirty ran (setSchematicFromText primitive)
+    expect(s.deckDirty).toBe(true)
+    expect(s.resolutions.length).toBeGreaterThan(0)
+    // filename recorded from the path's basename
+    expect(s.project.schematicFileName).toBe('led_lantern.kicad_sch')
+  })
+
+  it('is a no-op when no board is loaded (never reads)', async () => {
+    const readFile = vi.fn(async () => 'irrelevant')
+    await store.getState().attachSchematicFromPath('/x/foo.kicad_sch', readFile)
+    expect(readFile).not.toHaveBeenCalled()
+    expect(store.getState().schematicSimData).toBeNull()
+    expect(store.getState().deckDirty).toBe(false)
+  })
+
+  it('surfaces a non-fatal warning on read failure (never crashes / never dirties)', async () => {
+    store.getState().openBoardFromText(readFixture('fixture-555.kicad_pcb'), 'fixture-555.kicad_pcb')
+    const before = store.getState().schematicSimData
+    const readFile = vi.fn(async () => {
+      throw new Error('ENOENT: no such file missing.kicad_sch')
+    })
+
+    // must resolve (not reject) — a read failure is non-fatal
+    await expect(
+      store.getState().attachSchematicFromPath('/x/missing.kicad_sch', readFile),
+    ).resolves.toBeUndefined()
+
+    const s = store.getState()
+    // schematic data untouched, deck not dirtied
+    expect(s.schematicSimData).toBe(before)
+    expect(s.deckDirty).toBe(false)
+    // a plain-language warning was surfaced on the log stream
+    expect(
+      s.logLines.some(l => l.level === 'warn' && l.text.includes('missing.kicad_sch')),
+    ).toBe(true)
   })
 })
 

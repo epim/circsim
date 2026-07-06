@@ -104,6 +104,31 @@ describe('GroundSetup — supply chips (Milestone 2)', () => {
     expect(html).toContain('data-testid="supply-choose"')
   })
 
+  it('renders an "Attach schematic…" button when a board has no schematic (M3)', () => {
+    const html = renderPanelWithBoard(readFixture('fixture-555.kicad_pcb'), 'fixture-555.kicad_pcb')
+    expect(html).toContain('data-testid="attach-schematic-btn"')
+    // no schematic attached yet → the panel says so, and the button invites one
+    expect(html).toContain('No schematic')
+    expect(html).toContain('Attach schematic…')
+  })
+
+  it('shows the attached schematic filename + a Replace label once one is attached (M3)', () => {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    store.getState().openBoardFromText(readFixture('fixture-555.kicad_pcb'), 'fixture-555.kicad_pcb')
+    // Manually attach the schematic (the store primitive the M3 button drives).
+    store.getState().setSchematicFromText(readFixture('fixture-555.kicad_sch'), 'led_lantern.kicad_sch')
+    ;(store as unknown as { getServerState?: () => unknown }).getServerState = store.getState
+    const html = renderToStaticMarkup(
+      <AppStoreProvider store={store}>
+        <GroundSetup />
+      </AppStoreProvider>,
+    )
+    expect(html).toContain('led_lantern.kicad_sch')
+    // the button stays available to replace it
+    expect(html).toContain('data-testid="attach-schematic-btn"')
+    expect(html).toContain('Replace schematic…')
+  })
+
   it('never renders a supply chip for the designated ground net (defense in depth)', () => {
     const store = createAppStore({ simClient: createMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')

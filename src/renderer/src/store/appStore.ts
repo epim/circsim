@@ -48,6 +48,7 @@ import { runCritic } from '../../../core/critic/run'
 import type { CriticReport, Finding, OpResult } from '../../../core/critic/types'
 
 import type { SimClient } from '../ipc/simClient'
+import { splitPath, type ReadFileFn } from '../ipc/fileOpen'
 import { normalizeVectorKey, type SimCommand, type SimEvent } from '../../../simhost/protocol'
 import { createRingBuffer, feedSamples, type RingBuffer } from '../scope/ringBuffer'
 import { scopeSamplesEmitter } from '../scope/sampleEmitter'
@@ -318,6 +319,17 @@ export interface AppState {
   openBoardFromText(boardText: string, fileName: string, opts?: OpenOpts): void
   /** Attach a sibling schematic's Sim.* data (re-resolves). */
   setSchematicFromText(schText: string, fileName: string): void
+  /**
+   * Manually attach a .kicad_sch BY PATH (M3): read the file, then feed it to
+   * setSchematicFromText (re-parse Sim.* → re-resolve → deck dirty). Solves the
+   * real-board gap where the schematic isn't a same-basename sibling of the
+   * .kicad_pcb, so auto-pairing found nothing.
+   *
+   * `readFile` is injectable (tests pass a stub); it defaults to
+   * `window.circsim.readFile`. No-op when no board is loaded. A read failure is
+   * non-fatal — it surfaces a warning on the log stream instead of crashing.
+   */
+  attachSchematicFromPath(path: string, readFile?: ReadFileFn): Promise<void>
   /** Import a BOM CSV (re-resolves with BOM-merged values/mpn). */
   setBomFromText(csvText: string): void
   /** Provide the bundled library (re-resolves with tier-3 matching). */
@@ -750,6 +762,29 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       }))
       get().reResolve()
       get().markDeckDirty()
+    },
+
+    async attachSchematicFromPath(path, readFile) {
+      // Guard: attaching a schematic only makes sense against a loaded board.
+      if (!get().board) return
+      const read = readFile ?? window.circsim.readFile
+      let text: string
+      try {
+        text = await read(path)
+      } catch (err) {
+        // Non-fatal: mirror the open flow, which swallows a missing schematic —
+        // but since the user explicitly asked to attach this file, surface a
+        // plain-language warning on the log stream instead of failing silently.
+        const msg = err instanceof Error ? err.message : String(err)
+        set(s => ({
+          logLines: [
+            ...s.logLines,
+            { level: 'warn' as const, text: `Couldn't read schematic ${path}: ${msg}` },
+          ].slice(-2000),
+        }))
+        return
+      }
+      get().setSchematicFromText(text, splitPath(path).base)
     },
 
     setBomFromText(csvText) {

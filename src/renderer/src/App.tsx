@@ -24,7 +24,7 @@ import About from './panels/About'
 import { AppStoreProvider, useApp, useAppStoreApi } from './store/storeContext'
 import type { AppStore } from './store/appStore'
 import { resolutionSummary } from './store/appStore'
-import { openProjectFromPath } from './ipc/fileOpen'
+import { openProjectFromPath, classifyFile } from './ipc/fileOpen'
 import type { PickEvent } from './viewport/picking'
 import type { SceneManager } from './viewport/scene'
 import type { OverlayMode } from './viewport/overlay'
@@ -173,24 +173,43 @@ function Shell(): React.ReactElement {
     [store],
   )
 
-  // Drag-drop of a .kicad_pcb onto the window.
+  // Drag-drop onto the window: a .kicad_pcb opens a board; a .kicad_sch dropped
+  // while a board is loaded ATTACHES to it (M3 — the manual-attach drag path for
+  // schematics that aren't a same-basename sibling of the board).
   const handleDrop = useCallback(
     async (e: React.DragEvent) => {
       e.preventDefault()
-      const file = [...e.dataTransfer.files].find(f => f.name.endsWith('.kicad_pcb'))
-      if (!file) return
-      // Electron File objects expose a real path; fall back to text() otherwise.
-      const path = (file as File & { path?: string }).path
-      if (path) {
-        const opened = await openProjectFromPath(path, window.circsim.readFile)
-        store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
-          schematicText: opened.schematicText,
-          schematicFileName: opened.schematicFileName,
-          bomText: opened.bomText,
-        })
-      } else {
-        const text = await file.text()
-        store.getState().openBoardFromText(text, file.name)
+      const files = [...e.dataTransfer.files]
+
+      // A board file always takes priority (opens/replaces the project).
+      const boardFile = files.find(f => f.name.endsWith('.kicad_pcb'))
+      if (boardFile) {
+        // Electron File objects expose a real path; fall back to text() otherwise.
+        const path = (boardFile as File & { path?: string }).path
+        if (path) {
+          const opened = await openProjectFromPath(path, window.circsim.readFile)
+          store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+            schematicText: opened.schematicText,
+            schematicFileName: opened.schematicFileName,
+            bomText: opened.bomText,
+          })
+        } else {
+          const text = await boardFile.text()
+          store.getState().openBoardFromText(text, boardFile.name)
+        }
+        return
+      }
+
+      // No board file: a dropped .kicad_sch attaches to the already-loaded board.
+      const schFile = files.find(f => classifyFile(f.name) === 'schematic')
+      if (schFile && store.getState().board) {
+        const path = (schFile as File & { path?: string }).path
+        if (path) {
+          await store.getState().attachSchematicFromPath(path)
+        } else {
+          const text = await schFile.text()
+          store.getState().setSchematicFromText(text, schFile.name)
+        }
       }
     },
     [store],
