@@ -1028,6 +1028,249 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
     expect(deckText).toMatch(/d_nand\(/)
     expect(deckText).not.toContain('template text unavailable')
   })
+
+  // ── Milestone M10: vHigh derived from the actual DC bench supply ────────────
+  //
+  // A CD4000 part runs at whatever VDD actually is. When the part's VDD pad net
+  // has EXACTLY one dc-supply instrument directly attached (and its VSS pad is
+  // on the ground net), the expansion uses that supply's voltage for the
+  // dac_bridge out_high AND the adc thresholds (fractions × vHigh). Everything
+  // else keeps the family vHighDefault — byte-identical to the pre-M10 decks.
+
+  /** CD4011 fixture with full power pinMap: pad 14 → net 4 (VDD), pad 7 → net 5 (GND). */
+  function makeCd4011Resolutions(): Resolution[] {
+    return [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: {
+        kind: 'xspice-digital', templateId: 'CD4011',
+        pinMap: { '1': '1A', '2': '1B', '3': '1Y', '7': 'GND', '14': 'VCC' },
+      },
+    }]
+  }
+
+  test('M10: CD4011 with a 5 V dc-supply DIRECTLY on its VDD pad net derives vHigh=5', () => {
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD4011'
+    const deck = generateDeck({
+      circuit, resolutions: makeCd4011Resolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 5 },
+        { kind: 'dc-supply', id: '1', netId: 4, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    const deckText = deck.join('\n')
+    // BOTH the dac rail and the adc thresholds scale off the supply (5 V):
+    // 30 %/70 % of 5 V, same .toFixed(4) formatting as the default path.
+    expect(deckText).toContain('.model adcm_u1 adc_bridge(in_low=1.5000 in_high=3.5000)')
+    expect(deckText).toContain('.model dacm_u1 dac_bridge(out_low=0 out_high=5.0000)')
+    expect(deckText).not.toContain('out_high=12.0000')
+    // Provenance: the deck says where the rail came from.
+    expect(deck).toContain('* U1 vhigh: 5 (dc-supply on VDD net; family default 12)')
+  })
+
+  test('M10: CD40106 Schmitt thresholds scale too (40 %/60 % of a 5 V supply)', () => {
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD40106'
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: {
+        kind: 'xspice-digital', templateId: 'CD40106',
+        pinMap: { '1': '1A', '2': '1Y', '7': 'GND', '14': 'VCC' },
+      },
+    }]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [
+        { kind: 'ground-ref', netId: 5 },
+        { kind: 'dc-supply', id: '1', netId: 4, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    const deckText = deck.join('\n')
+    expect(deckText).toContain('adc_bridge(in_low=2.0000 in_high=3.0000)')
+    expect(deckText).toContain('dac_bridge(out_low=0 out_high=5.0000)')
+  })
+
+  test('M10: a supply attached ELSEWHERE keeps the 12 V family default (expansion byte-identical to a supply-less deck)', () => {
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD4011'
+    const deckSupplyElsewhere = generateDeck({
+      circuit, resolutions: makeCd4011Resolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 5 },
+        // Supply on net 1 (input A) — NOT the VDD net. No tracing through parts.
+        { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    const text = deckSupplyElsewhere.join('\n')
+    expect(text).toContain('.model adcm_u1 adc_bridge(in_low=3.6000 in_high=8.4000)')
+    expect(text).toContain('.model dacm_u1 dac_bridge(out_low=0 out_high=12.0000)')
+    expect(text).not.toContain('vhigh:')
+
+    // The xspice expansion block is byte-identical to a deck with no supply at
+    // all (pre-M10 behaviour): only instrument cards / island bleeds may differ.
+    const deckNoSupply = generateDeck({
+      circuit, resolutions: makeCd4011Resolutions(),
+      instruments: [{ kind: 'ground-ref', netId: 5 }],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    // The filter INCLUDES the `* <ref> vhigh:` provenance comment shape so a
+    // wrongly-emitted derivation comment breaks the byte-identity comparison
+    // itself (not just the not.toContain above).
+    const expansionOf = (deck: string[]): string[] =>
+      deck.filter(l => /^(\* xspice-digital|\* \w+ vhigh:|\.model (adcm_|dacm_|a_u1)|abr_u1|a_u1)/.test(l))
+    expect(expansionOf(deckSupplyElsewhere)).toEqual(expansionOf(deckNoSupply))
+  })
+
+  test('M10: 74HC part with a 3.3 V supply on VCC derives 3.3 V rails/thresholds', () => {
+    const circuit = makeDigitalCircuit()
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: {
+        kind: 'xspice-digital', templateId: '74HC00',
+        pinMap: { '1': '1A', '2': '1B', '3': '1Y', '7': 'GND', '14': 'VCC' },
+      },
+    }]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [
+        { kind: 'ground-ref', netId: 5 },
+        { kind: 'dc-supply', id: '1', netId: 4, volts: 3.3, seriesOhms: 0.1 },
+      ],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    const deckText = deck.join('\n')
+    expect(deckText).toContain('adc_bridge(in_low=0.9900 in_high=2.3100)')
+    expect(deckText).toContain('dac_bridge(out_low=0 out_high=3.3000)')
+    expect(deck).toContain('* U1 vhigh: 3.3 (dc-supply on VDD net; family default 5)')
+  })
+
+  test('M10: TWO supplies on the VDD net → ambiguous → family default', () => {
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD4011'
+    const deck = generateDeck({
+      circuit, resolutions: makeCd4011Resolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 5 },
+        { kind: 'dc-supply', id: '1', netId: 4, volts: 5, seriesOhms: 0.1 },
+        { kind: 'dc-supply', id: '2', netId: 4, volts: 9, seriesOhms: 0.1 },
+      ],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    const deckText = deck.join('\n')
+    expect(deckText).toContain('dac_bridge(out_low=0 out_high=12.0000)')
+    expect(deckText).toContain('adc_bridge(in_low=3.6000 in_high=8.4000)')
+  })
+
+  test('M10: VSS pad NOT on the ground net → family default (vHigh is measured supply-minus-0)', () => {
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD4011'
+    // Rewire pad 7 (GND signal) onto net 2 (node 'b') — a lifted VSS.
+    circuit.parts[0].padNet = new Map([['1', 1], ['2', 2], ['3', 3], ['7', 2], ['14', 4]])
+    const deck = generateDeck({
+      circuit, resolutions: makeCd4011Resolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 5 },
+        { kind: 'dc-supply', id: '1', netId: 4, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    const deckText = deck.join('\n')
+    expect(deckText).toContain('dac_bridge(out_low=0 out_high=12.0000)')
+  })
+
+  test('M10: a non-positive supply voltage on VDD → family default (degenerate rails rejected)', () => {
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD4011'
+    const deck = generateDeck({
+      circuit, resolutions: makeCd4011Resolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 5 },
+        { kind: 'dc-supply', id: '1', netId: 4, volts: 0, seriesOhms: 0.1 },
+      ],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    expect(deck.join('\n')).toContain('dac_bridge(out_low=0 out_high=12.0000)')
+  })
+
+  test('M10: a NEGATIVE or NaN supply voltage on VDD → family default (guard covers both)', () => {
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD4011'
+    for (const volts of [-5, Number.NaN]) {
+      const deck = generateDeck({
+        circuit, resolutions: makeCd4011Resolutions(),
+        instruments: [
+          { kind: 'ground-ref', netId: 5 },
+          { kind: 'dc-supply', id: '1', netId: 4, volts, seriesOhms: 0.1 },
+        ],
+        groundNetId: 5,
+        modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+      })
+      const text = deck.join('\n')
+      expect(text, `volts=${volts} must fall back`).toContain('dac_bridge(out_low=0 out_high=12.0000)')
+      expect(text, `volts=${volts} must not derive`).not.toContain('vhigh:')
+    }
+  })
+
+  test('M10: two supplies on DIFFERENT nets, one of them on VDD → still derives (exactly-one is per-net)', () => {
+    // The must-not-over-trigger side of rule 3: a second bench supply anywhere
+    // ELSE on the board must not defeat the derivation for the one that IS
+    // directly on the VDD net.
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD4011'
+    const deck = generateDeck({
+      circuit, resolutions: makeCd4011Resolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 5 },
+        { kind: 'dc-supply', id: '1', netId: 4, volts: 5, seriesOhms: 0.1 },
+        // Second supply on net 1 (input A) — a different net entirely.
+        { kind: 'dc-supply', id: '2', netId: 1, volts: 9, seriesOhms: 0.1 },
+      ],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    const deckText = deck.join('\n')
+    expect(deckText).toContain('.model adcm_u1 adc_bridge(in_low=1.5000 in_high=3.5000)')
+    expect(deckText).toContain('.model dacm_u1 dac_bridge(out_low=0 out_high=5.0000)')
+    expect(deck).toContain('* U1 vhigh: 5 (dc-supply on VDD net; family default 12)')
+  })
+
+  test('M10: a pin-map override splitting the VCC signal across two nets → family default (ambiguous VDD)', () => {
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD4011'
+    // Pad 8 exists on the package and is wired to net 1 (node 'a'); a pin-map
+    // override marks BOTH pad 14 (net 4) and pad 8 (net 1) as VCC.
+    circuit.parts[0].padNet = new Map([['1', 1], ['2', 2], ['3', 3], ['7', 5], ['8', 1], ['14', 4]])
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: {
+        kind: 'xspice-digital', templateId: 'CD4011',
+        pinMap: { '1': '1A', '2': '1B', '3': '1Y', '7': 'GND', '8': 'VCC', '14': 'VCC' },
+      },
+    }]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [
+        { kind: 'ground-ref', netId: 5 },
+        { kind: 'dc-supply', id: '1', netId: 4, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    const text = deck.join('\n')
+    expect(text).toContain('dac_bridge(out_low=0 out_high=12.0000)')
+    expect(text).not.toContain('vhigh:')
+  })
 })
 
 // ─── model-card device letter from an unconventional refdes ───────────────────

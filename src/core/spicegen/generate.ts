@@ -617,7 +617,8 @@ interface Logic74Template {
   gates: Logic74Gate[]
   inputs: string[]
   outputs: string[]
-  power: { vcc: string; gnd: string }
+  /** Power-pin SIGNAL names (e.g. VCC/GND); the pinMap marks which pads carry them. */
+  power?: { vcc: string; gnd: string }
   delaysNs: number
 }
 interface Logic74File {
@@ -653,6 +654,80 @@ function parseLogic74(idx: ModelTextIndex, file: string): Logic74File | null {
 }
 
 /**
+ * M10: derive a digital part's vHigh from the DC bench supply DIRECTLY attached
+ * to its VDD pad net, when unambiguously determinable. Returns undefined for
+ * every other case (caller falls back to the family vHighDefault, keeping those
+ * decks byte-identical to pre-M10 output).
+ *
+ * Determination rule (conservative, all conditions required):
+ *   1. The template names its power signals (power.vcc/power.gnd) and the
+ *      pinMap assigns the VDD signal to exactly ONE connected board net.
+ *      DIRECT net attachment only — we never trace through components
+ *      (a series switch/regulator between supply and VDD means the actual
+ *      rail voltage is not the supply voltage).
+ *   2. The VSS pad is wired to the ground net (node "0"). vHigh here is
+ *      measured supply-minus-0; a lifted or unconnected VSS means the chip's
+ *      local swing is NOT supply-to-ground, so we keep the family default.
+ *   3. EXACTLY one dc-supply instrument is attached to the VDD net. With two
+ *      or more supplies on one net the intended rail is ambiguous (and the
+ *      deck's actual net voltage depends on their series resistances), so
+ *      rather than picking one arbitrarily we keep the family default.
+ *   4. The supply voltage is a positive finite number — a 0 V or negative
+ *      rail would produce degenerate adc thresholds / dac swing.
+ *
+ * In the accepted case the derived vHigh is the supply SETPOINT (inst.volts),
+ * NOT the loaded node voltage: with a large seriesOhms the real rail sags under
+ * load while the dac_bridge still drives the full setpoint. Accepted as bench
+ * semantics (the nominal rail) — strictly better than the family constant.
+ */
+function deriveSupplyVHigh(
+  tpl: Logic74Template,
+  pinMap: Record<string, string>,
+  part: { padNet: Map<string, number> },
+  netIdToNode: Map<number, string>,
+  instruments: Instrument[],
+): number | undefined {
+  const vccSig = tpl.power?.vcc?.toUpperCase()
+  const gndSig = tpl.power?.gnd?.toUpperCase()
+  if (!vccSig || !gndSig) return undefined
+
+  // (1) The VDD pad net: every pad the pinMap assigns to the VDD signal must
+  // land on one and the same board net.
+  let vddNetId: number | undefined
+  for (const [pad, sig] of Object.entries(pinMap)) {
+    if (sig.toUpperCase() !== vccSig) continue
+    const netId = part.padNet.get(pad)
+    if (netId === undefined) continue
+    if (vddNetId !== undefined && vddNetId !== netId) return undefined
+    vddNetId = netId
+  }
+  if (vddNetId === undefined) return undefined
+
+  // (2) The VSS pad must be wired to the ground net.
+  let vssGrounded = false
+  for (const [pad, sig] of Object.entries(pinMap)) {
+    if (sig.toUpperCase() !== gndSig) continue
+    const netId = part.padNet.get(pad)
+    if (netId === undefined) continue
+    if (netIdToNode.get(netId) !== '0') return undefined
+    vssGrounded = true
+  }
+  if (!vssGrounded) return undefined
+
+  // (3) Exactly one dc-supply directly on the VDD net.
+  const supplies = instruments.filter(
+    (i): i is Extract<Instrument, { kind: 'dc-supply' }> =>
+      i.kind === 'dc-supply' && i.netId === vddNetId,
+  )
+  if (supplies.length !== 1) return undefined
+
+  // (4) Positive finite volts only.
+  const volts = supplies[0].volts
+  if (!Number.isFinite(volts) || volts <= 0) return undefined
+  return volts
+}
+
+/**
  * Expand an xspice-digital resolution into deck lines (Spec §8.8 pattern:
  * adc_bridge → ngspice digital primitive(s) → dac_bridge).
  *
@@ -661,7 +736,9 @@ function parseLogic74(idx: ModelTextIndex, file: string): Logic74File | null {
  * d_and/d_nand/d_or/d_nor/d_xor/d_xnor/d_dff — NOT d_inv/d_buf). Each chip
  * signal (1A, 1Y, …) becomes a per-instance analog node; the chip's package
  * pads are wired to those analog nodes via the pinMap so the surrounding deck
- * connects to the real board nets. adc/dac rails come from the family vHigh.
+ * connects to the real board nets. adc/dac rails come from the DC bench supply
+ * directly attached to the part's VDD pad net when unambiguously determinable
+ * (M10, see deriveSupplyVHigh), else from the family vHighDefault.
  *
  * When the template file text is not available (modelTexts omitted, e.g. the
  * existing golden tests), we fall back to the comment-only placeholder so those
@@ -673,6 +750,7 @@ function parseLogic74(idx: ModelTextIndex, file: string): Logic74File | null {
  * @param netIdToNode netId → spiceNode
  * @param idx         parsed model-text index
  * @param templateFile the logic74hc.json filename (from the library entry)
+ * @param instruments bench instruments (for the M10 VDD-supply vHigh derivation)
  */
 function expandXspiceDigital(
   ref: string,
@@ -681,6 +759,7 @@ function expandXspiceDigital(
   netIdToNode: Map<number, string>,
   idx: ModelTextIndex,
   templateFile: string | undefined,
+  instruments: Instrument[],
 ): { lines: string[]; expanded: boolean; analogNodes: string[] } {
   const logic = templateFile ? parseLogic74(idx, templateFile) : null
   const tpl = logic?.templates?.[model.templateId]
@@ -696,7 +775,11 @@ function expandXspiceDigital(
     }
   }
 
-  const vHigh = logic.family.vHighDefault
+  // M10: prefer the actual bench rail on the part's VDD pad net (direct
+  // attachment, exactly one supply, VSS grounded) over the family constant.
+  // Undetermined cases keep the family default — byte-identical decks.
+  const supplyVHigh = deriveSupplyVHigh(tpl, model.pinMap, part, netIdToNode, instruments)
+  const vHigh = supplyVHigh ?? logic.family.vHighDefault
   const refLc = ref.toLowerCase()
 
   // Map each chip SIGNAL name (e.g. "1A", "VCC") → the analog node it lives on.
@@ -718,6 +801,13 @@ function expandXspiceDigital(
 
   const lines: string[] = []
   lines.push(`* xspice-digital ${ref} (${model.templateId})`)
+  if (supplyVHigh !== undefined) {
+    // Provenance: saved decks say where a non-default rail came from.
+    lines.push(
+      `* ${ref} vhigh: ${formatSpiceValue(supplyVHigh)} (dc-supply on VDD net; ` +
+        `family default ${formatSpiceValue(logic.family.vHighDefault)})`,
+    )
+  }
 
   const adc = tpl.schmitt ? logic.family.schmittAdc : logic.family.adc
   const inLow = (adc.inLowFrac * vHigh).toFixed(4)
@@ -1144,7 +1234,9 @@ export function generateDeck(opts: GenerateOptions): string[] {
       const templateFile = haveModelTexts
         ? findDigitalTemplateFile(modelIndex, model.templateId)
         : undefined
-      const xspice = expandXspiceDigital(res.ref, model, part, netIdToNode, modelIndex, templateFile)
+      const xspice = expandXspiceDigital(
+        res.ref, model, part, netIdToNode, modelIndex, templateFile, instruments,
+      )
       lines.push(...xspice.lines)
       if (xspice.expanded) anyXspiceExpanded = true
       // Register each analog bridge terminal on its own (single-node cards):

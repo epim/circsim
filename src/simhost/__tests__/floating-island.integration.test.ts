@@ -143,7 +143,17 @@ describe.skipIf(!haveNgspice)('M8 — floating-island bleeds in real ngspice', (
 const haveLantern = haveNgspice && existsSync(LANTERN_BOARD)
 
 describe.skipIf(!haveLantern)('M8 — real lantern board (headers-only) deck conditioning', () => {
-  function buildLanternDeck(): string[] {
+  /** Parsed lantern board + resolutions + model texts, without instruments. */
+  interface LanternSetup {
+    circuit: Circuit
+    resolutions: Resolution[]
+    modelTexts: Record<string, string>
+    gndId: number
+    /** suggestSupplies' top non-ground pick (the M8 tests' historic supply). */
+    suggestedSupplyId: number
+  }
+
+  function loadLantern(): LanternSetup {
     const board = parseBoard(readFileSync(LANTERN_BOARD, 'utf8'))
     const schData = existsSync(LANTERN_SCH)
       ? parseSchematicSimData(readFileSync(LANTERN_SCH, 'utf8'))
@@ -167,19 +177,28 @@ describe.skipIf(!haveLantern)('M8 — real lantern board (headers-only) deck con
     const supply = suggestSupplies(probe.nets).find((s) => s.id !== gnd.id)
     if (!supply) throw new Error('no supply suggested for lantern board')
 
-    const instruments: Instrument[] = [
-      { kind: 'ground-ref', netId: gnd.id },
-      { kind: 'dc-supply', id: 'auto-supply', netId: supply.id, volts: 5, seriesOhms: 0.1 },
-    ]
     const resolutions = resolveAll(circuit, schData, undefined, library)
+    return { circuit, resolutions, modelTexts, gndId: gnd.id, suggestedSupplyId: supply.id }
+  }
+
+  function makeLanternDeck(setup: LanternSetup, supplyNetId: number): string[] {
+    const instruments: Instrument[] = [
+      { kind: 'ground-ref', netId: setup.gndId },
+      { kind: 'dc-supply', id: 'auto-supply', netId: supplyNetId, volts: 5, seriesOhms: 0.1 },
+    ]
     return generateDeck({
-      circuit,
-      resolutions,
+      circuit: setup.circuit,
+      resolutions: setup.resolutions,
       instruments,
-      groundNetId: gnd.id,
+      groundNetId: setup.gndId,
       title: 'led_lantern-revb-headers-only-handtuned.kicad_pcb',
-      modelTexts,
+      modelTexts: setup.modelTexts,
     })
+  }
+
+  function buildLanternDeck(): string[] {
+    const setup = loadLantern()
+    return makeLanternDeck(setup, setup.suggestedSupplyId)
   }
 
   it('the generated deck bleeds the two stranded R38/R39 islands (per net)', () => {
@@ -194,6 +213,42 @@ describe.skipIf(!haveLantern)('M8 — real lantern board (headers-only) deck con
       expect(bleedNodes, `bleed for ${node}`).toContain(node)
     }
     expect(deck).toContain('* floating-island bleed resistors (no DC path to ground)')
+  })
+
+  it('M10: the CD4000 parts keep the 12 V family default — their VDD rides /VGATED, not the bench-supplied /PACK+ net', () => {
+    // Investigated on the routed board: U7 (CD40106) and U8 (CD4011) both have
+    // pad 14 (VDD) on /VGATED — the switched logic rail behind the high-side
+    // gate — while the bench dc-supply belongs on the pack rail. The M10 rule
+    // is DIRECT net attachment only (no tracing through the pass switch), so
+    // neither part derives a supply vHigh and both stay at the documented 12 V
+    // family constant.
+    //
+    // The supply net is pinned BY NAME (/PACK+), never via the suggestSupplies
+    // ranking: a future ranking reorder must not silently move the bench supply
+    // onto a different rail and turn into a phantom M10 regression here.
+    const setup = loadLantern()
+    const pack = setup.circuit.nets.find((n) => n.kicadName === '/PACK+')
+    expect(pack, 'lantern board must carry a /PACK+ net (deterministic bench-supply target)').toBeDefined()
+    const vgated = setup.circuit.nets.find((n) => n.kicadName === '/VGATED')
+    expect(vgated, 'lantern board must carry /VGATED (the CD4000 VDD rail)').toBeDefined()
+
+    // Preconditions that make the 12 V assertion meaningful: both CD4000 parts
+    // really do have their VDD pad (14) on /VGATED, and the chosen supply net
+    // is NOT that rail.
+    const u7 = setup.circuit.parts.find((p) => p.ref === 'U7')
+    const u8 = setup.circuit.parts.find((p) => p.ref === 'U8')
+    expect(u7, 'U7 (CD40106) must exist on the lantern board').toBeDefined()
+    expect(u8, 'U8 (CD4011) must exist on the lantern board').toBeDefined()
+    expect(u7!.padNet.get('14'), 'U7 VDD pad net').toBe(vgated!.id)
+    expect(u8!.padNet.get('14'), 'U8 VDD pad net').toBe(vgated!.id)
+    expect(pack!.id, 'supply net must differ from the CD4000 VDD rail').not.toBe(vgated!.id)
+
+    const deck = makeLanternDeck(setup, pack!.id)
+    const text = deck.join('\n')
+    expect(text).toContain('.model dacm_u7 dac_bridge(out_low=0 out_high=12.0000)')
+    expect(text).toContain('.model dacm_u8 dac_bridge(out_low=0 out_high=12.0000)')
+    // No part on this board qualifies for supply-derived vHigh.
+    expect(text).not.toContain('vhigh:')
   })
 
   it('the full-board fresh tran-uic (the app flow that used to abort) produces data rows', async () => {

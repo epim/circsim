@@ -25,6 +25,10 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import type { Resolution } from '../../core/models/types'
+import type { Circuit, CircuitNet, Part } from '../../core/netlist/extract'
+import { generateDeck } from '../../core/spicegen/generate'
+import type { Instrument } from '../../core/spicegen/instruments'
 import { SimHost } from '../index'
 import { ngspiceResourcesAvailable } from '../ngspiceFfi'
 import { normalizeVectorKey, type SimEvent } from '../protocol'
@@ -813,4 +817,99 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     expect(Number.isFinite(r.v['out'])).toBe(true)
     expect(Number.isFinite(r.v['in'])).toBe(true)
   }, 60_000)
+})
+
+// ─── Milestone M10: supply-derived digital vHigh in real ngspice ──────────────
+
+describe.skipIf(!haveNgspice)('M10 — supply-derived digital vHigh (CD40106 RC astable at VDD=5 V)', () => {
+  /**
+   * A CD40106 RC astable (1Y→R→1A, C on 1A) built through generateDeck with a
+   * 5 V dc-supply DIRECTLY on the chip's VDD pad net. Pre-M10 the CD4000 family
+   * constant drove the dac_bridge at a fixed 12 V regardless of the board rail;
+   * with the supply-derived vHigh the output must swing ~0..5 V.
+   */
+  function buildAstableDeck(): string[] {
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'VDD', spiceNode: 'vdd', padRefs: [] },
+      { id: 2, kicadName: 'OSC', spiceNode: 'osc', padRefs: [] },
+      { id: 3, kicadName: 'OUT', spiceNode: 'out', padRefs: [] },
+      { id: 4, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const parts: Part[] = [
+      {
+        ref: 'U1', value: 'CD40106', libId: 'Logic:CD40106', layer: 'F',
+        padNet: new Map([['1', 2], ['2', 3], ['7', 4], ['14', 1]]),
+        properties: {},
+      },
+      { ref: 'R1', value: '10k', libId: 'R', layer: 'F', padNet: new Map([['1', 3], ['2', 2]]), properties: {} },
+      { ref: 'C1', value: '10n', libId: 'C', layer: 'F', padNet: new Map([['1', 2], ['2', 4]]), properties: {} },
+    ]
+    const circuit: Circuit = { nets, parts, warnings: [] }
+    const resolutions: Resolution[] = [
+      {
+        ref: 'U1', status: 'ok', tier: 3, warnings: [],
+        model: {
+          kind: 'xspice-digital', templateId: 'CD40106',
+          pinMap: { '1': '1A', '2': '1Y', '7': 'GND', '14': 'VCC' },
+        },
+      },
+      { ref: 'R1', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'r_r1 out osc 10000' } },
+      { ref: 'C1', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'c_c1 osc 0 1e-08' } },
+    ]
+    const instruments: Instrument[] = [
+      { kind: 'ground-ref', netId: 4 },
+      { kind: 'dc-supply', id: 'bench', netId: 1, volts: 5, seriesOhms: 0.1 },
+    ]
+    return generateDeck({
+      circuit, resolutions, instruments,
+      groundNetId: 4,
+      title: 'm10-cd40106-astable-5v',
+      modelTexts: { 'logic4000.json': readFileSync(join(MODELS, 'logic4000.json'), 'utf8') },
+    })
+  }
+
+  it('the generated deck carries 5 V-derived rails (dac out_high AND Schmitt adc thresholds)', () => {
+    const deck = buildAstableDeck()
+    const text = deck.join('\n')
+    // Supply-derived: 5 V rail, 40 %/60 % Schmitt band of 5 V — not the 12 V family default.
+    expect(text).toContain('dac_bridge(out_low=0 out_high=5.0000)')
+    expect(text).toContain('adc_bridge(in_low=2.0000 in_high=3.0000)')
+    expect(text).not.toContain('out_high=12.0000')
+    expect(text).toContain('* U1 vhigh: 5 (dc-supply on VDD net; family default 12)')
+  })
+
+  it('the astable output rides the 5 V rail in a real transient (peak < 6 V and > 4 V), not the 12 V family constant', async () => {
+    // MEASURED BEHAVIOR (real ngspice-46): the output drives full-high 5 V while
+    // the cap is below in_low, then — because the adc_bridge emits UNKNOWN
+    // inside the 2.0–3.0 V band rather than holding state (the documented
+    // family limitation, see logic4000.json $provenance) — the dac settles at
+    // MID-RAIL and the cap converges there, so the astable does not sustain
+    // oscillation in-sim. Both measured levels are still decisive for M10:
+    //   peak    = 5.0 V (dac out_high from the bench supply; pre-M10: 12 V)
+    //   trough  = 2.5 V (dac mid-rail UNKNOWN of a 5 V swing; pre-M10: 6 V)
+    const deck = buildAstableDeck()
+    const r = await runTran(deck, '1u', '1m')
+    const out = r.series['out'] ?? []
+    expect(r.errs).toEqual([])
+    expect(out.length).toBeGreaterThan(0)
+    const peak = Math.max(...out)
+    const trough = Math.min(...out)
+    // Rising edges through mid-band (2.5 V): oscillation evidence, logged for
+    // diagnosis (measured 0 — see the in-band UNKNOWN note above).
+    let edges = 0
+    for (let i = 1; i < out.length; i++) if (out[i - 1] < 2.5 && out[i] >= 2.5) edges++
+    // eslint-disable-next-line no-console
+    console.log(
+      `\n[M10 CD40106 astable @5V] peak=${peak.toFixed(3)}V trough=${trough.toFixed(3)}V ` +
+        `risingEdges=${edges} rows=${r.t.length} errs=[${r.errs.join('|')}]\n`
+    )
+    // THE milestone assertion: the output rides the real 5 V bench rail, not
+    // the 12 V family constant (pre-M10 this peak measured 12 V).
+    expect(peak).toBeLessThan(6)
+    expect(peak).toBeGreaterThan(4)
+    // The stalled level is the mid-rail of the DERIVED 5 V swing (2.5 V), not
+    // of the 12 V default (6 V) — the second half of the levels fix.
+    expect(trough).toBeGreaterThan(2)
+    expect(trough).toBeLessThan(3)
+  }, 90_000)
 })
