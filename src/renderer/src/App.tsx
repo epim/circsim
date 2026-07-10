@@ -18,6 +18,7 @@ import Toolbar from './panels/Toolbar'
 import WarningsBar from './panels/WarningsBar'
 import CoachNotes from './panels/CoachNotes'
 import SimLog from './panels/SimLog'
+import NetVoltages from './panels/NetVoltages'
 import Scope from './panels/Scope'
 import CriticPanel from './panels/CriticPanel'
 import About from './panels/About'
@@ -55,6 +56,9 @@ function Shell(): React.ReactElement {
 
   // About dialog (licensing surfacing — Task 27, Spec §14).
   const [aboutOpen, setAboutOpen] = useState(false)
+
+  // Bottom-dock right pane: Sim log ↔ Net voltages readout (M7 F8).
+  const [bottomTab, setBottomTab] = useState<'log' | 'nets'>('log')
 
   // When an op result first arrives, snap the overlay to voltage (Spec §4 step 4).
   // Intentionally keyed only on opVoltages so manual overlay changes stick after.
@@ -139,7 +143,9 @@ function Shell(): React.ReactElement {
     (event: PickEvent) => {
       const st = store.getState()
       if (event.type === 'clickComponent') {
-        st.selectComponent(event.ref)
+        // Select AND explicitly reveal the part's Model Doctor card (nonce-based
+        // — re-clicking the selected part still re-reveals; M7 review fix).
+        st.revealInDoctor(event.ref)
       } else if (event.type === 'clickNet') {
         // Task 22: clicking a net on the board while GroundSetup is shown also
         // confirms the ground (GroundSetup handles this via its own UI; here we
@@ -174,12 +180,14 @@ function Shell(): React.ReactElement {
           st.addInstrument({ kind: 'logic-input', id, netId, level: 0, vHigh: 3.3 })
           break
         case 'voltage-probe':
-          st.addInstrument({ kind: 'voltage-probe', id, netId, color: '#6f6' })
+          // Shared attach path: per-net dedupe + the ONE color allocator, so a
+          // dragged probe never collides with a click-attached one (M7 review).
+          st.attachProbeToNet(netId)
           break
         case 'current-probe':
-          // Current probes need a component ref — can't resolve from a net drop alone.
-          // Add as a voltage-probe fallback; the rack panel lets the user switch.
-          st.addInstrument({ kind: 'voltage-probe', id, netId, color: '#f6f' })
+          // Current probes need a component ref — can't resolve from a net drop
+          // alone. Fall back to a voltage probe via the same shared path.
+          st.attachProbeToNet(netId)
           break
         default:
           break
@@ -244,7 +252,7 @@ function Shell(): React.ReactElement {
       <header style={headerStyle}>
         <strong>circsim</strong>
         <span style={{ fontSize: 12, color: '#888' }}>v{__APP_VERSION__}</span>
-        <button style={toolbarBtn} onClick={handleOpen}>
+        <button style={toolbarBtn} onClick={handleOpen} data-testid="open-board-header-btn">
           Open…
         </button>
         {board && (
@@ -328,8 +336,28 @@ function Shell(): React.ReactElement {
               <div style={{ flex: 2, minWidth: 0, borderRight: '1px solid #2a2a3a' }}>
                 <Scope />
               </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <SimLog />
+              <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                {/* Sim log ↔ Net voltages tab (M7 F8): the per-net readout for
+                    the latest op lives next to the log in the results dock. */}
+                <div style={bottomTabRowStyle}>
+                  <button
+                    style={bottomTab === 'log' ? bottomTabActive : bottomTabBtn}
+                    onClick={() => setBottomTab('log')}
+                    data-testid="bottom-tab-log"
+                  >
+                    Sim log
+                  </button>
+                  <button
+                    style={bottomTab === 'nets' ? bottomTabActive : bottomTabBtn}
+                    onClick={() => setBottomTab('nets')}
+                    data-testid="bottom-tab-nets"
+                  >
+                    Net voltages
+                  </button>
+                </div>
+                <div style={{ flex: 1, minHeight: 0 }}>
+                  {bottomTab === 'log' ? <SimLog /> : <NetVoltages />}
+                </div>
               </div>
             </div>
           )}
@@ -361,7 +389,11 @@ function EmptyState({
         Open a <code>.kicad_pcb</code> file, or drag one onto the window.
       </div>
       <div style={{ display: 'flex', gap: 10 }}>
-        <button style={{ ...toolbarBtn, padding: '8px 16px' }} onClick={onOpen}>
+        <button
+          style={{ ...toolbarBtn, padding: '8px 16px' }}
+          onClick={onOpen}
+          data-testid="open-board-btn"
+        >
           Open…
         </button>
         <button
@@ -444,6 +476,28 @@ const bottomDockStyle: React.CSSProperties = {
   display: 'flex',
   borderTop: '1px solid #2a2a3a',
   minHeight: 0,
+}
+// Sim log ↔ Net voltages tab strip (M7 F8).
+const bottomTabRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 2,
+  padding: '2px 6px',
+  background: '#0d1117',
+  borderBottom: '1px solid #21262d',
+}
+const bottomTabBtn: React.CSSProperties = {
+  background: '#1e1e2c',
+  border: '1px solid #33334a',
+  color: '#99a',
+  fontSize: 10,
+  padding: '2px 8px',
+  cursor: 'pointer',
+}
+const bottomTabActive: React.CSSProperties = {
+  ...bottomTabBtn,
+  background: '#34406a',
+  borderColor: '#4a5a8a',
+  color: '#dde',
 }
 const leftDockStyle: React.CSSProperties = {
   width: 260,

@@ -199,6 +199,9 @@ interface InstrumentPropsProps {
 export default function InstrumentProps({ instrument }: InstrumentPropsProps): React.ReactElement {
   const store = useAppStoreApi()
   const circuit = useApp(s => s.circuit)
+  // Announce a supply circsim attached itself (open / energize) until the user
+  // edits or removes it (M7 F7) — never shown for user-attached supplies.
+  const autoAttachedSupplyId = useApp(s => s.autoAttachedSupplyId)
 
   const update = useCallback(
     (next: Instrument) => store.getState().updateInstrument(instrument.id, next),
@@ -214,6 +217,11 @@ export default function InstrumentProps({ instrument }: InstrumentPropsProps): R
     return (
       <div style={propsStyle}>
         <div style={propsHeaderStyle}>DC Supply — {netName(inst.netId)}</div>
+        {inst.id === autoAttachedSupplyId && (
+          <div style={autoNoteStyle} data-testid="auto-supply-note">
+            Auto-attached — adjust the voltage or choose another net.
+          </div>
+        )}
         <NumericField
           label="Voltage"
           value={inst.volts}
@@ -529,6 +537,14 @@ const propsHeaderStyle: React.CSSProperties = {
   marginBottom: 6,
   fontSize: 12,
   color: '#ddd',
+}
+
+// One-line announcement on a supply circsim attached itself (M7 F7).
+const autoNoteStyle: React.CSSProperties = {
+  marginBottom: 6,
+  fontSize: 11,
+  fontStyle: 'italic',
+  color: '#fc9',
 }
 
 const knobRowStyle: React.CSSProperties = {

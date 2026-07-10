@@ -92,13 +92,16 @@ function DoctorRow({
 
   const isStubbed = res.status === 'stubbed'
 
-  // Selection sync (F4): when this part becomes the store selection (part row /
-  // board click), scroll its card into view and highlight it.
+  // Selection sync (F4): the highlight keys on selectedRef; the SCROLL keys on
+  // the explicit revealDoctorRequest (ref + nonce), so re-requesting the
+  // already-selected ref still reveals — twice in a row (a selection-transition
+  // effect would no-op here; M7 review fix). revealInDoctor is the producer.
   const isSelected = selectedRef === res.ref
+  const revealRequest = useApp(s => s.revealDoctorRequest)
   const cardRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
-    if (isSelected) _revealDoctorCard(cardRef.current)
-  }, [isSelected])
+    if (revealRequest?.ref === res.ref) _revealDoctorCard(cardRef.current)
+  }, [revealRequest, res.ref])
 
   // Build padList from part.padNet + schematic pin names for LlmAssist/LibImport.
   const padList: PadInfo[] = useMemo(() => {

@@ -129,6 +129,46 @@ describe('GroundSetup — supply chips (Milestone 2)', () => {
     expect(html).toContain('Replace schematic…')
   })
 
+  it('renders supply chips in ranked order — the auto-attached best candidate FIRST (M7 F7)', () => {
+    // Net order in the file puts /VBUS_C (partial-name evidence, strength 1)
+    // BEFORE VCC (full-name evidence, strength 2). The ranking must win over
+    // net order: VCC is what the auto-attach picked, so its chip renders first.
+    const rankedBoard = `(kicad_pcb (version 20221018) (generator pcbnew)
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (44 "Edge.Cuts" user))
+  (net 1 "/VBUS_C")
+  (net 2 "VCC")
+  (net 3 "GND")
+  (footprint "Resistor_SMD:R_0805_2012Metric" (layer "F.Cu")
+    (at 10 10)
+    (fp_text reference "R1" (at 0 -1) (layer "F.SilkS")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (fp_text value "10k" (at 0 1) (layer "F.Fab")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at -0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 2 "VCC"))
+    (pad "2" smd rect (at 0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 3 "GND"))
+  )
+  (footprint "Resistor_SMD:R_0805_2012Metric" (layer "F.Cu")
+    (at 14 10)
+    (fp_text reference "R2" (at 0 -1) (layer "F.SilkS")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (fp_text value "10k" (at 0 1) (layer "F.Fab")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at -0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "/VBUS_C"))
+    (pad "2" smd rect (at 0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 3 "GND"))
+  )
+)`
+    const html = renderPanelWithBoard(rankedBoard, 'ranked.kicad_pcb')
+    const chips = [...html.matchAll(/<button[^>]*data-testid="supply-chip"[^>]*>([^<]*)<\/button>/g)]
+    const labels = chips.map(m => m[1])
+    expect(labels).toHaveLength(2)
+    expect(labels[0]).toContain('VCC')
+    expect(labels[1]).toContain('/VBUS_C')
+    // The FIRST chip is the auto-attached one (✓) — no more "best pick buried 3rd".
+    const firstChipTag = html.match(/<button[^>]*data-testid="supply-chip"[^>]*>/)![0]
+    expect(firstChipTag).toContain('data-supply-attached="true"')
+  })
+
   it('never renders a supply chip for the designated ground net (defense in depth)', () => {
     const store = createAppStore({ simClient: createMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')

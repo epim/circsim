@@ -40,7 +40,16 @@ export default function GroundSetup(): React.ReactElement | null {
   // Never offer the designated ground net as a supply chip — attaching a
   // supply there would drive SPICE node 0 (defense in depth; the extract-level
   // heuristic and attachSupplyToNet guard this too).
-  const supplyNets = nets.filter(n => suggestedSupplyNetIds.includes(n.id) && n.id !== groundNetId)
+  //
+  // Chips render in suggestedSupplyNetIds ORDER — the suggestSupplies ranking
+  // the open-time auto-attach picks from — so the best candidate (the one the
+  // auto supply landed on) is always FIRST, never buried mid-list (M7 F7).
+  const supplyNets = suggestedSupplyNetIds
+    .filter(id => id !== groundNetId)
+    .flatMap(id => {
+      const net = nets.find(n => n.id === id)
+      return net ? [net] : []
+    })
 
   // Nets that already carry a DC supply — their chips render "attached".
   const supplyAttachedNetIds = new Set(

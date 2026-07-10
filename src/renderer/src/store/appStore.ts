@@ -142,11 +142,53 @@ export function opCaveatMessage(method: Exclude<OpSolveMethod, 'direct'>): strin
 }
 
 /**
+ * Collapse the fidelity-banner ref list into a one-line count when it would be
+ * a wall of refs (M7 F9): more than 3 problem parts → "N parts unresolved"
+ * (naming stubs honestly when they're in the mix); 3 or fewer → null, meaning
+ * the banner should keep listing the individual refs (that's useful).
+ */
+export function collapsedFidelitySummary(items: FidelityBannerItem[]): string | null {
+  if (items.length <= 3) return null
+  const unresolved = items.filter(i => i.mode === 'unresolved').length
+  const stubbed = items.length - unresolved
+  const what =
+    unresolved === 0 ? 'stubbed' : stubbed === 0 ? 'unresolved' : 'unresolved or stubbed'
+  return `${items.length} parts ${what}`
+}
+
+/**
  * Stable id of the DC supply auto-attached on open (Spec §4 "see it work in 60
  * seconds"). Stable so the InstrumentRack can auto-select it (revealing its
  * voltage input) and so tests can assert on it.
  */
 export const AUTO_SUPPLY_ID = 'auto-supply'
+
+/**
+ * Trace color rotation for voltage probes — shared by the rack's drag-drop
+ * path and the store's click-to-probe path (attachProbeToNet) so probes get
+ * the same palette no matter how they were attached.
+ */
+export const PROBE_COLORS = ['#6f6', '#f96', '#9cf', '#fc6', '#f6f', '#6ff', '#ff6']
+
+/**
+ * Allocate the next probe trace color: the FIRST PROBE_COLORS entry not held
+ * by any existing probe (so removing a probe frees its color for the next
+ * attach), wrapping to simple rotation only when the whole palette is taken.
+ * THE single allocator — every probe-attach path (board drag-drop, rack
+ * net-list drop, click-to-probe) gets its color here, so two traces can never
+ * collide while palette slots remain (M7 review fix).
+ */
+export function nextProbeColor(instruments: Instrument[]): string {
+  const used = new Set<string>()
+  let colored = 0
+  for (const inst of instruments) {
+    if ('color' in inst) {
+      used.add(inst.color)
+      colored++
+    }
+  }
+  return PROBE_COLORS.find(c => !used.has(c)) ?? PROBE_COLORS[colored % PROBE_COLORS.length]
+}
 
 // ─── transient analysis defaults (Spec §7.5) ─────────────────────────────────────
 
@@ -250,12 +292,27 @@ export interface AppState {
    * reveal the supply they created/found. null = nothing selected.
    */
   selectedInstrumentId: string | null
+  /**
+   * Id of a supply CIRCSIM attached (open-time auto-attach / energize) that the
+   * user hasn't touched yet — its props card announces the auto-attach (M7 F7).
+   * Cleared when the user edits or removes that supply (at that point they
+   * clearly know it exists); never set for user-attached supplies.
+   */
+  autoAttachedSupplyId: string | null
 
   // ── sim state ────────────────────────────────────────────────────────────────
   simState: SimRunState
   deckDirty: boolean
   /** Latest op-point node voltages, keyed by netId (for board annotations/tint). */
   opVoltages: Map<number, number> | null
+  /**
+   * True while the displayed opVoltages are from a PREVIOUS run: a new op solve
+   * has started and retained the old numbers for continuity. Readout surfaces
+   * (NetVoltages) dim + caption them; cleared the moment a fresh opResult
+   * lands. Stays true if the new solve never lands — old data must never read
+   * as current (M7 review fix).
+   */
+  opVoltagesStale: boolean
   /** Min/max voltage across the latest op result (for the voltage legend). */
   voltageRange: { min: number; max: number } | null
   /**
@@ -289,6 +346,12 @@ export interface AppState {
   // ── selection sync (PartsPanel ↔ viewport) ───────────────────────────────────
   selectedRef: string | null
   selectedNetId: number | null
+  /**
+   * Explicit "reveal this part's Model Doctor card" request. The nonce bumps on
+   * EVERY revealInDoctor call, so re-requesting the already-selected ref still
+   * scrolls/highlights (a selection-transition effect would no-op — M7 review).
+   */
+  revealDoctorRequest: { ref: string; nonce: number } | null
 
   // ── Board Critic (read-only pre-fab audit — Spec §7) ──────────────────────────
   /**
@@ -395,6 +458,13 @@ export interface AppState {
   // selection
   selectComponent(ref: string | null): void
   selectNet(netId: number | null): void
+  /**
+   * Select a part AND explicitly ask the Model Doctor to reveal its card
+   * (scroll + highlight). Nonce-based, so calling it again for the same ref
+   * re-reveals — used by the parts list, board picks, and the fidelity
+   * banner's "open Model Doctor" link (M7 review fix).
+   */
+  revealInDoctor(ref: string): void
 
   // ── Board Critic (Spec §7) ───────────────────────────────────────────────────
   /**
@@ -425,6 +495,14 @@ export interface AppState {
    * select it so its properties are immediately editable.
    */
   attachSupplyToNet(netId: number): void
+
+  /**
+   * Attach a V-Probe to a net without dragging (M7 F6 click-to-probe): if a
+   * voltage-probe already sits on that net, select it; otherwise attach one
+   * (rotating trace color — same palette as the rack's drag path) and select
+   * it. Routes through addInstrument, the same action the drag-drop path uses.
+   */
+  attachProbeToNet(netId: number): void
 
   /**
    * Test/synchronisation seam: resolves once the energized re-op coalescer is
@@ -645,9 +723,11 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     groundNetId: null,
     suggestedSupplyNetIds: [],
     selectedInstrumentId: null,
+    autoAttachedSupplyId: null,
     simState: 'idle',
     deckDirty: false,
     opVoltages: null,
+    opVoltagesStale: false,
     voltageRange: null,
     currentsByRef: new Map(),
     coachNotes: [],
@@ -660,6 +740,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     viewerOnly: false,
     selectedRef: null,
     selectedNetId: null,
+    revealDoctorRequest: null,
     criticReport: null,
     selectedFindingId: null,
     userModels: new Map(),
@@ -678,17 +759,20 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         parseError: null,
         viewerOnly: false,
         opVoltages: null,
+        opVoltagesStale: false,
         voltageRange: null,
         currentsByRef: new Map(),
         coachNotes: [],
         instruments: [],
         selectedInstrumentId: null,
+        autoAttachedSupplyId: null,
         stubOverrides: new Map(),
         pinMapOverrides: new Map(),
         simState: 'idle',
         deckDirty: false,
         selectedRef: null,
         selectedNetId: null,
+        revealDoctorRequest: null,
         criticReport: null,
         selectedFindingId: null,
         logLines: [],
@@ -775,6 +859,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         instruments,
         // Reveal the auto supply's properties right away (the rack mirrors this).
         selectedInstrumentId: topSupplyNetId !== undefined ? AUTO_SUPPLY_ID : null,
+        // Announce the silent auto-attach on the supply's card (M7 F7).
+        autoAttachedSupplyId: topSupplyNetId !== undefined ? AUTO_SUPPLY_ID : null,
       })
 
       // Keep ring buffers in sync with the (possibly auto-attached) instruments.
@@ -941,6 +1027,12 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     selectNet(netId) {
       set({ selectedNetId: netId })
     },
+    revealInDoctor(ref) {
+      set(s => ({
+        selectedRef: ref,
+        revealDoctorRequest: { ref, nonce: (s.revealDoctorRequest?.nonce ?? 0) + 1 },
+      }))
+    },
 
     // ── Board Critic (Spec §7) ─────────────────────────────────────────────────
     runCriticAudit() {
@@ -997,6 +1089,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         instruments: s.instruments.filter(i => !('id' in i) || i.id !== id),
         // A removed instrument can't stay selected.
         selectedInstrumentId: s.selectedInstrumentId === id ? null : s.selectedInstrumentId,
+        // A removed auto supply needs no announcement any more (M7 F7).
+        autoAttachedSupplyId: s.autoAttachedSupplyId === id ? null : s.autoAttachedSupplyId,
       }))
       syncRingBuffers(get().instruments)
       get().markDeckDirty()
@@ -1027,11 +1121,39 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       get().selectInstrument(id)
     },
 
+    attachProbeToNet(netId) {
+      // A probe already watching this net? Just reveal it — click-to-probe
+      // should never stack duplicate probes on one net.
+      const existing = get().instruments.find(
+        i => i.kind === 'voltage-probe' && i.netId === netId,
+      )
+      if (existing && 'id' in existing) {
+        get().selectInstrument(existing.id)
+        return
+      }
+      // Deterministic id (attach → remove → attach reuses it; the guard above
+      // prevents duplicates while it lives) + the shared color allocator (first
+      // free palette slot — no collision with probes attached via drag-drop).
+      // Attachment goes through addInstrument — the same action all paths use.
+      const id = `voltage_probe_net_${netId}`
+      get().addInstrument({
+        kind: 'voltage-probe',
+        id,
+        netId,
+        color: nextProbeColor(get().instruments),
+      })
+      get().selectInstrument(id)
+    },
+
     updateInstrument(id, next) {
       const { instruments, resolutions, simState, opVoltages } = get()
       const prev = instruments.find(i => 'id' in i && i.id === id)
       const updated = instruments.map(i => ('id' in i && i.id === id ? next : i))
       set({ instruments: updated })
+
+      // The user touched the auto-attached supply → they clearly know it
+      // exists; retire its announcement note (M7 F7).
+      if (id === get().autoAttachedSupplyId) set({ autoAttachedSupplyId: null })
 
       // "Energized" = an op result is currently shown and we're NOT mid-transient
       // (a transient run is 'running'/'paused'). After energize()/powerOn the
@@ -1107,7 +1229,15 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         modelTexts: buildDeckModelTexts(get()),
       })
 
-      set({ simState: 'op', convergenceCard: null, opCaveat: null })
+      // Retained voltages from a previous run are STALE until the new solve
+      // lands — readouts dim/caption them instead of presenting them as truth
+      // (M7 review fix). Nothing retained on the first solve → stays false.
+      set({
+        simState: 'op',
+        convergenceCard: null,
+        opCaveat: null,
+        opVoltagesStale: get().opVoltages !== null,
+      })
       simClient.send({ type: 'loadCircuit', deckLines })
       simClient.send({ type: 'runOp' })
 
@@ -1137,7 +1267,15 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         ),
       )
 
-      set({ opVoltages, voltageRange, currentsByRef, coachNotes, deckDirty: false, simState: 'idle' })
+      set({
+        opVoltages,
+        opVoltagesStale: false, // fresh result — no longer showing old numbers
+        voltageRange,
+        currentsByRef,
+        coachNotes,
+        deckDirty: false,
+        simState: 'idle',
+      })
 
       // Push onto the 3D board: floating voltage labels + copper voltage tint.
       applyOpToBoard(boardHooks, opVoltages, voltageRange)
@@ -1177,6 +1315,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
             volts: 5,
             seriesOhms: 0.1, // Spec §9 default
           })
+          // Announce this auto-attach on the supply's card too (M7 F7).
+          set({ autoAttachedSupplyId: AUTO_SUPPLY_ID })
         }
       }
 
@@ -1412,7 +1552,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
             event.method && event.method !== 'direct'
               ? { method: event.method, at: Date.now() }
               : null
-          set({ opVoltages, voltageRange, currentsByRef, coachNotes, opCaveat })
+          // A fresh result also retires any staleness flag (M7 review fix).
+          set({ opVoltages, opVoltagesStale: false, voltageRange, currentsByRef, coachNotes, opCaveat })
           // Keep the board in sync after a replayed/standalone op too.
           applyOpToBoard(boardHooks, opVoltages, voltageRange)
           // Re-audit with the fresh op result (ampacity/thermal get real data).

@@ -21,6 +21,7 @@ import { join } from 'path'
 import {
   createAppStore,
   fidelityBannerItems,
+  collapsedFidelitySummary,
   opCaveatMessage,
   type AppStore,
 } from '../appStore'
@@ -313,6 +314,72 @@ describe('F1 — opResult.method drives the op fallback caveat', () => {
   })
 })
 
+// ─── 4c. M7 review fix — retained op voltages are flagged stale during a re-solve ──
+
+describe('M7 review fix — opVoltagesStale (retained voltages are not truth)', () => {
+  let store: AppStore
+  let mock: MockSimClient
+
+  beforeEach(() => {
+    mock = createMockSimClient()
+    store = createAppStore({ simClient: mock })
+    // fixture-rc auto-attaches a supply on VIN, so powerOn is live immediately.
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+  })
+
+  it('starts false, and the FIRST powerOn (nothing retained) never sets it', async () => {
+    expect(store.getState().opVoltagesStale).toBe(false)
+    const p = store.getState().powerOn()
+    expect(store.getState().opVoltagesStale).toBe(false) // no previous voltages to go stale
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+    await p
+    expect(store.getState().opVoltagesStale).toBe(false)
+  })
+
+  it('a second powerOn marks the retained voltages stale until the fresh result lands', async () => {
+    const p1 = store.getState().powerOn()
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+    await p1
+
+    const p2 = store.getState().powerOn()
+    // The old numbers are still displayed — but flagged.
+    expect(store.getState().opVoltages).not.toBeNull()
+    expect(store.getState().opVoltagesStale).toBe(true)
+
+    mock.emit({ type: 'opResult', values: { vin: 9, out: 4.5 } })
+    await p2
+    expect(store.getState().opVoltagesStale).toBe(false)
+  })
+
+  it('stays stale when the solve times out / fails to land (old data still shown)', async () => {
+    const p1 = store.getState().powerOn()
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+    await p1
+
+    const p2 = store.getState().powerOn()
+    // No opResult arrives (e.g. convergence failure): the shown numbers remain
+    // the old ones and must stay flagged.
+    mock.emit({ type: 'convergenceFailure', detail: 'no convergence' })
+    expect(store.getState().opVoltagesStale).toBe(true)
+
+    // Cleanup: let the pending waitFor resolve so no 30 s timer dangles.
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+    await p2
+  })
+
+  it('an unsolicited opResult (ingestEvent) clears staleness', () => {
+    store.setState({ opVoltagesStale: true })
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+    expect(store.getState().opVoltagesStale).toBe(false)
+  })
+
+  it('opening a new board clears staleness', () => {
+    store.setState({ opVoltagesStale: true })
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+    expect(store.getState().opVoltagesStale).toBe(false)
+  })
+})
+
 // ─── 5. Fidelity banner — non-dismissable + lists refs (Spec §8.6, §12) ──────
 
 describe('Spec §12 — fidelity banner is non-dismissable and lists refs', () => {
@@ -350,6 +417,37 @@ describe('Spec §12 — fidelity banner is non-dismissable and lists refs', () =
     ]
     const items = fidelityBannerItems(resolutions)
     expect(items[0].mode).toBe('stubbed (short)')
+  })
+
+  // ── M7 F9: collapse the ref wall when many parts are unresolved ─────────────
+
+  it('collapsedFidelitySummary is null at 3 or fewer items (refs stay listed)', () => {
+    const items = fidelityBannerItems([
+      { ref: 'U1', status: 'unresolved', tier: 6, warnings: [] },
+      { ref: 'U2', status: 'unresolved', tier: 6, warnings: [] },
+      { ref: 'U3', status: 'unresolved', tier: 6, warnings: [] },
+    ] as Resolution[])
+    expect(collapsedFidelitySummary(items)).toBeNull()
+  })
+
+  it('collapsedFidelitySummary collapses >3 unresolved parts to a count', () => {
+    const resolutions: Resolution[] = ['U1', 'Q7', 'D3', 'J2', 'U9'].map(ref => ({
+      ref, status: 'unresolved', tier: 6, warnings: [],
+    }))
+    expect(collapsedFidelitySummary(fidelityBannerItems(resolutions))).toBe('5 parts unresolved')
+  })
+
+  it('collapsedFidelitySummary names stubs honestly (all-stubbed and mixed)', () => {
+    const stub = (ref: string): Resolution => ({
+      ref, status: 'stubbed', tier: 6, warnings: [], model: { kind: 'stub', mode: 'open' },
+    })
+    const unres = (ref: string): Resolution => ({ ref, status: 'unresolved', tier: 6, warnings: [] })
+
+    const allStubbed = fidelityBannerItems([stub('U1'), stub('U2'), stub('U3'), stub('U4')])
+    expect(collapsedFidelitySummary(allStubbed)).toBe('4 parts stubbed')
+
+    const mixed = fidelityBannerItems([unres('U1'), unres('U2'), unres('U3'), stub('U4')])
+    expect(collapsedFidelitySummary(mixed)).toBe('4 parts unresolved or stubbed')
   })
 
   it('the store does NOT expose any action to dismiss the fidelity banner (it is non-dismissable)', () => {

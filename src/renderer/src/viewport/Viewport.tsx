@@ -215,6 +215,9 @@ export default function Viewport({
             <span
               key={netId}
               data-net-id={netId}
+              // Net NAME too, so tooling/tests can find a net without an id
+              // lookup ("what is PACK+ at?" — M7 F8).
+              data-net-name={board?.netById.get(netId)?.name}
               data-testid="op-annotation"
             >
               {/* Same formatter as the 3D labels — normalizes -0.000 V (F5). */}

@@ -21,7 +21,7 @@
 
 import React, { useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
-import { fidelityBannerItems, opCaveatMessage } from '../store/appStore'
+import { fidelityBannerItems, collapsedFidelitySummary, opCaveatMessage } from '../store/appStore'
 
 export default function WarningsBar(): React.ReactElement | null {
   const store = useAppStoreApi()
@@ -32,7 +32,17 @@ export default function WarningsBar(): React.ReactElement | null {
   const opCaveat = useApp(s => s.opCaveat)
 
   const fidelity = fidelityBannerItems(resolutions)
+  // M7 F9: >3 problem parts → one-line count instead of a wall of refs.
+  const fidelityCollapsed = collapsedFidelitySummary(fidelity)
   const [rawOpen, setRawOpen] = useState(false)
+
+  // "open Model Doctor": the Doctor drawer (left dock) is already visible
+  // whenever problems exist; revealInDoctor selects the first problem part and
+  // scrolls its card into view — nonce-based, so it works even when that part
+  // is already selected, twice in a row (M7 review fix).
+  const openModelDoctor = (): void => {
+    if (fidelity.length > 0) store.getState().revealInDoctor(fidelity[0].ref)
+  }
 
   const anything =
     fidelity.length > 0 || convergenceCard || benchToast || crashNotice || opCaveat
@@ -115,12 +125,27 @@ export default function WarningsBar(): React.ReactElement | null {
       {fidelity.length > 0 && (
         <div style={fidelityStyle}>
           <strong>Results approximate:</strong>{' '}
-          {fidelity.map((it, i) => (
-            <span key={it.ref}>
-              {i > 0 && ', '}
-              <span style={refStyle}>{it.ref}</span> {it.mode}
-            </span>
-          ))}
+          {fidelityCollapsed ??
+            fidelity.map((it, i) => (
+              <span key={it.ref}>
+                {i > 0 && ', '}
+                <span style={refStyle}>{it.ref}</span> {it.mode}
+              </span>
+            ))}
+          {' — '}
+          <span
+            style={linkStyle}
+            title="Fix or stub these parts in the Model Doctor"
+            role="button"
+            tabIndex={0}
+            data-testid="open-model-doctor"
+            onClick={openModelDoctor}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') openModelDoctor()
+            }}
+          >
+            open Model Doctor
+          </span>
           .{' '}
           {/* Task 28: wire the docs link via window.circsim.openDocs. */}
           <span

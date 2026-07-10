@@ -23,7 +23,7 @@
 
 import React, { useState, useCallback, useEffect } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
-import { AUTO_SUPPLY_ID } from '../store/appStore'
+import { AUTO_SUPPLY_ID, nextProbeColor } from '../store/appStore'
 import InstrumentProps, { McuPinsPanel } from './InstrumentProps'
 import type { Instrument } from '../../../core/spicegen/instruments'
 
@@ -53,7 +53,16 @@ function genId(kind: string): string {
   return `${kind.replace(/-/g, '_')}_${++_idCounter}`
 }
 
-function buildDefaultInstrument(kind: DroppableKind, netId: number, ref?: string): Instrument {
+// NOTE — no local color logic here: probe trace colors come from the store's
+// single allocator (nextProbeColor / attachProbeToNet), so drag-drop and
+// click-to-probe can never hand out colliding colors (M7 review fix).
+// Voltage probes don't pass through this builder at all (see handleNetDrop).
+function buildDefaultInstrument(
+  kind: Exclude<DroppableKind, 'voltage-probe'>,
+  netId: number,
+  probeColor: string,
+  ref?: string,
+): Instrument {
   switch (kind) {
     case 'dc-supply':
       return { kind: 'dc-supply', id: genId(kind), netId, volts: 5, seriesOhms: 0.1 }
@@ -64,17 +73,9 @@ function buildDefaultInstrument(kind: DroppableKind, netId: number, ref?: string
       }
     case 'logic-input':
       return { kind: 'logic-input', id: genId(kind), netId, level: 0, vHigh: 3.3 }
-    case 'voltage-probe':
-      return { kind: 'voltage-probe', id: genId(kind), netId, color: probeColor() }
     case 'current-probe':
-      return { kind: 'current-probe', id: genId(kind), ref: ref ?? '', color: probeColor() }
+      return { kind: 'current-probe', id: genId(kind), ref: ref ?? '', color: probeColor }
   }
-}
-
-const PROBE_COLORS = ['#6f6', '#f96', '#9cf', '#fc6', '#f6f', '#6ff', '#ff6']
-let _colorIdx = 0
-function probeColor(): string {
-  return PROBE_COLORS[_colorIdx++ % PROBE_COLORS.length]
 }
 
 function instrumentKindLabel(kind: string): string {
@@ -238,6 +239,12 @@ export default function InstrumentRack(): React.ReactElement {
   )
   const [showNetList, setShowNetList] = useState(false)
 
+  // Click-to-probe (M7 F6): the net currently selected on the board (or in any
+  // net list) gets a drag-free "Probe this net" action right here in the rack.
+  const selectedNetId = useApp(s => s.selectedNetId)
+  const selectedNet =
+    selectedNetId !== null ? circuit?.nets.find(n => n.id === selectedNetId) : undefined
+
   // Auto-select the supply that the store auto-attaches on open, so its
   // properties (the voltage input) are immediately visible without a click —
   // the user lands ready to tweak the supply (Spec §4). Runs once per open
@@ -258,7 +265,17 @@ export default function InstrumentRack(): React.ReactElement {
   // Drop onto net name list
   const handleNetDrop = useCallback(
     (netId: number, kind: DroppableKind) => {
-      const inst = buildDefaultInstrument(kind, netId)
+      // Voltage probes go through the store's shared attach path — per-net
+      // dedupe + the ONE color allocator (selects the probe itself).
+      if (kind === 'voltage-probe') {
+        store.getState().attachProbeToNet(netId)
+        return
+      }
+      const inst = buildDefaultInstrument(
+        kind,
+        netId,
+        nextProbeColor(store.getState().instruments),
+      )
       store.getState().addInstrument(inst)
       if ('id' in inst) setSelectedInstId(inst.id)
     },
@@ -296,6 +313,26 @@ export default function InstrumentRack(): React.ReactElement {
           <DraggableChip key={chip.kind} chip={chip} />
         ))}
       </div>
+
+      {/* Click-to-probe: drag-free V-Probe attach on the selected net (M7 F6).
+          Uses the same store path (addInstrument via attachProbeToNet) as the
+          drag-drop routes — no duplicated attachment logic. */}
+      {selectedNet && (
+        <div style={probeNetRowStyle}>
+          <span style={probeNetLabelStyle}>Net:</span>
+          <span style={probeNetNameStyle} title={selectedNet.kicadName}>
+            {selectedNet.kicadName}
+          </span>
+          <button
+            data-testid="probe-net-btn"
+            style={probeNetBtnStyle}
+            onClick={() => store.getState().attachProbeToNet(selectedNet.id)}
+            title={`Attach a V-Probe to ${selectedNet.kicadName}`}
+          >
+            Probe this net
+          </button>
+        </div>
+      )}
 
       {/* Net drop list (collapsible) */}
       {circuit && (
@@ -401,6 +438,40 @@ const chipStyle: React.CSSProperties = {
   cursor: 'grab',
   userSelect: 'none',
   gap: 2,
+}
+
+// Click-to-probe row for the selected net (M7 F6).
+const probeNetRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '6px 10px',
+  borderBottom: '1px solid #2a2a3a',
+  fontSize: 11,
+}
+
+const probeNetLabelStyle: React.CSSProperties = {
+  color: '#888',
+}
+
+const probeNetNameStyle: React.CSSProperties = {
+  flex: 1,
+  fontFamily: 'monospace',
+  color: '#9ab',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const probeNetBtnStyle: React.CSSProperties = {
+  background: '#1e2e1e',
+  border: '1px solid #3a6a3a',
+  borderRadius: 3,
+  color: '#6f6',
+  fontSize: 11,
+  padding: '2px 8px',
+  cursor: 'pointer',
+  flexShrink: 0,
 }
 
 const netListSectionStyle: React.CSSProperties = {

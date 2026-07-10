@@ -547,3 +547,40 @@ describe('parseAlterCommand', () => {
     expect(parseAlterCommand('op')).toBeNull()
   })
 })
+
+// ── M7 review fix 3 — explicit Doctor reveal (nonce, not selection transition) ──
+
+describe('M7 review fix — revealInDoctor', () => {
+  let store: ReturnType<typeof createAppStore>
+
+  beforeEach(() => {
+    store = createAppStore({ simClient: createMockSimClient() })
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+  })
+
+  it('sets selectedRef and a reveal request naming the ref', () => {
+    store.getState().revealInDoctor('R1')
+    const s = store.getState()
+    expect(s.selectedRef).toBe('R1')
+    expect(s.revealDoctorRequest).toMatchObject({ ref: 'R1' })
+  })
+
+  it('bumps the nonce on EVERY call — even for the already-selected ref, twice in a row', () => {
+    store.getState().revealInDoctor('R1')
+    const first = store.getState().revealDoctorRequest!
+    store.getState().revealInDoctor('R1')
+    const second = store.getState().revealDoctorRequest!
+    expect(second.ref).toBe('R1')
+    expect(second.nonce).not.toBe(first.nonce)
+
+    store.getState().revealInDoctor('R1')
+    const third = store.getState().revealDoctorRequest!
+    expect(third.nonce).not.toBe(second.nonce)
+  })
+
+  it('opening a new board clears any pending reveal request', () => {
+    store.getState().revealInDoctor('R1')
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+    expect(store.getState().revealDoctorRequest).toBeNull()
+  })
+})

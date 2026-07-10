@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { createAppStore, AUTO_SUPPLY_ID } from '../appStore'
+import { createAppStore, AUTO_SUPPLY_ID, PROBE_COLORS, nextProbeColor } from '../appStore'
 import { createMockSimClient } from '../../ipc/simClient'
 
 const fixturesDir = join(__dirname, '../../../../../fixtures')
@@ -404,6 +404,197 @@ describe('Milestone2 — attachSupplyToNet', () => {
     expect(store.getState().selectedInstrumentId).toBe('some-id')
     store.getState().selectInstrument(null)
     expect(store.getState().selectedInstrumentId).toBeNull()
+  })
+})
+
+// ── M7 F7: auto-attached supply announcement state ────────────────────────────
+
+describe('M7 F7 — autoAttachedSupplyId (announce the silent auto-attach)', () => {
+  let store: ReturnType<typeof createAppStore>
+
+  beforeEach(() => {
+    store = createAppStore({ simClient: createMockSimClient() })
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+  })
+
+  it('openBoardFromText flags the auto-attached supply', () => {
+    // fixture-rc: VIN is recognised as a supply → auto supply attached on open.
+    expect(store.getState().autoAttachedSupplyId).toBe(AUTO_SUPPLY_ID)
+  })
+
+  it('a board with no suggested rail leaves the flag null', () => {
+    const noRailBoard = `(kicad_pcb (version 20221018) (generator pcbnew)
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (44 "Edge.Cuts" user))
+  (net 1 "IN")
+  (net 2 "GND")
+  (footprint "Resistor_SMD:R_0805_2012Metric" (layer "F.Cu")
+    (at 10 10)
+    (fp_text reference "R1" (at 0 -1) (layer "F.SilkS")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (fp_text value "10k" (at 0 1) (layer "F.Fab")
+      (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at -0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "IN"))
+    (pad "2" smd rect (at 0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 2 "GND"))
+  )
+)`
+    store.getState().openBoardFromText(noRailBoard, 'no-rail.kicad_pcb')
+    expect(store.getState().instruments.filter(i => i.kind === 'dc-supply')).toHaveLength(0)
+    expect(store.getState().autoAttachedSupplyId).toBeNull()
+  })
+
+  it('a user-attached supply (attachSupplyToNet) is never flagged', () => {
+    const outId = store.getState().circuit!.nets.find(n => n.kicadName === 'OUT')!.id
+    store.getState().attachSupplyToNet(outId)
+    // The flag still names only the open-time auto supply, not the user one.
+    expect(store.getState().autoAttachedSupplyId).toBe(AUTO_SUPPLY_ID)
+    expect(store.getState().selectedInstrumentId).not.toBe(AUTO_SUPPLY_ID)
+  })
+
+  it('editing the auto supply clears the flag (the user clearly knows it exists)', () => {
+    const vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
+    store.getState().updateInstrument(AUTO_SUPPLY_ID, {
+      kind: 'dc-supply', id: AUTO_SUPPLY_ID, netId: vinId, volts: 9, seriesOhms: 0.1,
+    })
+    expect(store.getState().autoAttachedSupplyId).toBeNull()
+  })
+
+  it('editing a DIFFERENT instrument keeps the flag', () => {
+    const outId = store.getState().circuit!.nets.find(n => n.kicadName === 'OUT')!.id
+    store.getState().addInstrument({ kind: 'voltage-probe', id: 'vp1', netId: outId, color: '#6f6' })
+    store.getState().updateInstrument('vp1', { kind: 'voltage-probe', id: 'vp1', netId: outId, color: '#f96' })
+    expect(store.getState().autoAttachedSupplyId).toBe(AUTO_SUPPLY_ID)
+  })
+
+  it('removing the auto supply clears the flag', () => {
+    store.getState().removeInstrument(AUTO_SUPPLY_ID)
+    expect(store.getState().autoAttachedSupplyId).toBeNull()
+  })
+
+  it('energize() flags the supply it auto-attaches', async () => {
+    const mock = createMockSimClient()
+    const st = createAppStore({ simClient: mock })
+    st.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+    // Drop the open-time auto supply so energize has to rig its own.
+    st.getState().removeInstrument(AUTO_SUPPLY_ID)
+    expect(st.getState().autoAttachedSupplyId).toBeNull()
+
+    const p = st.getState().energize()
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+    await p
+    expect(st.getState().instruments.some(i => 'id' in i && i.id === AUTO_SUPPLY_ID)).toBe(true)
+    expect(st.getState().autoAttachedSupplyId).toBe(AUTO_SUPPLY_ID)
+  })
+})
+
+// ── M7 F6: click-to-probe (attachProbeToNet) ──────────────────────────────────
+
+describe('M7 F6 — attachProbeToNet (drag-free probing)', () => {
+  let store: ReturnType<typeof createAppStore>
+  let outId: number
+
+  beforeEach(() => {
+    store = createAppStore({ simClient: createMockSimClient() })
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+    outId = store.getState().circuit!.nets.find(n => n.kicadName === 'OUT')!.id
+  })
+
+  it('attaches a voltage-probe to the net, selects it, and dirties the deck', () => {
+    store.getState().attachProbeToNet(outId)
+    const s = store.getState()
+    const probes = s.instruments.filter(
+      i => i.kind === 'voltage-probe' && i.netId === outId,
+    ) as Extract<(typeof s.instruments)[number], { kind: 'voltage-probe' }>[]
+    expect(probes).toHaveLength(1)
+    expect(PROBE_COLORS).toContain(probes[0].color)
+    expect(s.selectedInstrumentId).toBe(probes[0].id)
+    expect(s.deckDirty).toBe(true)
+  })
+
+  it('attaching twice to the same net does not duplicate — it re-selects the existing probe', () => {
+    store.getState().attachProbeToNet(outId)
+    const firstId = store.getState().selectedInstrumentId
+    expect(firstId).not.toBeNull()
+
+    store.getState().selectInstrument(null)
+    store.getState().attachProbeToNet(outId)
+
+    const s = store.getState()
+    expect(s.instruments.filter(i => i.kind === 'voltage-probe' && i.netId === outId)).toHaveLength(1)
+    expect(s.selectedInstrumentId).toBe(firstId)
+  })
+
+  it('rotates trace colors across probes on different nets', () => {
+    const vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
+    store.getState().attachProbeToNet(outId)
+    store.getState().attachProbeToNet(vinId)
+    const s = store.getState()
+    const probes = s.instruments.filter(
+      i => i.kind === 'voltage-probe',
+    ) as Extract<(typeof s.instruments)[number], { kind: 'voltage-probe' }>[]
+    expect(probes).toHaveLength(2)
+    expect(probes[0].color).not.toBe(probes[1].color)
+  })
+})
+
+// ── M7 review fix 1 — ONE probe-color allocator across all attach paths ───────
+
+describe('M7 review fix — shared probe trace-color allocation', () => {
+  let store: ReturnType<typeof createAppStore>
+  let vinId: number
+  let outId: number
+  let gndId: number
+
+  beforeEach(() => {
+    store = createAppStore({ simClient: createMockSimClient() })
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+    const nets = store.getState().circuit!.nets
+    vinId = nets.find(n => n.kicadName === 'VIN')!.id
+    outId = nets.find(n => n.kicadName === 'OUT')!.id
+    gndId = nets.find(n => n.kicadName === 'GND')!.id
+  })
+
+  function probeColors(): string[] {
+    return store
+      .getState()
+      .instruments.filter(i => i.kind === 'voltage-probe')
+      .map(i => (i as { color: string }).color)
+  }
+
+  it('nextProbeColor picks the first palette color not used by any existing probe', () => {
+    expect(nextProbeColor(store.getState().instruments)).toBe(PROBE_COLORS[0])
+    store.getState().addInstrument({ kind: 'voltage-probe', id: 'vp0', netId: outId, color: PROBE_COLORS[0] })
+    expect(nextProbeColor(store.getState().instruments)).toBe(PROBE_COLORS[1])
+    // A hole in the palette is refilled first.
+    store.getState().addInstrument({ kind: 'voltage-probe', id: 'vp2', netId: vinId, color: PROBE_COLORS[2] })
+    expect(nextProbeColor(store.getState().instruments)).toBe(PROBE_COLORS[1])
+  })
+
+  it('nextProbeColor wraps (reuses) when every palette color is taken', () => {
+    PROBE_COLORS.forEach((color, i) => {
+      store.getState().addInstrument({ kind: 'voltage-probe', id: `vp${i}`, netId: outId, color })
+    })
+    expect(PROBE_COLORS).toContain(nextProbeColor(store.getState().instruments))
+  })
+
+  it('mixed-path attaches get distinct colors (drag-style probe + click-to-probe)', () => {
+    // Simulate a drag-attached probe already holding the first palette color…
+    store.getState().addInstrument({ kind: 'voltage-probe', id: 'dragged', netId: outId, color: PROBE_COLORS[0] })
+    // …then click-to-probe another net: no green-on-green collision.
+    store.getState().attachProbeToNet(vinId)
+    const colors = probeColors()
+    expect(colors).toHaveLength(2)
+    expect(new Set(colors).size).toBe(2)
+  })
+
+  it('removing a probe frees its color for the next attach', () => {
+    store.getState().attachProbeToNet(outId) // takes PROBE_COLORS[0]
+    store.getState().attachProbeToNet(vinId) // takes PROBE_COLORS[1]
+    expect(probeColors()).toEqual([PROBE_COLORS[0], PROBE_COLORS[1]])
+
+    store.getState().removeInstrument(`voltage_probe_net_${outId}`)
+    store.getState().attachProbeToNet(gndId) // the freed color comes back
+    expect(probeColors()).toContain(PROBE_COLORS[0])
   })
 })
 

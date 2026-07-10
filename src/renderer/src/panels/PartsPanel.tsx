@@ -76,10 +76,17 @@ export default function PartsPanel(): React.ReactElement {
               key={part.ref}
               role="button"
               tabIndex={0}
-              onClick={() => store.getState().selectComponent(isSelected ? null : part.ref)}
+              // Selecting a row also reveals its Model Doctor card (nonce-based
+              // revealInDoctor — M7 review fix); deselecting is plain selection.
+              onClick={() =>
+                isSelected
+                  ? store.getState().selectComponent(null)
+                  : store.getState().revealInDoctor(part.ref)
+              }
               onKeyDown={e => {
                 if (e.key === 'Enter' || e.key === ' ') {
-                  store.getState().selectComponent(isSelected ? null : part.ref)
+                  if (isSelected) store.getState().selectComponent(null)
+                  else store.getState().revealInDoctor(part.ref)
                 }
               }}
               style={{
