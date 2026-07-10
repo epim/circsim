@@ -97,6 +97,29 @@ describe('parseConvergenceCulprit — instance → refdes', () => {
     const c = parseConvergenceCulprit('trouble with res-instance r_stub_q71_0', withQ71)
     expect(c).toEqual({ kind: 'part', label: 'Q71', detail: 'C' })
   })
+
+  it('floating-island bleed instance r_float_<i> maps to NO part (index names, M8)', () => {
+    // generateDeck names island bleed resistors r_float_1, r_float_2, … — the
+    // index is deliberate: a KiCad refdes is letter-led, so a bare integer can
+    // never be a part ref and the bleed can never steal the culprit banner.
+    const withBoardParts = circuitWith([part('C3', '100n'), part('LED3', 'red')])
+    expect(parseConvergenceCulprit('trouble with res-instance r_float_1', withBoardParts)).toBeNull()
+    expect(parseConvergenceCulprit('trouble with res-instance r_float_2', withBoardParts)).toBeNull()
+  })
+
+  it('documents the hazard index names avoid: a node-EMBEDDING bleed name would mis-map', () => {
+    // If generateDeck had named the bleeds r_float_<spiceNode>, a bleed on the
+    // lantern net _gauge_c3 would be r_float__gauge_c3 — and the prefix regex
+    // (correctly, for r_stub_q7_0-style names) reads its tail `_c3` as part C3.
+    // This assertion pins WHY the bleed names are index-based; it is the
+    // parser's documented behaviour, not a bug to fix here.
+    const withBoardParts = circuitWith([part('C3', '100n'), part('LED3', 'red')])
+    const c = parseConvergenceCulprit(
+      'trouble with res-instance r_float__gauge_c3',
+      withBoardParts,
+    )
+    expect(c).toEqual({ kind: 'part', label: 'C3', detail: '100n' })
+  })
 })
 
 describe('parseConvergenceCulprit — node → net', () => {

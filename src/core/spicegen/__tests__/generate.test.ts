@@ -1322,6 +1322,290 @@ describe('generateDeck — power-path MOSFETs from the real bundled mosfet.lib',
   })
 })
 
+// ─── M8: floating-island bleed resistors ──────────────────────────────────────
+
+describe('generateDeck — floating-island bleed resistors (M8)', () => {
+  /**
+   * Lantern-shaped fixture: a grounded R (R1) plus a dangling R pair (R38)
+   * whose two nets have no path of ANY kind to node 0 — the real-board
+   * `r_r38 _led3_k _gauge_c3 2200` case (LED strings off-board, connectors
+   * resolved as open stubs). A floating R pair contributes matrix rows
+   * [g, -g; -g, g] — structurally singular for every analysis, so a fresh
+   * `tran … uic` aborts on the first step.
+   */
+  function makeIslandCircuit(): Circuit {
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'VIN', spiceNode: 'vin', padRefs: [] },
+      { id: 2, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+      { id: 3, kicadName: '/LED3_K', spiceNode: '_led3_k', padRefs: [] },
+      { id: 4, kicadName: '/GAUGE_C3', spiceNode: '_gauge_c3', padRefs: [] },
+    ]
+    const r1: Part = {
+      ref: 'R1', value: '10k', libId: 'Resistor_SMD:R_0805_2012Metric', layer: 'F',
+      padNet: new Map([['1', 1], ['2', 2]]), properties: {},
+    }
+    const r38: Part = {
+      ref: 'R38', value: '2.2k', libId: 'Resistor_SMD:R_0402_1005Metric', layer: 'F',
+      padNet: new Map([['1', 3], ['2', 4]]), properties: {},
+    }
+    return { nets, parts: [r1, r38], warnings: [] }
+  }
+
+  function makeIslandResolutions(): Resolution[] {
+    return [
+      {
+        ref: 'R1', status: 'ok', tier: 2, warnings: [],
+        model: { kind: 'primitive', card: 'r_r1 vin 0 10000' },
+      },
+      {
+        ref: 'R38', status: 'ok', tier: 2, warnings: [],
+        model: { kind: 'primitive', card: 'r_r38 _led3_k _gauge_c3 2200' },
+      },
+    ]
+  }
+
+  test('dangling R pair → exactly one 1G bleed per island net + provenance comment', () => {
+    const deck = generateDeck({
+      circuit: makeIslandCircuit(),
+      resolutions: makeIslandResolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 2 },
+        { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 2,
+    })
+    const bleeds = deck.filter(l => l.startsWith('r_float_'))
+    // Per-NET bleeds (not per-island): both island nets get one, in card order.
+    expect(bleeds).toEqual(['r_float_1 _led3_k 0 1e9', 'r_float_2 _gauge_c3 0 1e9'])
+    // Provenance comment sits directly above the group.
+    const commentIdx = deck.indexOf('* floating-island bleed resistors (no DC path to ground)')
+    expect(commentIdx).toBeGreaterThan(-1)
+    expect(deck[commentIdx + 1]).toBe(bleeds[0])
+  })
+
+  test('grounded fixture gains no bleed lines', () => {
+    const deck = generateDeck({
+      circuit: makeRcCircuit(3),
+      resolutions: makeRcResolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 3 },
+        { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 3,
+    })
+    expect(deck.some(l => l.startsWith('r_float_'))).toBe(false)
+    expect(deck.join('\n')).not.toContain('floating-island')
+  })
+
+  test('R in series with C floating → EVERY island net gets a bleed (per-net, not per-island)', () => {
+    // A capacitively-linked island needs a bleed on every net: one bleed per
+    // ISLAND leaves the C-only side singular at DC (capacitor = open at DC).
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'VIN', spiceNode: 'vin', padRefs: [] },
+      { id: 2, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+      { id: 3, kicadName: 'FA', spiceNode: 'fa', padRefs: [] },
+      { id: 4, kicadName: 'FB', spiceNode: 'fb', padRefs: [] },
+      { id: 5, kicadName: 'FC', spiceNode: 'fc', padRefs: [] },
+    ]
+    const circuit: Circuit = {
+      nets,
+      parts: [
+        { ref: 'R1', value: '10k', libId: 'R', layer: 'F', padNet: new Map([['1', 1], ['2', 2]]), properties: {} },
+        { ref: 'R2', value: '1k', libId: 'R', layer: 'F', padNet: new Map([['1', 3], ['2', 4]]), properties: {} },
+        { ref: 'C1', value: '100n', libId: 'C', layer: 'F', padNet: new Map([['1', 4], ['2', 5]]), properties: {} },
+      ],
+      warnings: [],
+    }
+    const resolutions: Resolution[] = [
+      { ref: 'R1', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'r_r1 vin 0 10000' } },
+      { ref: 'R2', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'r_r2 fa fb 1000' } },
+      { ref: 'C1', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'c_c1 fb fc 1e-07' } },
+    ]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [
+        { kind: 'ground-ref', netId: 2 },
+        { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 2,
+    })
+    const bleeds = deck.filter(l => l.startsWith('r_float_'))
+    expect(bleeds).toEqual([
+      'r_float_1 fa 0 1e9',
+      'r_float_2 fb 0 1e9',
+      'r_float_3 fc 0 1e9',
+    ])
+  })
+
+  test('bleeds are emitted after the element cards and before .save all', () => {
+    const deck = generateDeck({
+      circuit: makeIslandCircuit(),
+      resolutions: makeIslandResolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 2 },
+        { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 2,
+    })
+    const bleedIdx = deck.findIndex(l => l.startsWith('r_float_'))
+    const lastElementIdx = deck.findIndex(l => l.startsWith('r_r38'))
+    const saveIdx = deck.indexOf('.save all')
+    expect(bleedIdx).toBeGreaterThan(lastElementIdx)
+    expect(bleedIdx).toBeLessThan(saveIdx)
+  })
+
+  test('bleed names are index-based so the convergence-culprit parser cannot mis-map them to a part', () => {
+    // convergenceCulprit.ts maps instance tokens back to parts via
+    // /(?:^|\.)[a-z][a-z0-9_]*_<ref>(?:$|[._])/ — so ANY name embedding the raw
+    // spice node (r_float__gauge_c3, rfloat__gauge_c3, …) would false-positive
+    // onto part C3 whenever the node ends (or contains a segment) shaped like a
+    // refdes. Index-based names (r_float_1) can never match: a KiCad refdes is
+    // letter-led, so no part ref equals a bare integer.
+    const deck = generateDeck({
+      circuit: makeIslandCircuit(),
+      resolutions: makeIslandResolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 2 },
+        { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 2,
+    })
+    const bleedNames = deck
+      .filter(l => l.startsWith('r_float_'))
+      .map(l => l.split(/\s+/)[0])
+    expect(bleedNames.length).toBeGreaterThan(0)
+    for (const name of bleedNames) {
+      expect(name).toMatch(/^r_float_\d+$/)
+      // Demonstrate the hazard the naming avoids: the culprit-parser regex for a
+      // part "C3" WOULD match a node-embedding name, but not the index name.
+      const c3Regex = /(?:^|\.)[a-z][a-z0-9_]*_c3(?:$|[._])/
+      expect(c3Regex.test('r_float__gauge_c3')).toBe(true) // node-embedding: mis-maps
+      expect(c3Regex.test(name)).toBe(false)               // index-based: safe
+    }
+  })
+
+  test('a net grounded only through a subckt terminal is NOT bled (x-card nodes union)', () => {
+    // R5 links n_a–n_b; U1's subckt instance ties n_b and 0 together at its
+    // terminals. The union-find must run over the FINAL emitted cards, so the
+    // x_ card's terminal list grounds the whole component — no bleeds.
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'NA', spiceNode: 'n_a', padRefs: [] },
+      { id: 2, kicadName: 'NB', spiceNode: 'n_b', padRefs: [] },
+      { id: 3, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const circuit: Circuit = {
+      nets,
+      parts: [
+        { ref: 'R5', value: '1k', libId: 'R', layer: 'F', padNet: new Map([['1', 1], ['2', 2]]), properties: {} },
+        { ref: 'U1', value: 'NE555', libId: 'Timer:NE555', layer: 'F', padNet: new Map([['1', 2], ['2', 3]]), properties: {} },
+      ],
+      warnings: [],
+    }
+    const resolutions: Resolution[] = [
+      { ref: 'R5', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'r_r5 n_a n_b 1000' } },
+      {
+        ref: 'U1', status: 'ok', tier: 1, warnings: [],
+        model: { kind: 'subckt', libFile: 'timer555.lib', subcktName: 'ne555', pinMap: { '1': '1', '2': '2' } },
+      },
+    ]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 3 }],
+      groundNetId: 3,
+    })
+    expect(deck.some(l => l.startsWith('r_float_'))).toBe(false)
+  })
+
+  test('a net attached ONLY to an E-source sense terminal gets a bleed (sense pair = singletons)', () => {
+    // A VCVS sense input carries NO conductance — a net whose only attachment
+    // is tokens 3-4 of an e/g card contributes an empty matrix row, the same
+    // singularity M8 exists to fix. The sense nodes must therefore be
+    // REGISTERED (so they're bled when nothing else grounds them) but never
+    // UNIONED with the driven output pair (which would fake a ground path).
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'EO', spiceNode: 'eo', padRefs: [] },
+      { id: 2, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+      { id: 3, kicadName: 'SA', spiceNode: 'sa', padRefs: [] },
+      { id: 4, kicadName: 'SB', spiceNode: 'sb', padRefs: [] },
+    ]
+    const circuit: Circuit = {
+      nets,
+      parts: [
+        { ref: 'E1', value: 'VCVS', libId: 'Simulation:E', layer: 'F', padNet: new Map([['1', 1], ['2', 2], ['3', 3], ['4', 4]]), properties: {} },
+      ],
+      warnings: [],
+    }
+    const resolutions: Resolution[] = [
+      { ref: 'E1', status: 'ok', tier: 1, warnings: [], model: { kind: 'primitive', card: 'e_e1 eo 0 sa sb 100000' } },
+    ]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 2 }],
+      groundNetId: 2,
+    })
+    const bleeds = deck.filter(l => l.startsWith('r_float_'))
+    // Output pair eo–0 is grounded by the source branch; each floating sense
+    // net gets its own bleed.
+    expect(bleeds).toEqual(['r_float_1 sa 0 1e9', 'r_float_2 sb 0 1e9'])
+  })
+
+  test('a primitive m card with a model + param tail never bleeds the model name as a phantom node', () => {
+    // resolve.ts primitive cards are `<name> <one node per pad> <value…>` — a
+    // discrete MOSFET footprint contributes 3 nodes (D/G/S; the 4-terminal
+    // bulk-tied m cards come from generateDeck's model-card path, which
+    // registers its nodes exactly). A naive "take 4" would swallow the model
+    // name as a node whenever a param tail follows it.
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'MD', spiceNode: 'md', padRefs: [] },
+      { id: 2, kicadName: 'MG', spiceNode: 'mg', padRefs: [] },
+      { id: 3, kicadName: 'MS', spiceNode: 'ms', padRefs: [] },
+      { id: 4, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const circuit: Circuit = {
+      nets,
+      parts: [
+        { ref: 'Q9', value: 'AO3401', libId: 'M', layer: 'F', padNet: new Map([['1', 1], ['2', 2], ['3', 3]]), properties: {} },
+        { ref: 'R1', value: '1k', libId: 'R', layer: 'F', padNet: new Map([['1', 4], ['2', 4]]), properties: {} },
+      ],
+      warnings: [],
+    }
+    const resolutions: Resolution[] = [
+      { ref: 'Q9', status: 'ok', tier: 1, warnings: [], model: { kind: 'primitive', card: 'm_q9 md mg ms mpmos_gen l=1e-6' } },
+      { ref: 'R1', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'r_r1 0 0 1000' } },
+    ]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 4 }],
+      groundNetId: 4,
+    })
+    const bleeds = deck.filter(l => l.startsWith('r_float_'))
+    // The floating D/G/S island is bled per net — and ONLY those nets: the
+    // model name (token 5) and the param tail must never appear as nodes.
+    expect(bleeds).toEqual([
+      'r_float_1 md 0 1e9',
+      'r_float_2 mg 0 1e9',
+      'r_float_3 ms 0 1e9',
+    ])
+  })
+
+  test('golden decks are byte-identical (zero islands → strictly additive feature)', () => {
+    // Belt-and-braces restatement of the M8 invariant: the grounded golden
+    // fixtures must not change AT ALL. (The golden-equality tests above already
+    // enforce this; this pins the reason to the island feature.)
+    const deck = generateDeck({
+      circuit: makeRcCircuit(3),
+      resolutions: makeRcResolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 3 },
+        { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 3,
+      title: 'fixture-rc',
+    })
+    expect(deck.join('\n')).toBe(goldenFile('deck-rc-supply.txt'))
+  })
+})
+
 // ─── alterPlan ────────────────────────────────────────────────────────────────
 
 describe('alterPlan — dc-supply.volts', () => {

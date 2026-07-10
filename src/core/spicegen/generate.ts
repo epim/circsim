@@ -466,6 +466,126 @@ function buildWaveSourceValue(inst: Extract<Instrument, { kind: 'function-gen' }
   }
 }
 
+// ─── Floating-island detection (M8) ──────────────────────────────────────────
+
+/**
+ * Union-find over the analog nodes of the FINAL emitted element cards.
+ *
+ * A connected component that never reaches node "0" is a floating island: it
+ * contributes a structurally singular block to the MNA matrix (validated on the
+ * real lantern board, where two dangling resistors stranded by open connector
+ * stubs abort every fresh `tran … uic` on the first step). generateDeck links
+ * each element card's analog nodes as it emits the card, then bleeds every
+ * island net to ground with 1 GΩ — strictly additive, so fully grounded decks
+ * are byte-identical to before.
+ */
+class NodeUnionFind {
+  /** parent map; insertion order is first-seen order (drives deterministic output). */
+  private readonly parent = new Map<string, string>()
+
+  private find(n: string): string {
+    let root = n
+    while (this.parent.get(root) !== root) root = this.parent.get(root)!
+    // Path compression.
+    let cur = n
+    while (cur !== root) {
+      const next = this.parent.get(cur)!
+      this.parent.set(cur, root)
+      cur = next
+    }
+    return root
+  }
+
+  /** Register a card's analog nodes and union them into one component. */
+  link(nodes: string[]): void {
+    const clean = nodes.filter(n => n.length > 0)
+    for (const n of clean) {
+      if (!this.parent.has(n)) this.parent.set(n, n)
+    }
+    for (let i = 1; i < clean.length; i++) {
+      const a = this.find(clean[0])
+      const b = this.find(clean[i])
+      if (a !== b) this.parent.set(b, a)
+    }
+  }
+
+  /**
+   * Every connected component with no path to node "0", as ordered node lists.
+   * Component order and in-component node order follow first registration, so
+   * the emitted bleed cards are deterministic.
+   */
+  floatingIslands(): string[][] {
+    const byRoot = new Map<string, string[]>()
+    for (const node of this.parent.keys()) {
+      const root = this.find(node)
+      const group = byRoot.get(root)
+      if (group) group.push(node)
+      else byRoot.set(root, [node])
+    }
+    const groundRoot = this.parent.has('0') ? this.find('0') : undefined
+    const islands: string[][] = []
+    for (const [root, nodes] of byRoot) {
+      if (root !== groundRoot) islands.push(nodes)
+    }
+    return islands
+  }
+}
+
+/**
+ * Analog node GROUPS of a pre-built primitive card, keyed by the element
+ * letter. Each group is unioned internally by the caller; separate groups stay
+ * separate. resolve.ts emits primitive cards as
+ * `<name> <one node per pad> <value…>` (buildNodeList — never a synthetic bulk
+ * terminal, and the value/model tail may span several tokens, e.g.
+ * `PULSE(0 5 …)` or `<model> l=…`), so the node counts are sized to the shapes
+ * those cards actually carry — NOT to the SPICE maximum — or a trailing model
+ * name would be swallowed as a phantom node:
+ *
+ *   r/c/l/v/i/d → 2 nodes; q/j/m → 3 nodes (discrete transistor footprints;
+ *   the 4-terminal bulk-tied m cards come from generateDeck's model-card path,
+ *   which registers its exact nodes at emission and never routes through here).
+ *
+ * Controlled sources: an E/G output pair (tokens 1-2) is tied by the source
+ * branch and unions as one group; the sense pair (tokens 3-4) carries NO
+ * conductance, so each sense node is its own SINGLETON group — registered (a
+ * net attached only to a sense terminal genuinely floats and must be bled,
+ * exactly like an adc_bridge input) but never unioned into a fake ground path.
+ * F/H name a controlling SOURCE (not a node) in token 3. Unknown letters
+ * contribute nothing (conservative: an unregistered node can only gain a
+ * harmless extra bleed elsewhere, never lose one it needs).
+ */
+function primitiveCardNodeGroups(card: string): string[][] {
+  const toks = card.trim().split(/\s+/)
+  if (toks.length < 3) return []
+  const letter = toks[0].charAt(0).toLowerCase()
+  const take = (n: number): string[] => toks.slice(1, 1 + Math.min(n, toks.length - 2))
+  switch (letter) {
+    case 'r':
+    case 'c':
+    case 'l':
+    case 'v':
+    case 'i':
+    case 'd':
+      return [take(2)]
+    case 'q':
+    case 'j':
+    case 'm':
+      return [take(3)]
+    case 'e':
+    case 'g': {
+      const nodes = take(4)
+      const groups: string[][] = [nodes.slice(0, 2)]
+      for (const sense of nodes.slice(2)) groups.push([sense])
+      return groups
+    }
+    case 'f':
+    case 'h':
+      return [take(2)]
+    default:
+      return []
+  }
+}
+
 // ─── Current-probe helpers ─────────────────────────────────────────────────────
 
 /** Returns true if the resolution is a top-level primitive (R/C/L/D/Q…). */
@@ -561,7 +681,7 @@ function expandXspiceDigital(
   netIdToNode: Map<number, string>,
   idx: ModelTextIndex,
   templateFile: string | undefined,
-): { lines: string[]; expanded: boolean } {
+): { lines: string[]; expanded: boolean; analogNodes: string[] } {
   const logic = templateFile ? parseLogic74(idx, templateFile) : null
   const tpl = logic?.templates?.[model.templateId]
   if (!logic || !tpl) {
@@ -572,6 +692,7 @@ function expandXspiceDigital(
         `* adc_bridge/gates/dac_bridge expansion — template text unavailable`,
       ],
       expanded: false,
+      analogNodes: [],
     }
   }
 
@@ -610,9 +731,17 @@ function expandXspiceDigital(
   lines.push(`.model ${adcModel} adc_bridge(in_low=${inLow} in_high=${inHigh})`)
   lines.push(`.model ${dacModel} dac_bridge(out_low=0 out_high=${vHigh.toFixed(4)})`)
 
+  // Analog terminals of the expansion, for floating-island detection. Each
+  // adc/dac bridge card carries exactly ONE analog node (the other bracket is a
+  // purely-event digital node, which must never receive a bleed resistor); the
+  // bridges do NOT conduct across the chip, so the nodes are reported
+  // individually, never unioned with each other.
+  const analogNodes: string[] = []
+
   // One adc_bridge per input signal: analog board node → digital event node.
   for (const sig of tpl.inputs) {
     lines.push(`abr_${refLc}_${sig.toLowerCase()} [${aNode(sig)}] [${dNode(sig)}] ${adcModel}`)
+    analogNodes.push(aNode(sig))
   }
 
   // Gates on digital event nodes.
@@ -648,9 +777,10 @@ function expandXspiceDigital(
   // One dac_bridge per output signal: digital event node → analog board node.
   for (const sig of tpl.outputs) {
     lines.push(`abr_${refLc}_out_${sig.toLowerCase()} [${dNode(sig)}] [${aNode(sig)}] ${dacModel}`)
+    analogNodes.push(aNode(sig))
   }
 
-  return { lines, expanded: true }
+  return { lines, expanded: true, analogNodes }
 }
 
 // ─── Main deck generator ──────────────────────────────────────────────────────
@@ -672,6 +802,11 @@ export function generateDeck(opts: GenerateOptions): string[] {
 
   const lines: string[] = []
   const netIdToNode = buildNetIdToNode(circuit)
+
+  // Floating-island detection (M8): every emitted element card links its analog
+  // nodes here; after all elements are out, any connected component that never
+  // reaches node "0" gets a 1 GΩ bleed per net (see NodeUnionFind).
+  const islandNodes = new NodeUnionFind()
 
   // Model-definition inlining (only when lib texts are supplied). Definitions are
   // collected per-deck and deduplicated, then appended once before .save (ngspice
@@ -759,6 +894,7 @@ export function generateDeck(opts: GenerateOptions): string[] {
         if (a === undefined || w === undefined) continue
         const ohms = clampPotOhms(inst.totalOhms * inst.wiperPct, inst.totalOhms)
         lines.push(`${names.single} ${a} ${w} ${formatSpiceValue(ohms)}`)
+        islandNodes.link([a, w])
       } else if (inst.mode === 'divider' && 'upper' in names) {
         const hi = nodeFor(inst.netHi)
         const w  = nodeFor(inst.netW)
@@ -769,6 +905,8 @@ export function generateDeck(opts: GenerateOptions): string[] {
         const lower = clampPotOhms(inst.totalOhms * inst.wiperPct, inst.totalOhms)
         lines.push(`${names.upper} ${hi} ${w} ${formatSpiceValue(upper)}`)
         lines.push(`${names.lower} ${w} ${lo} ${formatSpiceValue(lower)}`)
+        islandNodes.link([hi, w])
+        islandNodes.link([w, lo])
       }
       continue
     }
@@ -790,6 +928,8 @@ export function generateDeck(opts: GenerateOptions): string[] {
       // This way the KiCad net keeps its name (overlay reads from spiceNet).
       lines.push(`${name} ${synthetic} 0 DC ${volts}`)
       lines.push(`${rName} ${synthetic} ${spiceNet} ${ohms}`)
+      islandNodes.link([synthetic, '0'])
+      islandNodes.link([synthetic, spiceNet])
       continue
     }
 
@@ -802,6 +942,8 @@ export function generateDeck(opts: GenerateOptions): string[] {
 
       lines.push(`${name} ${synthetic} 0 ${waveVal}`)
       lines.push(`${rName} ${synthetic} ${spiceNet} ${ohms}`)
+      islandNodes.link([synthetic, '0'])
+      islandNodes.link([synthetic, spiceNet])
       continue
     }
 
@@ -816,6 +958,8 @@ export function generateDeck(opts: GenerateOptions): string[] {
 
       lines.push(`${name} ${synthetic} 0 DC ${level}`)
       lines.push(`${rName} ${synthetic} ${spiceNet} ${ohms}`)
+      islandNodes.link([synthetic, '0'])
+      islandNodes.link([synthetic, spiceNet])
       continue
     }
   }
@@ -846,6 +990,7 @@ export function generateDeck(opts: GenerateOptions): string[] {
           for (let i = 1; i < nodes.length; i++) {
             const rName = `r_stub_${part.ref.toLowerCase()}_${i}`
             lines.push(`${rName} ${nodes[0]} ${nodes[i]} 1e-06`)
+            islandNodes.link([nodes[0], nodes[i]])
           }
         } else {
           lines.push(`* ${res.ref}: stubbed short (< 2 distinct nodes)`)
@@ -869,6 +1014,7 @@ export function generateDeck(opts: GenerateOptions): string[] {
       } else {
         lines.push(model.card)
       }
+      for (const group of primitiveCardNodeGroups(model.card)) islandNodes.link(group)
       continue
     }
 
@@ -921,11 +1067,21 @@ export function generateDeck(opts: GenerateOptions): string[] {
           const internalAnode = `${origAnode}__ledsense_${part.ref.toLowerCase()}`
           // vsense_<ref> origAnode internalAnode DC 0  (ideal 0 V ammeter)
           lines.push(`${senseName} ${origAnode} ${internalAnode} DC 0`)
+          islandNodes.link([origAnode, internalAnode])
           // diode now drives from the internal node: d_<ref> internalAnode cathode model
           const spliced = [internalAnode, ...nodes.slice(1)]
           lines.push(`${devName} ${spliced.join(' ')} ${model.subcktName}`)
+          islandNodes.link(spliced)
         } else {
           lines.push(`${devName} ${nodes.join(' ')} ${model.subcktName}`)
+          // Island-detection scope: unioning ALL the device's terminals —
+          // including a VDMOS gate, which has no DC conductance to D/S — is
+          // deliberate. The bundled VDMOS cards carry gate capacitances
+          // (cgdmax/cgs…), and a capacitor counts as a path of ANY kind here
+          // (per-net bleeds make capacitively-linked islands DC-safe anyway).
+          // A hypothetical zero-cap MOS whose gate net hangs off the rest of
+          // its island ONLY through that gate stays out of scope.
+          islandNodes.link(nodes)
         }
         queueDef(`model:${libFile}:${model.subcktName.toLowerCase()}`, [modelCard])
         continue
@@ -950,22 +1106,26 @@ export function generateDeck(opts: GenerateOptions): string[] {
           // Create an internal node for the splice
           const spliceIntNode = `${ammName}_n`
           lines.push(`${ammName} ${spliceIntNode} ${spliceNode} DC 0`)
+          islandNodes.link([spliceIntNode, spliceNode])
 
           // Build node list using the splice for the designated pad
           const nodeList = buildSubcktNodeList(part, netIdToNode, pinMap, splicePad, spliceIntNode, subcktDef)
           const xName = `x_${part.ref.toLowerCase()}`
           lines.push(`${xName} ${nodeList} ${model.subcktName}`)
+          islandNodes.link(nodeList.split(' '))
         } else {
           // Can't identify splice pad — emit without ammeter
           lines.push(`* WARNING: current probe on ${res.ref} pad ${cp.pad ?? '?'} — node not found, ammeter not inserted`)
           const nodeList = buildSubcktNodeListPlain(part, netIdToNode, pinMap, subcktDef)
           const xName = `x_${part.ref.toLowerCase()}`
           lines.push(`${xName} ${nodeList} ${model.subcktName}`)
+          islandNodes.link(nodeList.split(' '))
         }
       } else {
         const nodeList = buildSubcktNodeListPlain(part, netIdToNode, pinMap, subcktDef)
         const xName = `x_${part.ref.toLowerCase()}`
         lines.push(`${xName} ${nodeList} ${model.subcktName}`)
+        islandNodes.link(nodeList.split(' '))
       }
       // Inline the .subckt definition once (if we have it), plus every subckt it
       // transitively instantiates (opamp_core inside the op-amps/comparators,
@@ -987,7 +1147,36 @@ export function generateDeck(opts: GenerateOptions): string[] {
       const xspice = expandXspiceDigital(res.ref, model, part, netIdToNode, modelIndex, templateFile)
       lines.push(...xspice.lines)
       if (xspice.expanded) anyXspiceExpanded = true
+      // Register each analog bridge terminal on its own (single-node cards):
+      // an adc input has no DC conductance, so a net touched ONLY by bridges is
+      // itself a floating island and needs a bleed.
+      for (const n of xspice.analogNodes) islandNodes.link([n])
       continue
+    }
+  }
+
+  // ── Floating-island bleed resistors (M8) ──────────────────────────────────
+  // Every connected component of the emitted element cards that has no path of
+  // ANY kind to node "0" is a structurally singular block (fresh `tran … uic`
+  // aborts on the first step — validated on the real lantern board, where open
+  // connector stubs strand two dangling resistors). Bleed EVERY net of each
+  // island to ground through 1 GΩ: per-net (not per-island) so capacitively
+  // linked islands are also non-singular at DC, and the overlay reads a defined
+  // 0 V. Names are index-based (r_float_1 …) NEVER node-derived — the
+  // convergence-culprit parser maps `<prefix>_<ref>`-shaped instance names back
+  // to parts, and a spice node embedded in the name (r_float__gauge_c3) would
+  // false-positive onto a refdes-like net segment (C3).
+  {
+    const islands = islandNodes.floatingIslands()
+    if (islands.length > 0) {
+      lines.push('* floating-island bleed resistors (no DC path to ground)')
+      let bleedIdx = 0
+      for (const island of islands) {
+        for (const node of island) {
+          bleedIdx++
+          lines.push(`r_float_${bleedIdx} ${node} 0 1e9`)
+        }
+      }
     }
   }
 
