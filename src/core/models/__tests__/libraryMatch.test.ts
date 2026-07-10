@@ -603,19 +603,24 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
     expect(res.status).toBe('unresolved')
   })
 
-  it('U2 value "LM339" on SOIC-14 → comparator-lm339 (LM393 cell, unit-1 pinMap)', async () => {
+  it('U2 value "LM339" on SOIC-14 → comparator-lm339 (LM339_QUAD wrapper, all four units mapped)', async () => {
     const part = makePart('U2', 'LM339', 'Package_SO:SOIC-14_3.9x8.7mm_P1.27mm')
     const circuit = makeCircuit([part])
     const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
     expect(res.tier).toBe(3)
     expect(res.status).toBe('ok')
     if (res.model?.kind === 'subckt') {
-      expect(res.model.subcktName).toBe('LM393')
-      expect(res.model.pinMap['5']).toBe('inp')
-      expect(res.model.pinMap['4']).toBe('inn')
-      expect(res.model.pinMap['2']).toBe('out')
+      expect(res.model.subcktName).toBe('LM339_QUAD')
+      // unit 1
+      expect(res.model.pinMap['5']).toBe('in1p')
+      expect(res.model.pinMap['4']).toBe('in1n')
+      expect(res.model.pinMap['2']).toBe('out1')
       expect(res.model.pinMap['3']).toBe('vcc')
       expect(res.model.pinMap['12']).toBe('vee')
+      // M11: units 2-4 are mapped too (previously unmapped)
+      expect(res.model.pinMap['7']).toBe('in2p')
+      expect(res.model.pinMap['9']).toBe('in3p')
+      expect(res.model.pinMap['13']).toBe('out4')
     }
   })
 

@@ -276,13 +276,13 @@ describe('bundled model library — Milestone 1 additions (JLC/KiCad-9 board cov
     expect(re.test('3V0_RAIL')).toBe(false)
   })
 
-  it('comparator-lm339 reuses the LM393 cell with the LM339 quad 14-pin pinMap (unit 1)', () => {
+  it('comparator-lm339 wires all four units via the LM339_QUAD wrapper (full 14-pin pinMap)', () => {
     const e = byId.get('comparator-lm339')
     expect(e, 'comparator-lm339 entry must exist').toBeDefined()
     expect(e!.model.type).toBe('subckt')
     expect(e!.model.file).toBe('opamp.lib')
-    // Same model cell as comparator-lm393 (open-collector dual comparator core).
-    expect(e!.model.name).toBe('LM393')
+    // M11: full quad wrapper (four LM393 open-collector cells sharing vcc/vee).
+    expect(e!.model.name).toBe('LM339_QUAD')
     for (const m of ['LM339', 'LM339D', 'LM2901', 'LM339N']) {
       expect(e!.match.mpn, `mpn list must include ${m}`).toContain(m)
     }
@@ -290,15 +290,17 @@ describe('bundled model library — Milestone 1 additions (JLC/KiCad-9 board cov
     // misresolved a CD4011 (quad NAND, SOP-14) as an LM393 on a real board.
     expect(e!.match.refdesPrefix).toBeUndefined()
     expect(e!.match.footprintRegex).toBeUndefined()
-    // Unit-1 map per the LM339 pinout: IN1+=5, IN1-=4, OUT1=2, VCC=3, GND=12.
+    // Full 14-pad map per the TI LM339 DIP/SOIC-14 datasheet pinout (all four
+    // units). Verified against the JLC-MCP-ICs:LM339 symbol pin names.
+    const fullMap = {
+      '1': 'out2', '2': 'out1', '3': 'vcc', '4': 'in1n', '5': 'in1p',
+      '6': 'in2n', '7': 'in2p', '8': 'in3n', '9': 'in3p', '10': 'in4n',
+      '11': 'in4p', '12': 'vee', '13': 'out4', '14': 'out3',
+    }
     const key = Object.keys(e!.pinMaps).find((k) => /14/.test(k))
     expect(key, '14-pin pinMap key must exist').toBeTruthy()
-    const map = e!.pinMaps[key!]
-    expect(map['5']).toBe('inp')
-    expect(map['4']).toBe('inn')
-    expect(map['2']).toBe('out')
-    expect(map['3']).toBe('vcc')
-    expect(map['12']).toBe('vee')
+    expect(e!.pinMaps[key!]).toEqual(fullMap)
+    expect(e!.defaultPinMap).toEqual(fullMap)
     // The footprint pattern must cover SOP-14 / SOIC-14 / TSSOP-14 / DIP-14.
     for (const fp of [
       'Package_SO:SOIC-14_3.9x8.7mm_P1.27mm',

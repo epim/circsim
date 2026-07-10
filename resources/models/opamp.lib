@@ -96,3 +96,16 @@ xc inp inn dec vcc vee opamp_core
 bsw out vee i = (v(dec) < ((v(vcc)+v(vee))/2)) ?
 + ((v(out)-v(vee))/40) : ((v(out)-v(vee))/1e9)
 .ends LM393
+
+* ---------------------------------------------------------------------------
+* LM339 / LM2901 QUAD COMPARATOR — full-package wrapper (M11).
+* Four instances of the LM393 open-collector behavioral cell above, sharing
+* vcc/vee. Terminal names match the comparator-lm339 pinMap values in
+* index.json. Every output is open-collector: an external pull-up is required
+* (with no pull-up the output pin floats — correct OC behavior).
+.subckt LM339_QUAD in1p in1n out1 in2p in2n out2 in3p in3n out3 in4p in4n out4 vcc vee
+x1 in1p in1n out1 vcc vee LM393
+x2 in2p in2n out2 vcc vee LM393
+x3 in3p in3n out3 vcc vee LM393
+x4 in4p in4n out4 vcc vee LM393
+.ends LM339_QUAD

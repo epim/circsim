@@ -402,13 +402,13 @@
       "match": {
         "mpn": ["LM339", "LM339D", "LM2901", "LM339N"]
       },
-      "model": { "type": "subckt", "file": "opamp.lib", "name": "LM393" },
-      "$comment": "Quad open-collector comparator — same behavioral cell as comparator-lm393 (subckt order inp inn out vcc vee). Unit 1 on a SOP/SOIC/TSSOP/DIP-14: 5(IN1+)/4(IN1-)/2(OUT1, open-collector), 3=VCC, 12=GND. Units 2-4 unmapped (same convention as the opamp-lm324 quad). External pull-up required. MPN/value matching only — a refdes/footprint fallback would silently claim any unknown 14-pin U part (e.g. a CD4011 in SOP-14). pinMaps keys are for pin mapping, not matching.",
+      "model": { "type": "subckt", "file": "opamp.lib", "name": "LM339_QUAD" },
+      "$comment": "Quad open-collector comparator — LM339_QUAD wrapper instantiates the LM393 behavioral cell four times sharing vcc/vee. Full 14-pad map per the TI DIP/SOIC-14 pinout: 1=OUT2 2=OUT1 3=VCC 4=IN1- 5=IN1+ 6=IN2- 7=IN2+ 8=IN3- 9=IN3+ 10=IN4- 11=IN4+ 12=GND 13=OUT4 14=OUT3. Outputs are open-collector — external pull-up required. MPN/value matching only — a refdes/footprint fallback would silently claim any unknown 14-pin U part (e.g. a CD4011 in SOP-14). pinMaps keys are for pin mapping, not matching.",
       "pinMaps": {
-        "(SOIC|DIP|TSSOP|SOP|SO)-?14.*": { "5": "inp", "4": "inn", "2": "out", "3": "vcc", "12": "vee" }
+        "(SOIC|DIP|TSSOP|SOP|SO)-?14.*": { "1": "out2", "2": "out1", "3": "vcc", "4": "in1n", "5": "in1p", "6": "in2n", "7": "in2p", "8": "in3n", "9": "in3p", "10": "in4n", "11": "in4p", "12": "vee", "13": "out4", "14": "out3" }
       },
-      "defaultPinMap": { "5": "inp", "4": "inn", "2": "out", "3": "vcc", "12": "vee" },
-      "provenance": "Behavioral comparator written for circsim from LM339/LM2901 datasheet (open-collector output, response time ~1.3us) — reuses the LM393 cell in opamp.lib, MIT."
+      "defaultPinMap": { "1": "out2", "2": "out1", "3": "vcc", "4": "in1n", "5": "in1p", "6": "in2n", "7": "in2p", "8": "in3n", "9": "in3p", "10": "in4n", "11": "in4p", "12": "vee", "13": "out4", "14": "out3" },
+      "provenance": "Behavioral quad comparator written for circsim from LM339/LM2901 datasheet (open-collector outputs, response time ~1.3us) — LM339_QUAD wrapper of four LM393 cells in opamp.lib; 14-pin pinout cross-checked against the JLC-MCP-ICs LM339 symbol, MIT."
     },
     {
       "id": "reg-7805",

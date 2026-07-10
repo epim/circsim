@@ -201,15 +201,22 @@ describe.skipIf(!haveLantern)('M8 — real lantern board (headers-only) deck con
     return makeLanternDeck(setup, setup.suggestedSupplyId)
   }
 
-  it('the generated deck bleeds the two stranded R38/R39 islands (per net)', () => {
+  it('the generated deck bleeds the remaining stranded nets — the R38/R39 islands now ride x_u5 (M11)', () => {
     const deck = buildLanternDeck()
     const bleedNodes = deck
       .filter((l) => l.startsWith('r_float_'))
       .map((l) => l.split(/\s+/)[1])
-    // The diagnosis found exactly two conductive islands, stranded by the
-    // off-board LED strings: {_led3_k,_gauge_c3} (r_r38) and {_led4_k,_gauge_c4}
-    // (r_r39). Every net of both islands must be bled.
+    // The original M8 diagnosis found the r_r38 {_led3_k,_gauge_c3} and r_r39
+    // {_led4_k,_gauge_c4} pairs stranded — but that was an artifact of the
+    // single-unit LM339 map: /GAUGE_C3 and /GAUGE_C4 are U5 comparator OUTPUTS
+    // (pads 14/13). With all four units wired (M11) those nets join the
+    // grounded component through the x_u5 card and must NOT be bled any more.
     for (const node of ['_led3_k', '_gauge_c3', '_led4_k', '_gauge_c4']) {
+      expect(bleedNodes, `no bleed for ${node} (attached via x_u5 since M11)`).not.toContain(node)
+    }
+    // Island detection itself stays live: the headers-only variant still has
+    // genuinely stranded nets (off-board LED1 string, unwired logic outputs).
+    for (const node of ['_led1_k', '_led1_drive']) {
       expect(bleedNodes, `bleed for ${node}`).toContain(node)
     }
     expect(deck).toContain('* floating-island bleed resistors (no DC path to ground)')
@@ -249,6 +256,26 @@ describe.skipIf(!haveLantern)('M8 — real lantern board (headers-only) deck con
     expect(text).toContain('.model dacm_u8 dac_bridge(out_low=0 out_high=12.0000)')
     // No part on this board qualifies for supply-derived vHigh.
     expect(text).not.toContain('vhigh:')
+  })
+
+  it('M11: U5 (LM339) resolves to the LM339_QUAD wrapper with all four units wired (14 nodes on x_u5)', () => {
+    const setup = loadLantern()
+    const u5 = setup.resolutions.find((r) => r.ref === 'U5')
+    expect(u5, 'U5 must have a resolution').toBeDefined()
+    expect(u5!.status).toBe('ok')
+    expect(u5!.model?.kind).toBe('subckt')
+    if (u5!.model?.kind === 'subckt') {
+      expect(u5!.model.subcktName).toBe('LM339_QUAD')
+    }
+    const deck = makeLanternDeck(setup, setup.suggestedSupplyId)
+    const xLine = deck.find((l) => l.startsWith('x_u5'))
+    expect(xLine, 'deck must carry an x_u5 card').toBeDefined()
+    // x_u5 <14 node tokens> LM339_QUAD — all four units wired to board nets
+    // (pre-M11 the LM393 single-unit map produced only 5 nodes here). Specific
+    // net names are deliberately NOT asserted.
+    const tokens = xLine!.trim().split(/\s+/)
+    expect(tokens[tokens.length - 1]).toBe('LM339_QUAD')
+    expect(tokens.length - 2, `x_u5 node count (card: ${xLine})`).toBe(14)
   })
 
   it('the full-board fresh tran-uic (the app flow that used to abort) produces data rows', async () => {

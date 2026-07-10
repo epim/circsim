@@ -1565,6 +1565,75 @@ describe('generateDeck — power-path MOSFETs from the real bundled mosfet.lib',
   })
 })
 
+// ─── M11: LM339 quad comparator from the real bundled opamp.lib ───────────────
+
+describe('generateDeck — LM339 quad comparator from the real bundled opamp.lib', () => {
+  // Reads the actual resources/models/opamp.lib so it validates the shipped
+  // LM339_QUAD wrapper (not a hand-rolled copy), like the mosfet.lib tests.
+  const REAL_OPAMP_LIB = readFileSync(join(process.cwd(), 'resources', 'models', 'opamp.lib'), 'utf8')
+  const modelTexts = { 'opamp.lib': REAL_OPAMP_LIB }
+
+  test('LM339 on SOP-14: x_ card carries all 14 nets in wrapper-terminal order + 3-deep transitive inlining', () => {
+    // A synthetic quad comparator with every pad on a named net, wired per the
+    // TI LM339 DIP/SOIC-14 pinout (the comparator-lm339 pinMap).
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'C1P', spiceNode: 'c1p', padRefs: [] },
+      { id: 2, kicadName: 'C1N', spiceNode: 'c1n', padRefs: [] },
+      { id: 3, kicadName: 'O1', spiceNode: 'o1', padRefs: [] },
+      { id: 4, kicadName: 'C2P', spiceNode: 'c2p', padRefs: [] },
+      { id: 5, kicadName: 'C2N', spiceNode: 'c2n', padRefs: [] },
+      { id: 6, kicadName: 'O2', spiceNode: 'o2', padRefs: [] },
+      { id: 7, kicadName: 'C3P', spiceNode: 'c3p', padRefs: [] },
+      { id: 8, kicadName: 'C3N', spiceNode: 'c3n', padRefs: [] },
+      { id: 9, kicadName: 'O3', spiceNode: 'o3', padRefs: [] },
+      { id: 10, kicadName: 'C4P', spiceNode: 'c4p', padRefs: [] },
+      { id: 11, kicadName: 'C4N', spiceNode: 'c4n', padRefs: [] },
+      { id: 12, kicadName: 'O4', spiceNode: 'o4', padRefs: [] },
+      { id: 13, kicadName: 'VCC', spiceNode: 'vcc', padRefs: [] },
+      { id: 14, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const u1: Part = {
+      ref: 'U1', value: 'LM339', libId: 'Package_SO:SOP-14_3.9x8.7mm_P1.27mm', layer: 'F',
+      // DIP/SOIC-14: 1=OUT2 2=OUT1 3=VCC 4=IN1- 5=IN1+ 6=IN2- 7=IN2+
+      //              8=IN3- 9=IN3+ 10=IN4- 11=IN4+ 12=GND 13=OUT4 14=OUT3
+      padNet: new Map([
+        ['1', 6], ['2', 3], ['3', 13], ['4', 2], ['5', 1], ['6', 5], ['7', 4],
+        ['8', 8], ['9', 7], ['10', 11], ['11', 10], ['12', 14], ['13', 12], ['14', 9],
+      ]),
+      properties: {},
+    }
+    const resolutions: Resolution[] = [
+      {
+        ref: 'U1', status: 'ok', tier: 3, warnings: [],
+        model: {
+          kind: 'subckt', libFile: 'opamp.lib', subcktName: 'LM339_QUAD',
+          pinMap: {
+            '1': 'out2', '2': 'out1', '3': 'vcc', '4': 'in1n', '5': 'in1p',
+            '6': 'in2n', '7': 'in2p', '8': 'in3n', '9': 'in3p', '10': 'in4n',
+            '11': 'in4p', '12': 'vee', '13': 'out4', '14': 'out3',
+          },
+        },
+      },
+    ]
+    const deck = generateDeck({
+      circuit: { nets, parts: [u1], warnings: [] },
+      resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 14 }],
+      groundNetId: 14,
+      modelTexts,
+    })
+    // All 14 nets, in the wrapper's DECLARED terminal order
+    // (in1p in1n out1 … in4p in4n out4 vcc vee) — every unit wired.
+    const xLine = deck.find(l => l.startsWith('x_u1'))
+    expect(xLine).toBe('x_u1 c1p c1n o1 c2p c2n o2 c3p c3n o3 c4p c4n o4 vcc 0 LM339_QUAD')
+    // Transitive inlining, 3 levels deep: wrapper → LM393 cell → opamp_core.
+    expect(deck.filter(l => /^\.subckt LM339_QUAD\b/i.test(l)).length).toBe(1)
+    expect(deck.filter(l => /^\.subckt LM393\b/i.test(l)).length).toBe(1)
+    expect(deck.filter(l => /^\.subckt opamp_core\b/i.test(l)).length).toBe(1)
+    expect(deck.join('\n')).not.toContain('.include')
+  })
+})
+
 // ─── M8: floating-island bleed resistors ──────────────────────────────────────
 
 describe('generateDeck — floating-island bleed resistors (M8)', () => {

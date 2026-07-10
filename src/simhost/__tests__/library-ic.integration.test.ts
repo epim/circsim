@@ -218,10 +218,13 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
       // A minimal bias deck per class. All subckts get rails + a probe load.
       let deck: string[]
       const name = e.model.name
-      if (e.model.file === 'opamp.lib' && name !== 'LM393') {
+      if (e.model.file === 'opamp.lib' && name !== 'LM393' && name !== 'LM339_QUAD') {
         deck = ['* op', 'vcc vcc 0 dc 12', 'vin in 0 dc 6', `x1 in out out vcc 0 ${name}`, ...lib, '.op', '.end']
       } else if (name === 'LM393') {
         deck = ['* cmp', 'vcc vcc 0 dc 5', 'rpu vcc out 10k', 'vp p 0 dc 3', 'vn n 0 dc 1', `x1 p n out vcc 0 ${name}`, ...lib, '.op', '.end']
+      } else if (name === 'LM339_QUAD') {
+        // 14-terminal quad wrapper: drive all four units the same way as LM393.
+        deck = ['* quad cmp', 'vcc vcc 0 dc 5', 'vp p 0 dc 3', 'vn n 0 dc 1', 'rpu1 vcc out1 10k', 'rpu2 vcc out2 10k', 'rpu3 vcc out3 10k', 'rpu4 vcc out4 10k', `x1 p n out1 p n out2 p n out3 p n out4 vcc 0 ${name}`, ...lib, '.op', '.end']
       } else if (e.model.file === 'regulators.lib') {
         deck = ['* reg', 'vin vin 0 dc 15', `x1 vin 0 vout ${name}`, 'rl vout 0 200', ...lib, '.op', '.end']
       } else if (e.model.file === 'mosfet.lib') {
@@ -262,6 +265,40 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     console.log(`\n[LM358 follower] in=4.20 out=${r.v['out']?.toFixed(4)}V (err=${(Math.abs(r.v['out'] - 4.2)).toFixed(4)}V)\n`)
     expect(r.errs).toEqual([])
     expect(r.v['out']).toBeCloseTo(4.2, 1)
+  }, 60_000)
+
+  it('LM339_QUAD: all four comparator units decide independently in one op (M11)', async () => {
+    // One quad instance, 5 V rail, 10k pull-ups on every output. Units 1 and 3
+    // see in+ (3V) > in- (1V) → open-collector transistor OFF → the pull-up
+    // releases the output to ~5 V. Units 2 and 4 see in+ (1V) < in- (3V) →
+    // the output is pulled to vee (Vol(sat) well under 0.3 V through the 40 Ω
+    // behavioral pulldown). Distinct per-unit decisions prove all four LM393
+    // cells inside the wrapper are independent (not aliased to unit 1).
+    const deck = [
+      '* LM339_QUAD — units 1&3 released high, units 2&4 pulled low',
+      'vcc vcc 0 dc 5',
+      'vhi hi 0 dc 3',
+      'vlo lo 0 dc 1',
+      'rpu1 vcc out1 10k',
+      'rpu2 vcc out2 10k',
+      'rpu3 vcc out3 10k',
+      'rpu4 vcc out4 10k',
+      'x1 hi lo out1 lo hi out2 hi lo out3 lo hi out4 vcc 0 LM339_QUAD',
+      ...opampLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    // eslint-disable-next-line no-console
+    console.log(
+      `\n[LM339_QUAD] out1=${r.v['out1']?.toFixed(4)}V out2=${r.v['out2']?.toFixed(4)}V ` +
+        `out3=${r.v['out3']?.toFixed(4)}V out4=${r.v['out4']?.toFixed(4)}V (expect ~5, <0.3, ~5, <0.3)\n`
+    )
+    expect(r.errs).toEqual([])
+    expect(r.v['out1']).toBeGreaterThan(4.5)
+    expect(r.v['out3']).toBeGreaterThan(4.5)
+    expect(r.v['out2']).toBeLessThan(0.3)
+    expect(r.v['out4']).toBeLessThan(0.3)
   }, 60_000)
 
   it('TL431 shunt reference: cathode-ref tied + 1k pullup from 5V regulates near 2.495V', async () => {
