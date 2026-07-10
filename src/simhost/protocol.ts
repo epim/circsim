@@ -38,10 +38,13 @@ export type SimEvent =
   | { type: 'vectors'; names: string[] } // vector list after run starts
   | { type: 'samples'; vectorNames: string[]; columns: Float64Array[]; simTime: Float64Array }
   // batched: flushed every 16 ms or 4096 points, whichever first
-  | { type: 'opResult'; values: Record<string, number> }
+  | { type: 'opResult'; values: Record<string, number>; method?: OpSolveMethod }
   // KEY FORMAT (normative): node voltages keyed by the bare lowercase SPICE node name
   // ("out", never "v(out)" or "OUT"); source/device currents keyed "i(<device>)".
   // SimHost normalizes whatever vector names ngspice returns into this format.
+  // `method` (ADDITIVE, optional for backward compatibility) names how the
+  // operating point was obtained — see OpSolveMethod. Absent ⇒ unknown (treated
+  // as a direct solve by consumers).
   | {
       type: 'acResult'
       freq: Float64Array
@@ -51,6 +54,24 @@ export type SimEvent =
   | { type: 'benchRestarted'; reason: 'window-elapsed' | 'memory' } // see §7.5 bench windows
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string } // ngspice stdout/stderr lines
   | { type: 'convergenceFailure'; detail: string }
+
+// ─── op solve method (Spec §8.8 retry ladder — additive extension) ───────────
+
+/**
+ * How a DC operating point was obtained (Spec §8.8 retry ladder + ngspice's own
+ * internal fallbacks):
+ *   - 'direct'        plain `op` converged with no fallback chatter
+ *   - 'gmin'          converged only via gmin stepping
+ *   - 'source'        converged only via source stepping (gmin failed first)
+ *   - 'tran-fallback' converged only via ngspice's transient-op fallback
+ *                     (OPTRAN — both gmin and source stepping failed)
+ *   - 'failed'        no rung converged; the reported values are the last
+ *                     attempt's and are NOT trustworthy
+ * Anything but 'direct' means the voltages may be unreliable (a fallback solve
+ * frequently reports 0.000 V on nets it could not really resolve) — the
+ * renderer surfaces a visible caveat for those.
+ */
+export type OpSolveMethod = 'direct' | 'gmin' | 'source' | 'tran-fallback' | 'failed'
 
 // ─── opResult key normalization helpers (Spec §6.1) ──────────────────────────
 

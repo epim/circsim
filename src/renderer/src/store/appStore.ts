@@ -49,7 +49,8 @@ import type { CriticReport, Finding, OpResult } from '../../../core/critic/types
 
 import type { SimClient } from '../ipc/simClient'
 import { splitPath, type ReadFileFn } from '../ipc/fileOpen'
-import { normalizeVectorKey, type SimCommand, type SimEvent } from '../../../simhost/protocol'
+import { normalizeVectorKey, type OpSolveMethod, type SimCommand, type SimEvent } from '../../../simhost/protocol'
+import { parseConvergenceCulprit, type ConvergenceCulprit } from './convergenceCulprit'
 import { createRingBuffer, feedSamples, type RingBuffer } from '../scope/ringBuffer'
 import { scopeSamplesEmitter } from '../scope/sampleEmitter'
 
@@ -113,6 +114,31 @@ export function fidelityBannerItems(resolutions: Resolution[]): FidelityBannerIt
 /** True when any resolution is an xspice-digital part (sequential-logic caveat). */
 export function hasDigitalParts(resolutions: Resolution[]): boolean {
   return resolutions.some(r => r.model?.kind === 'xspice-digital')
+}
+
+// ─── op fallback caveat (F1 — Spec §12 honesty surfaces) ─────────────────────────
+
+/**
+ * Plain-language banner text for an operating point that converged only via a
+ * fallback rung (or not at all). Names the rung explicitly so the user knows
+ * WHY the numbers are suspect — a fallback solve frequently reports 0.000 V on
+ * nets it could not really resolve.
+ */
+export function opCaveatMessage(method: Exclude<OpSolveMethod, 'direct'>): string {
+  const unreliable = 'Voltages may be unreliable — especially 0.000 V readings.'
+  switch (method) {
+    case 'gmin':
+      return `Operating point found via fallback (gmin stepping — the direct solve did not converge). ${unreliable}`
+    case 'source':
+      return `Operating point found via fallback (source stepping — gmin stepping failed). ${unreliable}`
+    case 'tran-fallback':
+      return `Operating point found via fallback (transient-op — gmin and source stepping both failed). ${unreliable}`
+    case 'failed':
+      return (
+        'The operating point did not converge at all — the displayed voltages ' +
+        'come from the last failed attempt and should not be trusted.'
+      )
+  }
 }
 
 /**
@@ -311,8 +337,25 @@ export interface AppState {
     plainLanguage: string
     retryLadderNote: string
     rawDetail: string
+    /**
+     * The part/net ngspice named in its abort text ("trouble with
+     * <model>-instance m_q7" / "trouble with node <n>"), mapped back to the
+     * human refdes / net name. null when the raw text names nothing we can map.
+     */
+    culprit: ConvergenceCulprit | null
     at: number
   } | null
+
+  /**
+   * Caveat for an operating point that converged only via a fallback rung
+   * (gmin stepping / source stepping / ngspice's transient-op fallback) — or
+   * not at all ('failed'). A fallback solve frequently reports 0.000 V on nets
+   * it could not really resolve, so the UI shows a persistent warning banner
+   * while this is set (F1 trust fix). null after a direct solve, after an
+   * opResult from an older SimHost that doesn't report `method`, or when no op
+   * has run.
+   */
+  opCaveat: { method: Exclude<OpSolveMethod, 'direct'>; at: number } | null
 
   // ── actions ────────────────────────────────────────────────────────────────
   /** Parse + extract + resolve a board from raw .kicad_pcb text. */
@@ -625,6 +668,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     crashNotice: null,
     benchRestartToast: null,
     convergenceCard: null,
+    opCaveat: null,
 
     // ── open flow ────────────────────────────────────────────────────────────
     openBoardFromText(boardText, fileName, opts) {
@@ -650,6 +694,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         logLines: [],
         benchRestartToast: null,
         convergenceCard: null,
+        opCaveat: null,
         vectorNames: [],
         simTimeSeconds: 0,
         achievedRealtimeFactor: null,
@@ -1062,7 +1107,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         modelTexts: buildDeckModelTexts(get()),
       })
 
-      set({ simState: 'op', convergenceCard: null })
+      set({ simState: 'op', convergenceCard: null, opCaveat: null })
       simClient.send({ type: 'loadCircuit', deckLines })
       simClient.send({ type: 'runOp' })
 
@@ -1359,7 +1404,15 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
               resolutions,
             ),
           )
-          set({ opVoltages, voltageRange, currentsByRef, coachNotes })
+          // Honesty surface (F1): an op that converged only via a fallback rung
+          // (or not at all) gets a persistent caveat banner — its voltages,
+          // especially 0.000 V readings, may be unreliable. An absent `method`
+          // (older SimHost) is treated as direct.
+          const opCaveat =
+            event.method && event.method !== 'direct'
+              ? { method: event.method, at: Date.now() }
+              : null
+          set({ opVoltages, voltageRange, currentsByRef, coachNotes, opCaveat })
           // Keep the board in sync after a replayed/standalone op too.
           applyOpToBoard(boardHooks, opVoltages, voltageRange)
           // Re-audit with the fresh op result (ampacity/thermal get real data).
@@ -1398,6 +1451,16 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
               retryLadderNote:
                 'circsim already retried with gmin-stepping and source-stepping before reporting this.',
               rawDetail: event.detail,
+              // Name the culprit part/net when ngspice's abort text carries one
+              // ("trouble with mpmos_gen-instance m_q7" → Q7) — F2. One abort
+              // can emit several matching lines and only one of them names the
+              // culprit; a later culprit-less line must not wipe an earlier
+              // identification, so keep the previous card's culprit when this
+              // event's text parses to nothing.
+              culprit:
+                parseConvergenceCulprit(event.detail, get().circuit) ??
+                get().convergenceCard?.culprit ??
+                null,
               at: Date.now(),
             },
           })

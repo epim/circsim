@@ -18,6 +18,7 @@
 
 import React, { useEffect, useRef } from 'react'
 import { createSceneManager, type SceneManager } from './scene'
+import { formatVolts } from './markers'
 import type { PickEvent } from './picking'
 import type { OverlayMode } from './overlay'
 import type { BoardModel } from '../../../core/kicad/types'
@@ -216,7 +217,8 @@ export default function Viewport({
               data-net-id={netId}
               data-testid="op-annotation"
             >
-              {volts.toFixed(3)} V
+              {/* Same formatter as the 3D labels — normalizes -0.000 V (F5). */}
+              {formatVolts(volts)}
             </span>
           ))}
         </div>

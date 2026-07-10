@@ -5,8 +5,12 @@
  *   - Fidelity banner: persistent + non-dismissable whenever any Resolution
  *     status !== 'ok'. Lists every stubbed/unresolved ref + its mode. Links to
  *     the "what circsim can tell you" fidelity doc.
- *   - Convergence-failure card: plain-language explanation + the retry-ladder
- *     note + an expandable raw ngspice log section. Dismissable.
+ *   - Convergence-failure card: plain-language explanation + the culprit
+ *     part/net (when ngspice's abort text names one) + the retry-ladder note +
+ *     an expandable raw ngspice log section. Dismissable.
+ *   - Op fallback caveat: persistent + non-dismissable while the latest
+ *     operating point came from a fallback rung (gmin/source/transient-op) —
+ *     its voltages, especially 0.000 V readings, may be unreliable (F1).
  *   - Bench-restart toast: brief "bench restarted" notice (window/memory), with
  *     the sequential-logic caveat when digital parts are present. Dismissable.
  *   - Crash toast: SimHost crashed — auto-recovering. Dismissable.
@@ -17,7 +21,7 @@
 
 import React, { useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
-import { fidelityBannerItems } from '../store/appStore'
+import { fidelityBannerItems, opCaveatMessage } from '../store/appStore'
 
 export default function WarningsBar(): React.ReactElement | null {
   const store = useAppStoreApi()
@@ -25,11 +29,13 @@ export default function WarningsBar(): React.ReactElement | null {
   const convergenceCard = useApp(s => s.convergenceCard)
   const benchToast = useApp(s => s.benchRestartToast)
   const crashNotice = useApp(s => s.crashNotice)
+  const opCaveat = useApp(s => s.opCaveat)
 
   const fidelity = fidelityBannerItems(resolutions)
   const [rawOpen, setRawOpen] = useState(false)
 
-  const anything = fidelity.length > 0 || convergenceCard || benchToast || crashNotice
+  const anything =
+    fidelity.length > 0 || convergenceCard || benchToast || crashNotice || opCaveat
   if (!anything) return null
 
   return (
@@ -77,6 +83,17 @@ export default function WarningsBar(): React.ReactElement | null {
             </button>
           </div>
           <div style={{ marginTop: 4 }}>{convergenceCard.plainLanguage}</div>
+          {convergenceCard.culprit && (
+            <div style={{ marginTop: 4 }} data-testid="convergence-culprit">
+              The simulator reported trouble converging around{' '}
+              <span style={refStyle}>
+                {convergenceCard.culprit.kind === 'net'
+                  ? `net "${convergenceCard.culprit.label}"`
+                  : convergenceCard.culprit.label}
+              </span>
+              {convergenceCard.culprit.detail ? ` (${convergenceCard.culprit.detail})` : ''}.
+            </div>
+          )}
           <div style={{ marginTop: 4, color: '#caa', fontStyle: 'italic' }}>
             {convergenceCard.retryLadderNote}
           </div>
@@ -84,6 +101,13 @@ export default function WarningsBar(): React.ReactElement | null {
             {rawOpen ? '▾ Hide raw log' : '▸ Show raw ngspice log'}
           </button>
           {rawOpen && <pre style={rawLogStyle}>{convergenceCard.rawDetail}</pre>}
+        </div>
+      )}
+
+      {/* ── Op fallback caveat (persistent, non-dismissable — F1) ─────────── */}
+      {opCaveat && (
+        <div style={opCaveatStyle} data-testid="op-caveat">
+          <strong>Check these voltages.</strong> {opCaveatMessage(opCaveat.method)}
         </div>
       )}
 
@@ -141,6 +165,12 @@ const fidelityStyle: React.CSSProperties = {
   background: '#3a2e12',
   color: '#fde9b0',
   borderTop: '1px solid #5a4a22',
+}
+const opCaveatStyle: React.CSSProperties = {
+  ...baseRow,
+  background: '#3a2a10',
+  color: '#ffd9a0',
+  borderTop: '1px solid #5a4418',
 }
 const convergeStyle: React.CSSProperties = {
   ...baseRow,

@@ -14,7 +14,7 @@
 
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { join } from 'path'
-import { readFile } from 'fs/promises'
+import { readFile, stat } from 'fs/promises'
 import { createProductionSupervisor, unwrapPort } from './simhostSupervisor'
 
 /** Shape of resources/models/index.json (only the fields we read here). */
@@ -104,6 +104,22 @@ function registerIpcHandlers(): void {
   ipcMain.handle('circsim:readFile', async (_event, filePath: string) => {
     const buf = await readFile(filePath)
     return buf.toString('utf8')
+  })
+
+  /**
+   * True when `filePath` exists and is a regular file (stat-based, never
+   * throws). The renderer uses this to probe OPTIONAL sidecar files (sibling
+   * .kicad_sch, BOM) before reading them, so a missing sidecar doesn't spray an
+   * "Error occurred in handler for 'circsim:readFile'" ENOENT stack into the
+   * main-process log on every board open. Required files are still read
+   * directly and error loudly.
+   */
+  ipcMain.handle('circsim:fileExists', async (_event, filePath: string) => {
+    try {
+      return (await stat(filePath)).isFile()
+    } catch {
+      return false
+    }
   })
 
   /** Return platform path information. */

@@ -11,6 +11,7 @@
  *   window.circsim = {
  *     openFileDialog(opts)            → open-dialog result (paths + cancelled flag)
  *     readFile(path)                  → UTF-8 file contents as string
+ *     fileExists(path)                → true when the path is an existing regular file
  *     getSimPort()                    → Promise<MessagePort>  (the SimHost port2)
  *     onSimhostCrashed(cb)            → register crash callback ({ willRespawn })
  *     platformPaths()                 → { platform, resourcesPath, appPath, userData }
@@ -140,6 +141,15 @@ contextBridge.exposeInMainWorld('circsim', {
    */
   readFile: async (filePath: string): Promise<string> => {
     return ipcRenderer.invoke('circsim:readFile', filePath) as Promise<string>
+  },
+
+  /**
+   * True when the path exists and is a regular file. Stat-based and non-throwing
+   * — used to probe optional sidecar files (sibling .kicad_sch, BOM) before
+   * reading, so a missing sidecar never logs an ENOENT stack in main.
+   */
+  fileExists: async (filePath: string): Promise<boolean> => {
+    return ipcRenderer.invoke('circsim:fileExists', filePath) as Promise<boolean>
   },
 
   /**

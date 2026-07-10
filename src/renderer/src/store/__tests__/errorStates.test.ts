@@ -21,6 +21,7 @@ import { join } from 'path'
 import {
   createAppStore,
   fidelityBannerItems,
+  opCaveatMessage,
   type AppStore,
 } from '../appStore'
 import { createMockSimClient, type MockSimClient } from '../../ipc/simClient'
@@ -236,6 +237,79 @@ describe('Spec §12 — convergence-failure card wording', () => {
     expect(store.getState().convergenceCard).not.toBeNull()
     store.getState().dismissConvergenceCard()
     expect(store.getState().convergenceCard).toBeNull()
+  })
+})
+
+// ─── 4b. Op fallback caveat (F1 — fallback solves must not read as truth) ────
+
+describe('F1 — opResult.method drives the op fallback caveat', () => {
+  let store: AppStore
+  let mock: MockSimClient
+
+  beforeEach(() => {
+    mock = createMockSimClient()
+    store = createAppStore({ simClient: mock })
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+  })
+
+  it('an opResult from a fallback rung sets opCaveat with the rung named', () => {
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 0 }, method: 'source' })
+    const caveat = store.getState().opCaveat
+    expect(caveat).not.toBeNull()
+    expect(caveat!.method).toBe('source')
+  })
+
+  it('a tran-fallback opResult sets opCaveat method "tran-fallback"', () => {
+    mock.emit({ type: 'opResult', values: { vin: 0, out: 0 }, method: 'tran-fallback' })
+    expect(store.getState().opCaveat!.method).toBe('tran-fallback')
+  })
+
+  it('a direct solve clears any previous caveat', () => {
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 0 }, method: 'gmin' })
+    expect(store.getState().opCaveat).not.toBeNull()
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 }, method: 'direct' })
+    expect(store.getState().opCaveat).toBeNull()
+  })
+
+  it('backward compatibility: an opResult WITHOUT method leaves no caveat', () => {
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+    expect(store.getState().opCaveat).toBeNull()
+  })
+
+  it('a fallback opResult still applies its voltages (caveat, not censorship)', () => {
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 0 }, method: 'gmin' })
+    expect(store.getState().opVoltages).not.toBeNull()
+  })
+
+  it('powerOn clears a stale caveat before the new solve lands', async () => {
+    mock.emit({ type: 'opResult', values: { vin: 0 }, method: 'tran-fallback' })
+    expect(store.getState().opCaveat).not.toBeNull()
+
+    const vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
+    store.getState().addInstrument({ kind: 'dc-supply', id: 'psu1', netId: vinId, volts: 5, seriesOhms: 0.1 })
+    const p = store.getState().powerOn()
+    expect(store.getState().opCaveat).toBeNull() // cleared at solve start
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 }, method: 'direct' })
+    await p
+    expect(store.getState().opCaveat).toBeNull()
+  })
+
+  it('opening a new board clears the caveat', () => {
+    mock.emit({ type: 'opResult', values: { vin: 0 }, method: 'failed' })
+    expect(store.getState().opCaveat).not.toBeNull()
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+    expect(store.getState().opCaveat).toBeNull()
+  })
+
+  it('opCaveatMessage names the rung and warns about 0.000 V readings', () => {
+    expect(opCaveatMessage('gmin')).toMatch(/gmin stepping/)
+    expect(opCaveatMessage('source')).toMatch(/source stepping/)
+    expect(opCaveatMessage('tran-fallback')).toMatch(/transient-op/)
+    for (const m of ['gmin', 'source', 'tran-fallback'] as const) {
+      expect(opCaveatMessage(m)).toMatch(/fallback/)
+      expect(opCaveatMessage(m)).toMatch(/0\.000 V/)
+    }
+    expect(opCaveatMessage('failed')).toMatch(/not be trusted/)
   })
 })
 

@@ -16,7 +16,7 @@
  * Pure React over the store; validated by build + Phase 6 E2E.
  */
 
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
 import type { Resolution, PinMap } from '../../../core/models/types'
 import type { Part } from '../../../core/netlist/extract'
@@ -31,6 +31,18 @@ export interface ModelDoctorHandlers {
   onImportLib?: (ref: string) => void
   /** Copy an LLM prompt for a part to the clipboard (Task 25). */
   onAskLlm?: (ref: string) => void
+}
+
+/**
+ * Reveal a Doctor card that just became the store selection (selection sync:
+ * clicking a part row / board part scrolls its card into view). Defensive
+ * about the element and the method: jsdom (and detached nodes) may not have
+ * scrollIntoView. Exported for unit tests.
+ */
+export function _revealDoctorCard(
+  el: { scrollIntoView?: (opts?: ScrollIntoViewOptions) => void } | null,
+): void {
+  el?.scrollIntoView?.({ block: 'nearest' })
 }
 
 export default function ModelDoctor(props: ModelDoctorHandlers): React.ReactElement | null {
@@ -72,12 +84,21 @@ function DoctorRow({
 }: { res: Resolution; part: Part } & ModelDoctorHandlers): React.ReactElement {
   const store = useAppStoreApi()
   const schematicSimData = useApp(s => s.schematicSimData)
+  const selectedRef = useApp(s => s.selectedRef)
   const [pinEditorOpen, setPinEditorOpen] = useState(false)
   const [showLlmAssist, setShowLlmAssist] = useState(false)
   const [showLibImport, setShowLibImport] = useState(false)
   const [forcePinMapOpen, setForcePinMapOpen] = useState(false)
 
   const isStubbed = res.status === 'stubbed'
+
+  // Selection sync (F4): when this part becomes the store selection (part row /
+  // board click), scroll its card into view and highlight it.
+  const isSelected = selectedRef === res.ref
+  const cardRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (isSelected) _revealDoctorCard(cardRef.current)
+  }, [isSelected])
 
   // Build padList from part.padNet + schematic pin names for LlmAssist/LibImport.
   const padList: PadInfo[] = useMemo(() => {
@@ -170,7 +191,12 @@ function DoctorRow({
   }
 
   return (
-    <div style={rowStyle} data-ref={res.ref}>
+    <div
+      ref={cardRef}
+      style={isSelected ? { ...rowStyle, ...rowSelectedStyle } : rowStyle}
+      data-ref={res.ref}
+      data-selected={isSelected || undefined}
+    >
       <div style={rowHeaderStyle}>
         <span style={{ ...pillStyle, background: isStubbed ? '#f1c40f' : '#e74c3c' }}>
           {isStubbed ? 'stubbed' : 'no model'}
@@ -381,6 +407,12 @@ const rowStyle: React.CSSProperties = {
   marginBottom: 6,
   background: '#241a2c',
   borderRadius: 6,
+}
+/** Highlight for the card of the currently selected part (selection sync, F4). */
+const rowSelectedStyle: React.CSSProperties = {
+  background: '#332345',
+  outline: '2px solid #f1c40f',
+  outlineOffset: -2,
 }
 const rowHeaderStyle: React.CSSProperties = {
   display: 'flex',

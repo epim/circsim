@@ -85,3 +85,82 @@ describe('fileOpen — openProjectFromPath', () => {
     expect(opened.bomText).toContain('R1')
   })
 })
+
+// ─── F3: probe optional sidecars via fileExists — never readFile a missing one ─
+
+describe('fileOpen — fileExists probing (F3, no ENOENT stack on board open)', () => {
+  /** readFile stub that records every path it was asked for. */
+  function trackingReadFile(files: Record<string, string>): {
+    readFile: (path: string) => Promise<string>
+    reads: string[]
+  } {
+    const reads: string[] = []
+    return {
+      reads,
+      readFile: async (path: string): Promise<string> => {
+        reads.push(path)
+        if (path in files) return files[path]
+        throw new Error(`ENOENT: ${path}`)
+      },
+    }
+  }
+
+  it('missing sibling schematic: readFile is NEVER called for it', async () => {
+    const { readFile, reads } = trackingReadFile({ '/p/proj.kicad_pcb': '(board)' })
+    const fileExists = async (path: string): Promise<boolean> => path === '/p/proj.kicad_pcb'
+
+    const opened = await openProjectFromPath('/p/proj.kicad_pcb', readFile, undefined, fileExists)
+    expect(opened.boardText).toBe('(board)')
+    expect(opened.schematicText).toBeUndefined()
+    // The whole point of F3: no probe-by-read on the optional sidecar.
+    expect(reads).toEqual(['/p/proj.kicad_pcb'])
+  })
+
+  it('existing sibling schematic is still read and attached', async () => {
+    const { readFile } = trackingReadFile({
+      '/p/proj.kicad_pcb': '(board)',
+      '/p/proj.kicad_sch': '(sch)',
+    })
+    const fileExists = async (): Promise<boolean> => true
+
+    const opened = await openProjectFromPath('/p/proj.kicad_pcb', readFile, undefined, fileExists)
+    expect(opened.schematicText).toBe('(sch)')
+    expect(opened.schematicFileName).toBe('proj.kicad_sch')
+  })
+
+  it('missing optional BOM: readFile is never called for it either', async () => {
+    const { readFile, reads } = trackingReadFile({ '/p/proj.kicad_pcb': '(board)' })
+    const fileExists = async (path: string): Promise<boolean> => path === '/p/proj.kicad_pcb'
+
+    const opened = await openProjectFromPath('/p/proj.kicad_pcb', readFile, '/p/bom.csv', fileExists)
+    expect(opened.bomText).toBeUndefined()
+    expect(reads).toEqual(['/p/proj.kicad_pcb'])
+  })
+
+  it('a missing REQUIRED board file still errors loudly, even with fileExists injected', async () => {
+    const { readFile } = trackingReadFile({})
+    const fileExists = async (): Promise<boolean> => false
+    await expect(
+      openProjectFromPath('/p/missing.kicad_pcb', readFile, undefined, fileExists),
+    ).rejects.toThrow(/ENOENT/)
+  })
+
+  it('a throwing fileExists probe falls back to the read attempt (never hides a file)', async () => {
+    const { readFile } = trackingReadFile({
+      '/p/proj.kicad_pcb': '(board)',
+      '/p/proj.kicad_sch': '(sch)',
+    })
+    const fileExists = async (): Promise<boolean> => {
+      throw new Error('stat unavailable')
+    }
+    const opened = await openProjectFromPath('/p/proj.kicad_pcb', readFile, undefined, fileExists)
+    expect(opened.schematicText).toBe('(sch)')
+  })
+
+  it('legacy callers without fileExists keep the probe-by-read behavior', async () => {
+    const { readFile, reads } = trackingReadFile({ '/p/proj.kicad_pcb': '(board)' })
+    const opened = await openProjectFromPath('/p/proj.kicad_pcb', readFile)
+    expect(opened.schematicText).toBeUndefined()
+    expect(reads).toContain('/p/proj.kicad_sch')
+  })
+})

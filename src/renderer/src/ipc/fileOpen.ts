@@ -22,6 +22,8 @@ export interface OpenedProject {
 }
 
 export type ReadFileFn = (path: string) => Promise<string>
+/** Stat-based existence probe (window.circsim.fileExists) — never throws in prod. */
+export type FileExistsFn = (path: string) => Promise<boolean>
 
 /** Split an absolute path into { dir, base, name, ext } using `/` or `\`. */
 export function splitPath(p: string): { dir: string; base: string; name: string; ext: string } {
@@ -55,14 +57,37 @@ export function siblingSchematicPath(boardPath: string): string {
 }
 
 /**
- * Open a project from a board path: read the board text, then attempt the sibling
- * schematic (best-effort — a missing .kicad_sch is fine). An optional BOM path
- * is read if provided.
+ * Probe an OPTIONAL sidecar for existence before reading it. With no
+ * `fileExists` injected (legacy callers/tests) we fall back to probe-by-read;
+ * a probe that itself fails also falls back to the read attempt, so a flaky
+ * stat can never hide a file that a read would have found.
+ */
+async function optionalSidecarExists(
+  fileExists: FileExistsFn | undefined,
+  path: string,
+): Promise<boolean> {
+  if (!fileExists) return true
+  try {
+    return await fileExists(path)
+  } catch {
+    return true
+  }
+}
+
+/**
+ * Open a project from a board path: read the board text (REQUIRED — a read
+ * failure rejects loudly), then attempt the sibling schematic (best-effort — a
+ * missing .kicad_sch is fine). An optional BOM path is read if provided.
+ *
+ * Optional sidecars are probed with `fileExists` (when supplied) BEFORE being
+ * read: probing by readFile made the main process log a full ENOENT handler
+ * stack on every board open without a sibling schematic.
  */
 export async function openProjectFromPath(
   boardPath: string,
   readFile: ReadFileFn,
   bomPath?: string,
+  fileExists?: FileExistsFn,
 ): Promise<OpenedProject> {
   const boardText = await readFile(boardPath)
   const { base } = splitPath(boardPath)
@@ -71,15 +96,17 @@ export async function openProjectFromPath(
 
   // Sibling .kicad_sch (best-effort).
   const schPath = siblingSchematicPath(boardPath)
-  try {
-    const schText = await readFile(schPath)
-    result.schematicText = schText
-    result.schematicFileName = splitPath(schPath).base
-  } catch {
-    // No sibling schematic — fine. Resolution proceeds with primitive inference.
+  if (await optionalSidecarExists(fileExists, schPath)) {
+    try {
+      const schText = await readFile(schPath)
+      result.schematicText = schText
+      result.schematicFileName = splitPath(schPath).base
+    } catch {
+      // No sibling schematic — fine. Resolution proceeds with primitive inference.
+    }
   }
 
-  if (bomPath) {
+  if (bomPath && (await optionalSidecarExists(fileExists, bomPath))) {
     try {
       result.bomText = await readFile(bomPath)
     } catch {

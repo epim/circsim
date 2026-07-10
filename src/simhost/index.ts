@@ -29,6 +29,7 @@ import type { EngineEvent, SpiceEngine } from './engine'
 import {
   isScaleVectorName,
   normalizeVectorKey,
+  type OpSolveMethod,
   type SimCommand,
   type SimEvent
 } from './protocol'
@@ -123,6 +124,15 @@ export class SimHost {
    * The ladder emits its own structured failure only after all rungs fail.
    */
   private opInFlight = false
+
+  /**
+   * ngspice fallback chatter observed while the op ladder runs (reset per op).
+   * ngspice narrates its OWN internal convergence helpers on SendChar — gmin
+   * stepping, source stepping, and the transient-op (OPTRAN) fallback — even
+   * when the `op` command ultimately "succeeds". These flags let doRunOp report
+   * an honest OpSolveMethod instead of presenting a fallback solve as direct.
+   */
+  private opChatter = { gminStepping: false, sourceStepping: false, tranOp: false }
 
   /** Halt-ownership state machine (Spec §7.4.3). */
   private halt: HaltCoordinator
@@ -399,6 +409,7 @@ export class SimHost {
     // for a circuit that actually solved fine (e.g. the bundled NE555). The ladder
     // emits its OWN structured failure below only if every rung truly fails.
     this.opInFlight = true
+    this.opChatter = { gminStepping: false, sourceStepping: false, tranOp: false }
     try {
       for (let rung = 0; rung < ladder.length; rung++) {
         const step = ladder[rung]
@@ -411,7 +422,10 @@ export class SimHost {
         // A converged op yields finite node voltages.
         const finite = Object.values(lastValues).some((v) => Number.isFinite(v))
         if (finite && Object.keys(lastValues).length > 0) {
-          this.emit({ type: 'opResult', values: lastValues })
+          // Name the rung that actually produced the solution so the renderer
+          // can caveat fallback solves (F1 — a fallback op frequently reports
+          // 0.000 V on nets it could not really resolve).
+          this.emit({ type: 'opResult', values: lastValues, method: this.opMethodForRung(rung) })
           return lastValues
         }
       }
@@ -425,7 +439,7 @@ export class SimHost {
         'stepping. Common causes: missing DC path to ground, a floating node, or ' +
         'an unstable feedback loop.'
     })
-    this.emit({ type: 'opResult', values: lastValues })
+    this.emit({ type: 'opResult', values: lastValues, method: 'failed' })
     return lastValues
   }
 
@@ -624,14 +638,49 @@ export class SimHost {
   private detectConvergence(text: string): void {
     // While the op retry ladder runs, ngspice's internal gmin/source-stepping
     // emits "no convergence"-style chatter even when it ultimately solves. The
-    // ladder reports its own structured failure; don't double-report from chatter.
-    if (this.opInFlight) return
+    // ladder reports its own structured failure; don't double-report from
+    // chatter — but DO record which fallbacks ngspice reached for, so the
+    // opResult can carry an honest `method` (F1 trust fix).
+    if (this.opInFlight) {
+      this.trackOpChatter(text)
+      return
+    }
     for (const re of CONVERGENCE_PATTERNS) {
       if (re.test(text)) {
         this.emit({ type: 'convergenceFailure', detail: text.trim() })
         return
       }
     }
+  }
+
+  /**
+   * Record ngspice's internal fallback narration during an op solve (verified
+   * strings from ngspice 39–46: "gmin stepping completed/failed", "source
+   * stepping completed/failed", "Supplies reduced to …%", and the OPTRAN
+   * fallback's "Transient op started/finished successfully").
+   */
+  private trackOpChatter(text: string): void {
+    if (/gmin\s+step/i.test(text)) this.opChatter.gminStepping = true
+    if (/source\s+step/i.test(text) || /suppl(?:y|ies)\s+reduced/i.test(text)) {
+      this.opChatter.sourceStepping = true
+    }
+    if (/transient\s+op\b/i.test(text) || /\boptran\b/i.test(text)) {
+      this.opChatter.tranOp = true
+    }
+  }
+
+  /**
+   * The honest OpSolveMethod for an op that yielded values at ladder rung
+   * `rung` (0 = plain op, 1 = gmin, 2 = source-step). ngspice runs its OWN
+   * internal ladder inside a single `op`, so even rung 0 can secretly be a
+   * fallback solve — the chatter flags take precedence over the rung index,
+   * deepest fallback first.
+   */
+  private opMethodForRung(rung: number): OpSolveMethod {
+    if (this.opChatter.tranOp) return 'tran-fallback'
+    if (this.opChatter.sourceStepping || rung >= 2) return 'source'
+    if (this.opChatter.gminStepping || rung >= 1) return 'gmin'
+    return 'direct'
   }
 
   // ── loadCircuit ──────────────────────────────────────────────────────────

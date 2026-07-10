@@ -80,7 +80,12 @@ function Shell(): React.ReactElement {
       properties: ['openFile'],
     })
     if (res.cancelled || res.filePaths.length === 0) return
-    const opened = await openProjectFromPath(res.filePaths[0], window.circsim.readFile)
+    const opened = await openProjectFromPath(
+      res.filePaths[0],
+      window.circsim.readFile,
+      undefined,
+      window.circsim.fileExists,
+    )
     store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
       schematicText: opened.schematicText,
       schematicFileName: opened.schematicFileName,
@@ -92,7 +97,12 @@ function Shell(): React.ReactElement {
   const handleOpenSample = useCallback(async () => {
     try {
       const samplePath = await window.circsim.getSampleProjectPath()
-      const opened = await openProjectFromPath(samplePath, window.circsim.readFile)
+      const opened = await openProjectFromPath(
+        samplePath,
+        window.circsim.readFile,
+        undefined,
+        window.circsim.fileExists,
+      )
       store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
         schematicText: opened.schematicText,
         schematicFileName: opened.schematicFileName,
@@ -108,7 +118,12 @@ function Shell(): React.ReactElement {
   const handleOpenFirstLight = useCallback(async () => {
     try {
       const demoPath = await window.circsim.getFirstLightDemoPath()
-      const opened = await openProjectFromPath(demoPath, window.circsim.readFile)
+      const opened = await openProjectFromPath(
+        demoPath,
+        window.circsim.readFile,
+        undefined,
+        window.circsim.fileExists,
+      )
       store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
         schematicText: opened.schematicText,
         schematicFileName: opened.schematicFileName,
@@ -187,7 +202,12 @@ function Shell(): React.ReactElement {
         // Electron File objects expose a real path; fall back to text() otherwise.
         const path = (boardFile as File & { path?: string }).path
         if (path) {
-          const opened = await openProjectFromPath(path, window.circsim.readFile)
+          const opened = await openProjectFromPath(
+            path,
+            window.circsim.readFile,
+            undefined,
+            window.circsim.fileExists,
+          )
           store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
             schematicText: opened.schematicText,
             schematicFileName: opened.schematicFileName,

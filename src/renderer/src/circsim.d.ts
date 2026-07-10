@@ -56,6 +56,12 @@ declare global {
     circsim: {
       openFileDialog(opts?: CircsimOpenDialogOptions): Promise<CircsimOpenDialogResult>
       readFile(path: string): Promise<string>
+      /**
+       * True when the path exists and is a regular file (stat-based, never
+       * throws). Probe optional sidecars (sibling .kicad_sch, BOM) with this
+       * BEFORE readFile so a missing sidecar never logs an ENOENT stack in main.
+       */
+      fileExists(path: string): Promise<boolean>
       getSimPort(): Promise<MessagePort>
       onSimhostCrashed(cb: (payload: CircsimCrashedPayload) => void): () => void
       platformPaths(): Promise<CircsimPlatformPaths>

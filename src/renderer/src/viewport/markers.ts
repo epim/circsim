@@ -126,11 +126,23 @@ function nextId(): string {
 }
 
 /**
- * Format a voltage for display: 4 significant figures, "V" suffix.
- * Examples: 5 → "5.000 V", 2.5 → "2.500 V", 0.001234 → "1.234e-3 V"
+ * Format a voltage for op annotations: "V" suffix, 3 decimals for readable
+ * magnitudes, e-notation for small-but-representable readings.
+ * Examples: 5 → "5.000 V", 2.5 → "2.500 V", 6e-4 → "6.000e-4 V".
+ *
+ * Anything that ROUNDS to zero at the displayed precision — including negative
+ * zero and sub-noise values like -1e-7 — is normalized to exactly "0.000 V";
+ * "-0.000 V" must never appear on the board (F5).
+ *
+ * Exported: shared by the 3D annotation labels and the Viewport's DOM mirror,
+ * and unit-tested directly.
  */
-function formatVolts(v: number): string {
-  if (Math.abs(v) < 0.001 && v !== 0) {
+export function formatVolts(v: number): string {
+  // Noise floor: |v| < 0.5 mV rounds to "0.000" at 3 decimals (covers ±0 too).
+  if (Math.abs(v) < 0.0005) {
+    return '0.000 V'
+  }
+  if (Math.abs(v) < 0.001) {
     return `${v.toExponential(3)} V`
   }
   return `${v.toFixed(3)} V`
