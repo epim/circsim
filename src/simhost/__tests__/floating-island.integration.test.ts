@@ -138,6 +138,109 @@ describe.skipIf(!haveNgspice)('M8 — floating-island bleeds in real ngspice', (
   }, 60_000)
 })
 
+// ─── M12: dangling comparator-input net (sense-only subckt terminal) ──────────
+
+describe.skipIf(!haveNgspice)('M12 — dangling comparator-input net in real ngspice', () => {
+  /**
+   * Fixture: one LM339 (real bundled opamp.lib LM339_QUAD) with unit-3's
+   * + input (pad 9) on a net touched by NOTHING else. A comparator input is
+   * sense-only (it appears only inside the behavioral-source expression), so
+   * the net's MNA row is empty — the same structural singularity as M8's
+   * dangling R pair. Pre-M12 the x-card blanket union faked a ground path for
+   * it and the bleed was skipped.
+   */
+  function makeDanglingInputDeck(): string[] {
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'C1P', spiceNode: 'c1p', padRefs: [] },
+      { id: 2, kicadName: 'C1N', spiceNode: 'c1n', padRefs: [] },
+      { id: 3, kicadName: 'O1', spiceNode: 'o1', padRefs: [] },
+      { id: 4, kicadName: 'C2P', spiceNode: 'c2p', padRefs: [] },
+      { id: 5, kicadName: 'C2N', spiceNode: 'c2n', padRefs: [] },
+      { id: 6, kicadName: 'O2', spiceNode: 'o2', padRefs: [] },
+      { id: 7, kicadName: 'DANGLE', spiceNode: 'dangle', padRefs: [] },
+      { id: 8, kicadName: 'C3N', spiceNode: 'c3n', padRefs: [] },
+      { id: 9, kicadName: 'O3', spiceNode: 'o3', padRefs: [] },
+      { id: 10, kicadName: 'C4P', spiceNode: 'c4p', padRefs: [] },
+      { id: 11, kicadName: 'C4N', spiceNode: 'c4n', padRefs: [] },
+      { id: 12, kicadName: 'O4', spiceNode: 'o4', padRefs: [] },
+      { id: 13, kicadName: 'VCC', spiceNode: 'vcc', padRefs: [] },
+      { id: 14, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const u1: Part = {
+      ref: 'U1', value: 'LM339', libId: 'Package_SO:SOP-14_3.9x8.7mm_P1.27mm', layer: 'F',
+      padNet: new Map([
+        ['1', 6], ['2', 3], ['3', 13], ['4', 2], ['5', 1], ['6', 5], ['7', 4],
+        ['8', 8], ['9', 7], ['10', 11], ['11', 10], ['12', 14], ['13', 12], ['14', 9],
+      ]),
+      properties: {},
+    }
+    // Bias every OTHER input through a real resistor; pull every output up.
+    const biasCards: Array<[string, string]> = [
+      ['R1', 'r_r1 c1p 0 100000'], ['R2', 'r_r2 c1n 0 100000'],
+      ['R3', 'r_r3 c2p 0 100000'], ['R4', 'r_r4 c2n 0 100000'],
+      ['R5', 'r_r5 c3n 0 100000'],
+      ['R6', 'r_r6 c4p 0 100000'], ['R7', 'r_r7 c4n 0 100000'],
+      ['R8', 'r_r8 vcc o1 10000'], ['R9', 'r_r9 vcc o2 10000'],
+      ['R10', 'r_r10 vcc o3 10000'], ['R11', 'r_r11 vcc o4 10000'],
+    ]
+    const parts: Part[] = [
+      u1,
+      ...biasCards.map(([ref]): Part => ({
+        ref, value: '10k', libId: 'R', layer: 'F', padNet: new Map(), properties: {},
+      })),
+    ]
+    const resolutions: Resolution[] = [
+      {
+        ref: 'U1', status: 'ok', tier: 3, warnings: [],
+        model: {
+          kind: 'subckt', libFile: 'opamp.lib', subcktName: 'LM339_QUAD',
+          pinMap: {
+            '1': 'out2', '2': 'out1', '3': 'vcc', '4': 'in1n', '5': 'in1p',
+            '6': 'in2n', '7': 'in2p', '8': 'in3n', '9': 'in3p', '10': 'in4n',
+            '11': 'in4p', '12': 'vee', '13': 'out4', '14': 'out3',
+          },
+        },
+      },
+      ...biasCards.map(([ref, card]): Resolution => ({
+        ref, status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card },
+      })),
+    ]
+    const instruments: Instrument[] = [
+      { kind: 'ground-ref', netId: 14 },
+      { kind: 'dc-supply', id: '1', netId: 13, volts: 5, seriesOhms: 0.1 },
+    ]
+    return generateDeck({
+      circuit: { nets, parts, warnings: [] },
+      resolutions,
+      instruments,
+      groundNetId: 14,
+      title: 'm12-dangling-comparator-input',
+      modelTexts: { 'opamp.lib': readFileSync(join(MODELS, 'opamp.lib'), 'utf8') },
+    })
+  }
+
+  it('the dangling input net is bled, the fresh tran-uic completes — and aborts with the bleed stripped (control)', async () => {
+    const deck = makeDanglingInputDeck()
+
+    // The generator detected the sense-only island and bled exactly it.
+    const bleeds = deck.filter((l) => l.startsWith('r_float_'))
+    expect(bleeds).toEqual(['r_float_1 dangle 0 1e9'])
+
+    // Control: the SAME deck minus the bleed is structurally singular — the
+    // fresh tran-uic (the app flow) aborts on the first step with zero rows.
+    const unfixed = deck.filter(
+      (l) => !l.startsWith('r_float_') && !l.startsWith('* floating-island')
+    )
+    const broken = await runFreshTranUic(unfixed, '1e-6', '1e-4')
+    expect(broken.rows).toBe(0)
+
+    // With the bleed the identical analysis completes with data.
+    const fixed = await runFreshTranUic(deck, '1e-6', '1e-4')
+    expect(fixed.errs).toEqual([])
+    expect(fixed.rows).toBeGreaterThan(0)
+  }, 60_000)
+})
+
 // ─── real lantern board (headers-only variant) ────────────────────────────────
 
 const haveLantern = haveNgspice && existsSync(LANTERN_BOARD)

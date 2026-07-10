@@ -150,6 +150,8 @@ function parseModelCards(text: string): Map<string, string> {
 interface ModelTextIndex {
   subcktsByFile: Map<string, Map<string, SubcktDef>>
   modelsByFile: Map<string, Map<string, string>>
+  /** M12 cache: `${file}::${lowercased name}` → terminal-index groups (null = no definition). */
+  terminalGroups: Map<string, number[][] | null>
   texts: Record<string, string>
 }
 
@@ -157,6 +159,7 @@ function makeModelTextIndex(texts: Record<string, string> | undefined): ModelTex
   return {
     subcktsByFile: new Map(),
     modelsByFile: new Map(),
+    terminalGroups: new Map(),
     texts: texts ?? {},
   }
 }
@@ -496,6 +499,15 @@ class NodeUnionFind {
     return root
   }
 
+  /**
+   * Root of a node IF it was ever registered, else undefined. Used by the M12
+   * terminal-conductivity analysis to group a subckt's declared terminals by
+   * internal connected component (an unregistered terminal is sense-only).
+   */
+  rootOf(n: string): string | undefined {
+    return this.parent.has(n) ? this.find(n) : undefined
+  }
+
   /** Register a card's analog nodes and union them into one component. */
   link(nodes: string[]): void {
     const clean = nodes.filter(n => n.length > 0)
@@ -584,6 +596,147 @@ function primitiveCardNodeGroups(card: string): string[][] {
     default:
       return []
   }
+}
+
+// ─── M12: per-subckt terminal conductivity ────────────────────────────────────
+
+/**
+ * Analog node groups of an element card INSIDE a .subckt body. Extends
+ * primitiveCardNodeGroups with the shapes that appear in lib bodies but never
+ * in resolve.ts primitive cards:
+ *
+ *   b — behavioral source (`b<name> n+ n- v=…|i=…`): the two explicit branch
+ *       nodes conduct, consistent with how v/i sources are treated. Node
+ *       references inside the expression (`v(inp)`, `i(vsense)`) are SENSE
+ *       only and are never tokenized as nodes — the fixed slice(1,3) stops
+ *       before the expression text, so `v = v(x) - v(y)` contributes nothing.
+ *       KNOWN APPROXIMATION: a constant-current b-card (`i = 2u`, e.g.
+ *       regulators.lib biq/bref) is an ideal current source, not true
+ *       conductance, yet its branch pair unions like every other b-card.
+ *       Safe direction only (merging can at most suppress a bleed the pre-M12
+ *       blanket union also suppressed); pinned by the regulators.lib tests.
+ *
+ *   unknown letters — conservative: treat the first two node tokens as a
+ *       conductive pair. Merging too much can only suppress a bleed the same
+ *       way the pre-M12 blanket union did; it never strands a real path.
+ *
+ * `x` cards are handled by the caller (child terminal-group substitution).
+ */
+function subcktBodyCardGroups(card: string): string[][] {
+  const toks = card.trim().split(/\s+/)
+  if (toks.length < 3) return []
+  const letter = toks[0].charAt(0).toLowerCase()
+  if (letter === 'b') return [toks.slice(1, 3)]
+  if ('rclvidqjmegfh'.includes(letter)) return primitiveCardNodeGroups(card)
+  // Unknown element letter inside a lib body: conservative two-node pair.
+  return [toks.slice(1, 3)]
+}
+
+/**
+ * Which DECLARED terminals of a subckt are conductively connected to EACH
+ * OTHER through the subckt's internals. Returns groups of terminal indices
+ * (every terminal appears in exactly one group; a sense-only terminal — e.g. a
+ * comparator input that exists only inside a behavioral-source expression — is
+ * a singleton, exactly like an E/G sense node). Undefined when the definition
+ * is missing from the file (caller falls back to the pre-M12 blanket union).
+ *
+ * The body is walked with subcktBodyCardGroups; nested `x` instances are
+ * processed bottom-up by substituting the CHILD subckt's already-computed
+ * groups at the parent nodes passed in those terminal positions (cycle-safe
+ * via `visiting`: a recursive reference degrades to a blanket union of that
+ * one instance's nodes).
+ *
+ * Internal node "0" is treated as an ordinary internal node, NOT as global
+ * ground: a terminal whose only internal path is to ground-referenced
+ * behavioral sources (an op-amp output buffer) stays a singleton, which at
+ * worst adds a harmless 1 GΩ bleed on an otherwise-driven net — never the
+ * reverse. Bleeds therefore remain a SUPERSET of the pre-M12 set, minus
+ * nothing (strictly additive refinement).
+ */
+function terminalGroupsFor(
+  idx: ModelTextIndex,
+  file: string,
+  name: string,
+  visiting: Set<string> = new Set(),
+): number[][] | undefined {
+  const key = `${file}::${name.toLowerCase()}`
+  const cached = idx.terminalGroups.get(key)
+  if (cached !== undefined) return cached ?? undefined
+  if (visiting.has(key)) return undefined // cycle — no info for this instance
+  const def = getSubcktDef(idx, file, name)
+  if (!def) {
+    idx.terminalGroups.set(key, null)
+    return undefined
+  }
+  visiting.add(key)
+  const uf = new NodeUnionFind()
+  for (const raw of def.lines.slice(1)) {
+    const t = raw.trim()
+    if (t.length === 0 || t.startsWith('*') || t.startsWith('.')) continue
+    if (t.charAt(0).toLowerCase() === 'x') {
+      const toks = t.split(/\s+/)
+      const pIdx = toks.findIndex((tok) => /^params:$/i.test(tok))
+      const nameTok = pIdx > 0 ? toks[pIdx - 1] : toks[toks.length - 1]
+      const childDef = nameTok ? getSubcktDef(idx, file, nameTok) : undefined
+      if (childDef) {
+        const nodeToks = toks.slice(1, 1 + childDef.terminals.length).map((n) => n.toLowerCase())
+        const childGroups = terminalGroupsFor(idx, file, nameTok, visiting)
+        if (childGroups) {
+          // Substitute the child's terminal conductivity: union the parent
+          // nodes sitting at internally-connected child-terminal positions;
+          // a child sense-only terminal registers its parent node alone.
+          for (const g of childGroups) {
+            uf.link(g.map((i) => nodeToks[i]).filter((n): n is string => n !== undefined))
+          }
+        } else {
+          uf.link(nodeToks) // cycle: conservative blanket for this instance
+        }
+      } else {
+        // Child not defined in this file: blanket over the node tokens
+        // (everything between the instance name and the subckt-name token).
+        const end = pIdx > 0 ? pIdx - 1 : toks.length - 1
+        uf.link(toks.slice(1, end).map((n) => n.toLowerCase()))
+      }
+      continue
+    }
+    for (const g of subcktBodyCardGroups(t)) uf.link(g.map((n) => n.toLowerCase()))
+  }
+  visiting.delete(key)
+  // Group the declared terminals by their internal connected component.
+  const groups: number[][] = []
+  const groupByRoot = new Map<string, number[]>()
+  def.terminals.forEach((term, i) => {
+    const root = uf.rootOf(term)
+    if (root === undefined) {
+      groups.push([i]) // never touched by any card → sense-only singleton
+      return
+    }
+    const existing = groupByRoot.get(root)
+    if (existing) {
+      existing.push(i)
+      return
+    }
+    const g = [i]
+    groupByRoot.set(root, g)
+    groups.push(g)
+  })
+  idx.terminalGroups.set(key, groups)
+  return groups
+}
+
+/**
+ * M12, exported for tests: terminal-conductivity groups of a named .subckt in
+ * a lib text, as lowercased terminal-NAME groups (group order = declared
+ * position of each group's first terminal). Undefined when the subckt is not
+ * defined in the text.
+ */
+export function subcktTerminalConductivity(libText: string, name: string): string[][] | undefined {
+  const idx = makeModelTextIndex({ lib: libText })
+  const groups = terminalGroupsFor(idx, 'lib', name)
+  if (!groups) return undefined
+  const def = getSubcktDef(idx, 'lib', name)
+  if (!def) return undefined
+  return groups.map((g) => g.map((i) => def.terminals[i]))
 }
 
 // ─── Current-probe helpers ─────────────────────────────────────────────────────
@@ -930,6 +1083,30 @@ export function generateDeck(opts: GenerateOptions): string[] {
     for (const dep of extractSubcktRefs(def.lines)) queueSubcktWithDeps(file, dep)
   }
 
+  /**
+   * M12: register an x-card's outer nodes with the island union-find using the
+   * subckt's per-terminal conductivity instead of a blanket union. Sense-only
+   * terminals (comparator/op-amp inputs, E/G-style control pins) register as
+   * singletons, so a net wired ONLY to such a terminal is correctly detected
+   * as a floating island and bled — the blanket union used to weld it to the
+   * package's grounded terminals and the singular matrix survived to ngspice.
+   * Falls back to the blanket union when the definition (and therefore the
+   * analysis) is unavailable — the legacy no-modelTexts path is unchanged.
+   */
+  const linkSubcktCardNodes = (
+    nodes: string[],
+    libFile: string,
+    subcktName: string,
+    subcktDef: SubcktDef | undefined,
+  ): void => {
+    const groups = subcktDef ? terminalGroupsFor(modelIndex, libFile, subcktName) : undefined
+    if (!groups || !subcktDef || nodes.length !== subcktDef.terminals.length) {
+      islandNodes.link(nodes)
+      return
+    }
+    for (const g of groups) islandNodes.link(g.map((i) => nodes[i]))
+  }
+
   // ── Line 0: title (SPICE requires first line to be a title comment) ────────
   lines.push(`* circsim deck${title ? ` — ${title}` : ''}`)
 
@@ -1202,20 +1379,20 @@ export function generateDeck(opts: GenerateOptions): string[] {
           const nodeList = buildSubcktNodeList(part, netIdToNode, pinMap, splicePad, spliceIntNode, subcktDef)
           const xName = `x_${part.ref.toLowerCase()}`
           lines.push(`${xName} ${nodeList} ${model.subcktName}`)
-          islandNodes.link(nodeList.split(' '))
+          linkSubcktCardNodes(nodeList.split(' '), libFile, model.subcktName, subcktDef)
         } else {
           // Can't identify splice pad — emit without ammeter
           lines.push(`* WARNING: current probe on ${res.ref} pad ${cp.pad ?? '?'} — node not found, ammeter not inserted`)
           const nodeList = buildSubcktNodeListPlain(part, netIdToNode, pinMap, subcktDef)
           const xName = `x_${part.ref.toLowerCase()}`
           lines.push(`${xName} ${nodeList} ${model.subcktName}`)
-          islandNodes.link(nodeList.split(' '))
+          linkSubcktCardNodes(nodeList.split(' '), libFile, model.subcktName, subcktDef)
         }
       } else {
         const nodeList = buildSubcktNodeListPlain(part, netIdToNode, pinMap, subcktDef)
         const xName = `x_${part.ref.toLowerCase()}`
         lines.push(`${xName} ${nodeList} ${model.subcktName}`)
-        islandNodes.link(nodeList.split(' '))
+        linkSubcktCardNodes(nodeList.split(' '), libFile, model.subcktName, subcktDef)
       }
       // Inline the .subckt definition once (if we have it), plus every subckt it
       // transitively instantiates (opamp_core inside the op-amps/comparators,

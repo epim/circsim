@@ -22,7 +22,7 @@
 import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { describe, test, expect } from 'vitest'
-import { generateDeck, formatSpiceValue, alterPlan, instrumentSpiceName, buildLedSpiceNames, isLedPart } from '../generate'
+import { generateDeck, formatSpiceValue, alterPlan, instrumentSpiceName, buildLedSpiceNames, isLedPart, subcktTerminalConductivity } from '../generate'
 import type { Circuit, CircuitNet, Part } from '../../netlist/extract'
 import type { Resolution } from '../../models/types'
 import type { Instrument } from '../instruments'
@@ -1631,6 +1631,226 @@ describe('generateDeck — LM339 quad comparator from the real bundled opamp.lib
     expect(deck.filter(l => /^\.subckt LM393\b/i.test(l)).length).toBe(1)
     expect(deck.filter(l => /^\.subckt opamp_core\b/i.test(l)).length).toBe(1)
     expect(deck.join('\n')).not.toContain('.include')
+  })
+})
+
+// ─── M12: per-subckt terminal conductivity (sense-only terminals ≠ grounded) ──
+
+describe('M12 — subckt terminal-conductivity analysis (real bundled opamp.lib)', () => {
+  const REAL_OPAMP_LIB = readFileSync(join(process.cwd(), 'resources', 'models', 'opamp.lib'), 'utf8')
+
+  test('opamp_core: every terminal is its own group — inp/inn/vcc/vee are sense-only, out conducts only to internal ground-referenced nodes', () => {
+    // Body truth: bin/bg/rp/cp/bout tie e/vpole/obuf/out to internal node 0;
+    // inp/inn appear ONLY inside the b-source expression (v(inp)-v(inn)) and
+    // vcc/vee ONLY inside the clamp expression — none is a branch node. So no
+    // TERMINAL conducts to another terminal.
+    expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'opamp_core')).toEqual([
+      ['inp'], ['inn'], ['out'], ['vcc'], ['vee'],
+    ])
+  })
+
+  test('LM393 (one nesting level): bsw makes {out,vee} one conductive group; inp/inn/vcc stay sense-only', () => {
+    expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'LM393')).toEqual([
+      ['inp'], ['inn'], ['out', 'vee'], ['vcc'],
+    ])
+  })
+
+  test('LM339_QUAD (two nesting levels): out1-4+vee one group via the four LM393 cells; all 8 inputs and vcc sense-only', () => {
+    expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'LM339_QUAD')).toEqual([
+      ['in1p'], ['in1n'],
+      ['out1', 'out2', 'out3', 'out4', 'vee'],
+      ['in2p'], ['in2n'], ['in3p'], ['in3n'], ['in4p'], ['in4n'],
+      ['vcc'],
+    ])
+  })
+
+  test('unknown subckt name → undefined (deck-gen falls back to the blanket union)', () => {
+    expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'NO_SUCH_SUBCKT')).toBeUndefined()
+  })
+
+  test('b-source tokenization: the two explicit branch nodes conduct; v(...) expression references are NOT nodes', () => {
+    const LIB = [
+      '* fixture',
+      '.subckt probe a b c d',
+      'bx a b v = v(c) - v(d)',
+      '.ends probe',
+    ].join('\n')
+    expect(subcktTerminalConductivity(LIB, 'probe')).toEqual([['a', 'b'], ['c'], ['d']])
+  })
+
+  test('e-source inside a body: output pair conducts, sense pair stays singleton (synthetic, E-mechanism only)', () => {
+    // SYNTHETIC fixture isolating the E-source rule: the two source-branch
+    // pairs union {vss,chg,dsg}; vdd appears only in sense positions. NOTE:
+    // this is deliberately NOT the shipped BQ7791502 — the real power-ic.lib
+    // body also carries `rq vdd vss 10Meg` (genuine conductance), which welds
+    // vdd into the group. The real file is pinned in the suite below.
+    const LIB = [
+      '* fixture',
+      '.subckt prot vdd vss chg dsg',
+      'echg chg vss vdd vss 1',
+      'edsg dsg vss vdd vss 1',
+      '.ends prot',
+    ].join('\n')
+    expect(subcktTerminalConductivity(LIB, 'prot')).toEqual([['vdd'], ['vss', 'chg', 'dsg']])
+  })
+})
+
+describe('M12 — terminal conductivity of every OTHER shipped lib (island-behavior pinning)', () => {
+  // Real-text assertions mirroring the opamp.lib suite above: each expected
+  // partition below is hand-derived from the shipped file. The point is that a
+  // future .lib edit (adding/removing an rq-style resistor, changing a b-card
+  // to sense a different node) FAILS a test here instead of silently changing
+  // which board nets get island bleeds.
+  const lib = (f: string): string => readFileSync(join(process.cwd(), 'resources', 'models', f), 'utf8')
+
+  test('power-ic.lib BQ7791502: ONE full group — rq vdd->vss is genuine conductance, so vdd is NOT sense-only', () => {
+    // echg {chg,vss} + edsg {dsg,vss} + rq {vdd,vss} → everything unions.
+    expect(subcktTerminalConductivity(lib('power-ic.lib'), 'BQ7791502')).toEqual([
+      ['vdd', 'vss', 'chg', 'dsg'],
+    ])
+  })
+
+  test('power-ic.lib LTC4020: one full group (every pin has a resistive path to gnd)', () => {
+    // bint {int,gnd}; rint {int,intvcc}; rtg1/rbg1/rtg2/rbg2 {tgN|bgN,gnd};
+    // rq {vin,gnd} → all seven terminals reach gnd.
+    expect(subcktTerminalConductivity(lib('power-ic.lib'), 'LTC4020')).toEqual([
+      ['vin', 'intvcc', 'tg1', 'bg1', 'tg2', 'bg2', 'gnd'],
+    ])
+  })
+
+  test('power-ic.lib AL8860: one full group (rctrl/rset/rq pull-ups + the bled sink branch)', () => {
+    // bled {sw,gnd}; rctrl {ctrl,vin}; rset {vin,set}; rq {vin,gnd}.
+    expect(subcktTerminalConductivity(lib('power-ic.lib'), 'AL8860')).toEqual([
+      ['vin', 'set', 'sw', 'ctrl', 'gnd'],
+    ])
+  })
+
+  test('mosfet.lib NCE6005AS: two independent channel groups {d1,g1,s1} / {d2,g2,s2}', () => {
+    // m1/m2 each contribute their D/G/S triple (gate deliberately in scope —
+    // the VDMOS cards carry gate capacitance, and a capacitor counts as a
+    // path of ANY kind for island purposes; bulk is tied to source).
+    expect(subcktTerminalConductivity(lib('mosfet.lib'), 'NCE6005AS')).toEqual([
+      ['d1', 'g1', 's1'],
+      ['d2', 'g2', 's2'],
+    ])
+  })
+
+  test('regulators.lib reg_lin: one full group {vin,gnd,vout} — vin joins ONLY through the biq current source (pinned approximation)', () => {
+    // breg {reg,gnd}; rpass {reg,rsen}; vsense {rsen,vout}; bilim {vout,gnd};
+    // biq {vin,gnd}. NOTE biq is a CONSTANT-current b-card (`i = iq`) — an
+    // ideal current source is not true conductance, but subcktBodyCardGroups
+    // deliberately treats every b-card branch as conductive (documented
+    // approximation; safe: merging can only suppress a bleed the blanket
+    // union also suppressed). If biq is ever removed, vin becomes a singleton
+    // and this test must be updated knowingly.
+    expect(subcktTerminalConductivity(lib('regulators.lib'), 'reg_lin')).toEqual([
+      ['vin', 'gnd', 'vout'],
+    ])
+  })
+
+  test('regulators.lib 7805 / AMS1117-3.3 (one nesting level): inherit the full reg_lin group', () => {
+    expect(subcktTerminalConductivity(lib('regulators.lib'), '7805')).toEqual([['vin', 'gnd', 'vout']])
+    expect(subcktTerminalConductivity(lib('regulators.lib'), 'AMS1117-3.3')).toEqual([['vin', 'gnd', 'vout']])
+  })
+
+  test('regulators.lib TL431: one full group {k,a,ref} — ref joins through the constant bref current source (pinned approximation)', () => {
+    // bshunt {k,a}; bref {ref,a} (`i = 2u`, same b-card approximation as biq).
+    expect(subcktTerminalConductivity(lib('regulators.lib'), 'TL431')).toEqual([
+      ['k', 'a', 'ref'],
+    ])
+  })
+
+  test('timer555.lib NE555: {gnd,out,ctrl,disch,vcc} conduct; trig/reset/thres are sense-only comparator inputs', () => {
+    // rdiv_a/b/c chain vcc–ctrl–n13–gnd; bout+rout reach out; bdisch reaches
+    // disch; trig/reset/thres appear ONLY inside b-source expressions. So a
+    // board net wired only to the 555's TRIG pin is a genuine island.
+    expect(subcktTerminalConductivity(lib('timer555.lib'), 'NE555')).toEqual([
+      ['gnd', 'out', 'ctrl', 'disch', 'vcc'],
+      ['trig'],
+      ['reset'],
+      ['thres'],
+    ])
+  })
+})
+
+describe('M12 — sense-only subckt terminals in deck generation (real bundled opamp.lib)', () => {
+  const REAL_OPAMP_LIB = readFileSync(join(process.cwd(), 'resources', 'models', 'opamp.lib'), 'utf8')
+  const modelTexts = { 'opamp.lib': REAL_OPAMP_LIB }
+
+  const LM339_PINMAP = {
+    '1': 'out2', '2': 'out1', '3': 'vcc', '4': 'in1n', '5': 'in1p',
+    '6': 'in2n', '7': 'in2p', '8': 'in3n', '9': 'in3p', '10': 'in4n',
+    '11': 'in4p', '12': 'vee', '13': 'out4', '14': 'out3',
+  }
+
+  test('a net wired ONLY to a comparator input is a floating island (bled); driven/conductive nets are not', () => {
+    // Pre-M12 the x-card blanket union welded all 14 terminals into one
+    // grounded component, so the dangling sense net escaped the M8 bleed and
+    // left a structurally singular matrix row. Unit-3's + input (pad 9) hangs
+    // on a net touched by nothing else; every other input is biased through a
+    // real resistor, the outputs carry pull-ups, vcc is bench-supplied.
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'C1P', spiceNode: 'c1p', padRefs: [] },
+      { id: 2, kicadName: 'C1N', spiceNode: 'c1n', padRefs: [] },
+      { id: 3, kicadName: 'O1', spiceNode: 'o1', padRefs: [] },
+      { id: 4, kicadName: 'C2P', spiceNode: 'c2p', padRefs: [] },
+      { id: 5, kicadName: 'C2N', spiceNode: 'c2n', padRefs: [] },
+      { id: 6, kicadName: 'O2', spiceNode: 'o2', padRefs: [] },
+      { id: 7, kicadName: 'DANGLE', spiceNode: 'dangle', padRefs: [] },
+      { id: 8, kicadName: 'C3N', spiceNode: 'c3n', padRefs: [] },
+      { id: 9, kicadName: 'O3', spiceNode: 'o3', padRefs: [] },
+      { id: 10, kicadName: 'C4P', spiceNode: 'c4p', padRefs: [] },
+      { id: 11, kicadName: 'C4N', spiceNode: 'c4n', padRefs: [] },
+      { id: 12, kicadName: 'O4', spiceNode: 'o4', padRefs: [] },
+      { id: 13, kicadName: 'VCC', spiceNode: 'vcc', padRefs: [] },
+      { id: 14, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const u1: Part = {
+      ref: 'U1', value: 'LM339', libId: 'Package_SO:SOP-14_3.9x8.7mm_P1.27mm', layer: 'F',
+      padNet: new Map([
+        ['1', 6], ['2', 3], ['3', 13], ['4', 2], ['5', 1], ['6', 5], ['7', 4],
+        ['8', 8], ['9', 7], ['10', 11], ['11', 10], ['12', 14], ['13', 12], ['14', 9],
+      ]),
+      properties: {},
+    }
+    const biasCards: Array<[string, string]> = [
+      ['R1', 'r_r1 c1p 0 100000'], ['R2', 'r_r2 c1n 0 100000'],
+      ['R3', 'r_r3 c2p 0 100000'], ['R4', 'r_r4 c2n 0 100000'],
+      ['R5', 'r_r5 c3n 0 100000'],
+      ['R6', 'r_r6 c4p 0 100000'], ['R7', 'r_r7 c4n 0 100000'],
+      ['R8', 'r_r8 vcc o1 10000'], ['R9', 'r_r9 vcc o2 10000'],
+      ['R10', 'r_r10 vcc o3 10000'], ['R11', 'r_r11 vcc o4 10000'],
+    ]
+    const parts: Part[] = [
+      u1,
+      ...biasCards.map(([ref]): Part => ({
+        ref, value: '10k', libId: 'R', layer: 'F', padNet: new Map(), properties: {},
+      })),
+    ]
+    const resolutions: Resolution[] = [
+      {
+        ref: 'U1', status: 'ok', tier: 3, warnings: [],
+        model: { kind: 'subckt', libFile: 'opamp.lib', subcktName: 'LM339_QUAD', pinMap: LM339_PINMAP },
+      },
+      ...biasCards.map(([ref, card]): Resolution => ({
+        ref, status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card },
+      })),
+    ]
+    const deck = generateDeck({
+      circuit: { nets, parts, warnings: [] },
+      resolutions,
+      instruments: [
+        { kind: 'ground-ref', netId: 14 },
+        { kind: 'dc-supply', id: '1', netId: 13, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 14,
+      modelTexts,
+    })
+    const bleeds = deck.filter(l => l.startsWith('r_float_'))
+    // ONLY the dangling sense net is an island. The biased inputs conduct via
+    // their resistors, the outputs via the {out1..4,vee} internal group
+    // (vee = 0), and vcc via the bench supply + pull-ups.
+    expect(bleeds).toEqual(['r_float_1 dangle 0 1e9'])
   })
 })
 
