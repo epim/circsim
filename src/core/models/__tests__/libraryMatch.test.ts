@@ -507,8 +507,8 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
     }
   })
 
-  it('Q2 value "AO3401" (no mpn property) → mosfet-pmos-generic via value-as-MPN', async () => {
-    const part = makePart('Q2', 'AO3401', 'Package_TO_SOT_SMD:SOT-23')
+  it('Q2 value "DMP2305U" (no mpn property) → mosfet-pmos-generic via value-as-MPN', async () => {
+    const part = makePart('Q2', 'DMP2305U', 'Package_TO_SOT_SMD:SOT-23')
     const circuit = makeCircuit([part])
     const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
     expect(res.tier).toBe(3)
@@ -638,5 +638,102 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
     if (res.model?.kind === 'subckt') {
       expect(res.model.subcktName).toBe('TL431')
     }
+  })
+
+  // ── Milestone 2: power-path discretes resolve end-to-end ───────────────────
+
+  it('Q5 value "NCE4012S" on SOP-8 → mosfet-nce4012s (one representative pad per terminal)', async () => {
+    const part = makePart('Q5', 'NCE4012S', 'SOP-8_L4.9-W3.9-P1.27-LS6.0-BL')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    expect(res.model?.kind).toBe('subckt')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('MNCE4012S')
+      // The deck generator emits ONE node per pinMap entry, so exactly one
+      // representative pad per VDMOS terminal (5=D, 4=G, 1=S) may be mapped.
+      expect(res.model.pinMap).toEqual({ '5': '1', '4': '2', '1': '3' })
+    }
+  })
+
+  it('Q2 value "NCE6005AS" on JLC SOP-8 → mosfet-nce6005as dual-FET subckt (named terminals)', async () => {
+    const part = makePart('Q2', 'NCE6005AS', 'JLC-MCP:SOP-8_L4.9-W3.9-P1.27-LS6.0-BL')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('NCE6005AS')
+      expect(res.model.pinMap).toEqual({
+        '7': 'd1', '2': 'g1', '1': 's1', '5': 'd2', '4': 'g2', '3': 's2',
+      })
+    }
+  })
+
+  it('Q3 value "AO3401" on SOT-23 → mosfet-ao3401 (dedicated card, NOT the pmos generic)', async () => {
+    // Regression: MPMOS_GEN aborted a real-board transient ("TRAN: Timestep too
+    // small … m_q3"); AO3401/AO3401A moved to a dedicated datasheet-tuned card.
+    const part = makePart('Q3', 'AO3401', 'JLC-MCP:SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('MAO3401')
+      expect(res.model.subcktName).not.toBe('MPMOS_GEN')
+    }
+  })
+
+  it('Q4 value "AO3401A" also → mosfet-ao3401 (unambiguous — alias removed from the generic)', async () => {
+    const part = makePart('Q4', 'AO3401A', 'Package_TO_SOT_SMD:SOT-23')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('MAO3401')
+    }
+  })
+
+  it('D7 value "SS54" on SMC → schottky-ss54 (pad 1 = cathode)', async () => {
+    const part = makePart('D7', 'SS54', 'SMC_L7.1-W6.2-LS8.1-R-RD')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('DSS54')
+      expect(res.model.pinMap).toEqual({ '1': '2', '2': '1' })
+    }
+    // The bare SMC footprint (no D_ prefix, as routed boards name it) matches a
+    // pinMaps key directly — no pinmap-unverified fallback warning.
+    expect(res.warnings.some((w) => w.includes('pinmap-unverified'))).toBe(false)
+  })
+
+  it('D8 value "SB540" → schottky-ss54 via alias', async () => {
+    const part = makePart('D8', 'SB540', 'Diode_SMD:D_SMB')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('DSS54')
+    }
+  })
+
+  it('D3 value "SMAJ24A" on D_SMA → tvs-smaj24a (kills the live 3-way fallback ambiguity)', async () => {
+    // Regression: with no SMAJ24A entry, D3 fell to the refdes+footprint tier
+    // where D + SMA matched three diode entries → false-ambiguous, unresolved.
+    const part = makePart('D3', 'SMAJ24A', 'Diode_SMD:D_SMA')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('DSMAJ24A')
+      expect(res.model.pinMap).toEqual({ '1': '2', '2': '1' })
+    }
+    expect(res.warnings.some((w) => w.includes('Ambiguous'))).toBe(false)
   })
 })

@@ -21,9 +21,35 @@
 .model MAO3400 VDMOS(vto=1.05 kp=40 lambda=0.02 rd=0.018 rs=0.004 rg=1.5
 + cgdmax=300p cgdmin=40p cgs=600p cjo=200p is=1e-12 rb=0.01 bv=30)
 
+* NCE4012S 40V/12A logic-level power NMOS (SOP-8, pads 1-3=S, 4=G, 5-8=D):
+* Vgs(th) typ 2.2V, Rds(on)~18 mohm @ Vgs=4.5V (rd=9 mohm + channel, kp tuned
+* so rd+rs+1/(kp*(4.5-vto)) ~= 18 mohm), Id=12A, Ciss~1.7nF (cgs=1.6n),
+* Crss~160pF (cgdmax). Body diode via is/rb, bv=40.
+.model MNCE4012S VDMOS(vto=2.2 kp=55 lambda=0.01 rd=0.009 rs=0.001 rg=1.2
++ cgdmax=160p cgdmin=25p cgs=1.6n cjo=500p is=1e-12 rb=0.005 bv=40)
+
+* NCE6005AS dual 60V/5A logic-level NMOS (SOP-8: 1=S1 2=G1 3=S2 4=G2 5,6=D2
+* 7,8=D1): Vgs(th) typ 1.6V, Rds(on)~32 mohm @ Vgs=4.5V per FET, Id=5A.
+* Two independent VDMOS devices in a subckt (terminals d1 g1 s1 d2 g2 s2).
+* The .model card lives INSIDE the subckt so deck inlining carries it along
+* (the generator inlines the .subckt block; a top-level card would dangle).
+.subckt NCE6005AS d1 g1 s1 d2 g2 s2
+.model MNCE6005AS VDMOS(vto=1.6 kp=19 lambda=0.02 rd=0.012 rs=0.002 rg=1.5
++ cgdmax=110p cgdmin=20p cgs=750p cjo=300p is=1e-12 rb=0.01 bv=60)
+m1 d1 g1 s1 s1 MNCE6005AS
+m2 d2 g2 s2 s2 MNCE6005AS
+.ends NCE6005AS
+
 * --------------------------------------------------------------------------- PMOS
 * Generic P-channel logic-level MOSFET (AO3401/DMP-class): Vgs(th)=-0.6..-1.3V,
 * Rds(on)~50-85 mohm @ Vgs=-4.5V, Id~-4A, Ciss~700pF. pchan=1 makes it P-type;
 * vto is given as a positive magnitude with pchan.
 .model MPMOS_GEN VDMOS(pchan=1 vto=-1.1 kp=18 lambda=0.02 rd=0.05 rs=0.01 rg=2
 + cgdmax=250p cgdmin=40p cgs=550p cjo=180p is=1e-12 rb=0.02 bv=30)
+
+* AO3401 / AO3401A P-channel 30V logic-level MOSFET (SOT-23): Vgs(th)=-0.5..-1.3V
+* (typ -0.9V), Rds(on)~50-60 mohm @ Vgs=-4.5V (rd + channel via kp), Id=-4A,
+* Ciss~900pF (cgs=750p + cgdmax=150p). Dedicated datasheet-tuned card (the
+* MPMOS_GEN generic aborted a real-board transient with "timestep too small").
+.model MAO3401 VDMOS(pchan=1 vto=-1.1 kp=12 lambda=0.02 rd=0.02 rs=0.005 rg=1.5
++ cgdmax=150p cgdmin=25p cgs=750p cjo=250p is=1e-12 rb=0.02 bv=30)

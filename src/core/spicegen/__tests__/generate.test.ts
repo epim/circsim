@@ -1063,6 +1063,97 @@ describe('generateDeck — inlines nested (transitive) subckt dependencies', () 
   })
 })
 
+// ─── Milestone 2: power-path discretes against the SHIPPED mosfet.lib ─────────
+
+describe('generateDeck — power-path MOSFETs from the real bundled mosfet.lib', () => {
+  // These tests read the actual resources/models/mosfet.lib so they validate the
+  // shipped library content (not a hand-rolled copy), like library-content does.
+  const REAL_MOSFET_LIB = readFileSync(join(process.cwd(), 'resources', 'models', 'mosfet.lib'), 'utf8')
+  const modelTexts = { 'mosfet.lib': REAL_MOSFET_LIB }
+
+  test('NCE4012S model-card on Q5 emits an m_ card with 4 nodes (D G S bulk=S)', () => {
+    // SOP-8 pads: 1-3=S, 4=G, 5-8=D. The pinMap maps ONE representative pad per
+    // terminal ({5:"1",4:"2",1:"3"}) — the generator emits one node per entry.
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'VBUS', spiceNode: 'vbus', padRefs: [] },
+      { id: 2, kicadName: 'GATE', spiceNode: 'gate', padRefs: [] },
+      { id: 3, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const q5: Part = {
+      ref: 'Q5', value: 'NCE4012S', libId: 'SOP-8_L4.9-W3.9-P1.27-LS6.0-BL', layer: 'F',
+      padNet: new Map([
+        ['1', 3], ['2', 3], ['3', 3], ['4', 2], ['5', 1], ['6', 1], ['7', 1], ['8', 1],
+      ]),
+      properties: {},
+    }
+    const resolutions: Resolution[] = [
+      {
+        ref: 'Q5', status: 'ok', tier: 3, warnings: [],
+        model: { kind: 'subckt', libFile: 'mosfet.lib', subcktName: 'MNCE4012S', pinMap: { '5': '1', '4': '2', '1': '3' } },
+      },
+    ]
+    const deck = generateDeck({
+      circuit: { nets, parts: [q5], warnings: [] },
+      resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 3 }],
+      groundNetId: 3,
+      modelTexts,
+    })
+    expect(deck.some(l => l.startsWith('x_q5'))).toBe(false)
+    const mLine = deck.find(l => l.startsWith('m_q5'))
+    // Terminal order D G S + bulk(=S): vbus gate 0 0
+    expect(mLine).toBe('m_q5 vbus gate 0 0 MNCE4012S')
+    // The real .model card is inlined exactly once.
+    expect(deck.filter(l => /^\.model MNCE4012S\b/i.test(l)).length).toBe(1)
+  })
+
+  test('NCE6005AS dual-FET subckt on Q2: x_ card in declared terminal order + block inlined with its inner .model', () => {
+    // Back-to-back battery-protection wiring: d1=PACK+, s1=s2=COM, d2=OUT.
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'PACK', spiceNode: 'pack', padRefs: [] },
+      { id: 2, kicadName: 'G1', spiceNode: 'g1drv', padRefs: [] },
+      { id: 3, kicadName: 'COM', spiceNode: 'com', padRefs: [] },
+      { id: 4, kicadName: 'OUT', spiceNode: 'outn', padRefs: [] },
+      { id: 5, kicadName: 'G2', spiceNode: 'g2drv', padRefs: [] },
+      { id: 6, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const q2: Part = {
+      ref: 'Q2', value: 'NCE6005AS', libId: 'JLC-MCP:SOP-8_L4.9-W3.9-P1.27-LS6.0-BL', layer: 'F',
+      // SOP-8 dual pinout: 1=S1 2=G1 3=S2 4=G2 5,6=D2 7,8=D1
+      padNet: new Map([
+        ['1', 3], ['2', 2], ['3', 3], ['4', 5], ['5', 4], ['6', 4], ['7', 1], ['8', 1],
+      ]),
+      properties: {},
+    }
+    const resolutions: Resolution[] = [
+      {
+        ref: 'Q2', status: 'ok', tier: 3, warnings: [],
+        model: {
+          kind: 'subckt', libFile: 'mosfet.lib', subcktName: 'NCE6005AS',
+          pinMap: { '7': 'd1', '2': 'g1', '1': 's1', '5': 'd2', '4': 'g2', '3': 's2' },
+        },
+      },
+    ]
+    const deck = generateDeck({
+      circuit: { nets, parts: [q2], warnings: [] },
+      resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 6 }],
+      groundNetId: 6,
+      modelTexts,
+    })
+    const deckText = deck.join('\n')
+    // Nodes wired in the subckt's DECLARED terminal order d1 g1 s1 d2 g2 s2.
+    const xLine = deck.find(l => l.startsWith('x_q2'))
+    expect(xLine).toBe('x_q2 pack g1drv com outn g2drv com NCE6005AS')
+    // The .subckt block is inlined once — and because the VDMOS .model card lives
+    // INSIDE the block, the definition arrives with it (no dangling model ref).
+    expect(deck.filter(l => /^\.subckt NCE6005AS\b/i.test(l)).length).toBe(1)
+    expect(deckText).toContain('.ends NCE6005AS')
+    expect(deckText).toMatch(/\.model \S+ VDMOS\([^)]*vto=1\.6/i)
+    expect(deckText).not.toContain('.include')
+  })
+})
+
 // ─── alterPlan ────────────────────────────────────────────────────────────────
 
 describe('alterPlan — dc-supply.volts', () => {

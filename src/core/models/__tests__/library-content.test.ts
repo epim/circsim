@@ -308,6 +308,156 @@ describe('bundled model library — Milestone 1 additions (JLC/KiCad-9 board cov
   })
 })
 
+// ─── Milestone 2: power-path discretes (real Quilter/KiCad-9 board coverage) ──
+
+describe('bundled model library — Milestone 2 power-path discretes', () => {
+  const index = readIndex()
+  const byId = new Map(index.entries.map((e) => [e.id, e]))
+  const mosfetText = readFileSync(join(MODELS_DIR, 'mosfet.lib'), 'utf8').replace(/\r?\n\+/g, ' ')
+  const diodesText = readFileSync(join(MODELS_DIR, 'diodes.lib'), 'utf8').replace(/\r?\n\+/g, ' ')
+
+  it('mosfet-nce4012s entry: VDMOS model card in mosfet.lib, MPN-only matching', () => {
+    const e = byId.get('mosfet-nce4012s')
+    expect(e, 'mosfet-nce4012s entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('model-card')
+    expect(e!.model.file).toBe('mosfet.lib')
+    expect(definedNames('mosfet.lib').has(e!.model.name.toUpperCase())).toBe(true)
+    expect(e!.match.mpn).toContain('NCE4012S')
+    // MPN/value matching only — a Q + SOP-8 fallback would collide with the
+    // NCE6005AS entry and false-positive on unknown SOP-8 parts (LM339 lesson).
+    expect(e!.match.refdesPrefix).toBeUndefined()
+    expect(e!.match.footprintRegex).toBeUndefined()
+  })
+
+  it('mosfet-nce4012s pinMap maps exactly ONE representative pad per VDMOS terminal', () => {
+    // SOP-8 pads 1-3 = S, 4 = G, 5-8 = D — but the deck generator emits one node
+    // per pinMap ENTRY, so mapping two pads to the same terminal position is a bug.
+    const e = byId.get('mosfet-nce4012s')!
+    const key = Object.keys(e.pinMaps).find((k) => /SOP/i.test(k))
+    expect(key, 'SOP-8 pinMap key must exist').toBeTruthy()
+    const map = e.pinMaps[key!]
+    expect(map).toEqual({ '5': '1', '4': '2', '1': '3' })
+    // Terminal positions 1..3 each appear exactly once.
+    expect(Object.values(map).sort()).toEqual(['1', '2', '3'])
+    // The key matches both the bare and the JLC-prefixed SOP-8 footprint names.
+    for (const fp of ['SOP-8_L4.9-W3.9-P1.27-LS6.0-BL', 'JLC-MCP:SOP-8_L4.9-W3.9-P1.27-LS6.0-BL']) {
+      expect(new RegExp(key!, 'i').test(fp), `pinMap key must match ${fp}`).toBe(true)
+    }
+  })
+
+  it('MNCE4012S card: VDMOS with vto=2.2, rd=0.009, cgs=1.6n, bv=40 (datasheet figures)', () => {
+    const card = mosfetText.match(/^\s*\.model\s+MNCE4012S\s+VDMOS\([^)]*\)/im)?.[0] ?? ''
+    expect(card, 'MNCE4012S card must exist in mosfet.lib').toBeTruthy()
+    expect(card).toMatch(/\bvto=2\.2\b/i)
+    expect(card).toMatch(/\brd=0?\.009\b/i)
+    expect(card).toMatch(/\bcgs=1\.6n\b/i)
+    expect(card).toMatch(/\bcgdmax=160p\b/i)
+    expect(card).toMatch(/\bbv=40\b/i)
+  })
+
+  it('mosfet-nce6005as entry: dual-FET subckt in mosfet.lib with named terminals d1 g1 s1 d2 g2 s2', () => {
+    const e = byId.get('mosfet-nce6005as')
+    expect(e, 'mosfet-nce6005as entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('subckt')
+    expect(e!.model.file).toBe('mosfet.lib')
+    expect(e!.model.name).toBe('NCE6005AS')
+    expect(e!.match.mpn).toContain('NCE6005AS')
+    expect(e!.match.refdesPrefix).toBeUndefined()
+    expect(e!.match.footprintRegex).toBeUndefined()
+    // The subckt declares its terminals in the documented order.
+    expect(mosfetText).toMatch(/^\s*\.subckt\s+NCE6005AS\s+d1\s+g1\s+s1\s+d2\s+g2\s+s2\s*$/im)
+    // TWO VDMOS instances (one per FET), and the .model card lives INSIDE the
+    // subckt block so deck inlining carries it along transitively.
+    const block = mosfetText.match(/\.subckt\s+NCE6005AS[\s\S]*?\.ends\s+NCE6005AS/i)?.[0] ?? ''
+    expect(block, '.subckt NCE6005AS block must exist').toBeTruthy()
+    expect(block.match(/^\s*m\d\s/gim)?.length).toBe(2)
+    expect(block).toMatch(/\.model\s+\S+\s+VDMOS\(/i)
+  })
+
+  it('mosfet-nce6005as pinMap: one representative pad per terminal (SOP-8 dual pinout)', () => {
+    const e = byId.get('mosfet-nce6005as')!
+    const key = Object.keys(e.pinMaps).find((k) => /SOP/i.test(k))
+    expect(key, 'SOP-8 pinMap key must exist').toBeTruthy()
+    const map = e.pinMaps[key!]
+    expect(map).toEqual({ '7': 'd1', '2': 'g1', '1': 's1', '5': 'd2', '4': 'g2', '3': 's2' })
+    expect(Object.values(map).sort()).toEqual(['d1', 'd2', 'g1', 'g2', 's1', 's2'])
+  })
+
+  it('mosfet-ao3401 entry: dedicated PMOS card; aliases removed from mosfet-pmos-generic', () => {
+    const e = byId.get('mosfet-ao3401')
+    expect(e, 'mosfet-ao3401 entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('model-card')
+    expect(e!.model.file).toBe('mosfet.lib')
+    expect(e!.model.name).toBe('MAO3401')
+    expect(definedNames('mosfet.lib').has('MAO3401')).toBe(true)
+    expect(e!.match.mpn).toContain('AO3401')
+    expect(e!.match.mpn).toContain('AO3401A')
+    // The generic must NOT still list the aliases (would be mpn-tier ambiguous).
+    const generic = byId.get('mosfet-pmos-generic')!
+    expect(generic.match.mpn).not.toContain('AO3401')
+    expect(generic.match.mpn).not.toContain('AO3401A')
+  })
+
+  it('MAO3401 card: VDMOS pchan with negative vto and bv=30', () => {
+    const card = mosfetText.match(/^\s*\.model\s+MAO3401\s+VDMOS\([^)]*\)/im)?.[0] ?? ''
+    expect(card, 'MAO3401 card must exist in mosfet.lib').toBeTruthy()
+    expect(card).toMatch(/\bpchan=1\b/i)
+    expect(card).toMatch(/\bvto=-(0\.9|1(\.[0-3])?)\b/i)
+    expect(card).toMatch(/\bbv=30\b/i)
+  })
+
+  it('schottky-ss54 entry: 5A/40V Schottky card in diodes.lib with the SS5x/SB540 aliases', () => {
+    const e = byId.get('schottky-ss54')
+    expect(e, 'schottky-ss54 entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('model-card')
+    expect(e!.model.file).toBe('diodes.lib')
+    expect(e!.model.name).toBe('DSS54')
+    expect(definedNames('diodes.lib').has('DSS54')).toBe(true)
+    for (const m of ['SS54', 'SS52', 'SS56', 'SB540']) {
+      expect(e!.match.mpn, `mpn list must include ${m}`).toContain(m)
+    }
+    // pad 1 = cathode (existing Schottky convention: pinMap {1:"2",2:"1"}).
+    expect(e!.defaultPinMap).toEqual({ '1': '2', '2': '1' })
+    // Pin-map key covers the bare SMC footprint name routed boards use.
+    const key = Object.keys(e!.pinMaps)[0]
+    expect(new RegExp(key, 'i').test('SMC_L7.1-W6.2-LS8.1-R-RD')).toBe(true)
+    expect(new RegExp(key, 'i').test('Diode_SMD:D_SMC_Handsoldering')).toBe(true)
+  })
+
+  it('DSS54 card: Schottky parameters (bv=40, eg=0.69, xti=2, cjo=300p)', () => {
+    const card = diodesText.match(/^\s*\.model\s+DSS54\s+D\([^)]*\)/im)?.[0] ?? ''
+    expect(card, 'DSS54 card must exist in diodes.lib').toBeTruthy()
+    expect(card).toMatch(/\bbv=40\b/i)
+    expect(card).toMatch(/\beg=0?\.69\b/i)
+    expect(card).toMatch(/\bxti=2\b/i)
+    expect(card).toMatch(/\bcjo=300p\b/i)
+  })
+
+  it('tvs-smaj24a entry: unidirectional 24V TVS card, MPN-only matching (D3 false-ambiguity fix)', () => {
+    const e = byId.get('tvs-smaj24a')
+    expect(e, 'tvs-smaj24a entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('model-card')
+    expect(e!.model.file).toBe('diodes.lib')
+    expect(e!.model.name).toBe('DSMAJ24A')
+    expect(definedNames('diodes.lib').has('DSMAJ24A')).toBe(true)
+    expect(e!.match.mpn).toEqual(['SMAJ24A'])
+    expect(e!.match.refdesPrefix).toBeUndefined()
+    expect(e!.match.footprintRegex).toBeUndefined()
+    expect(e!.defaultPinMap).toEqual({ '1': '2', '2': '1' })
+  })
+
+  it('DSMAJ24A card: bv=26.7 ibv=1m cjo=280p rs=1.16 n=1 (datasheet clamp figures)', () => {
+    const card = diodesText.match(/^\s*\.model\s+DSMAJ24A\s+D\([^)]*\)/im)?.[0] ?? ''
+    expect(card, 'DSMAJ24A card must exist in diodes.lib').toBeTruthy()
+    expect(card).toMatch(/\bbv=26\.7\b/i)
+    expect(card).toMatch(/\bibv=1m\b/i)
+    expect(card).toMatch(/\bcjo=280p\b/i)
+    // rs carries the clamp slope: (38.9V - 26.7V - ~0.24V junction)/10.3A ~ 1.16
+    expect(card).toMatch(/\brs=1\.1[0-9]?\b/i)
+    expect(card).toMatch(/\bn=1\b/i)
+  })
+})
+
 describe('logic74hc.json — XSPICE template structure (Spec §8.5)', () => {
   const j = JSON.parse(readFileSync(join(MODELS_DIR, 'logic74hc.json'), 'utf8')) as {
     templates: Record<

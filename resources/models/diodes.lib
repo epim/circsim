@@ -34,6 +34,22 @@
 + bv=40 ibv=1m eg=0.69 xti=2)
 
 * ---------------------------------------------------------------------------
+* SS54 / SB540 Schottky barrier rectifier (5A, 40V, DO-214AB/SMC).
+* Datasheet typ: Vf=0.55V @ 5A (is/n set the junction drop, rs=30 mohm adds
+* the ohmic part); Vbr=40V; Schottky eg=0.69 and xti=2, n near 1.
+.model DSS54 D(is=2u rs=0.03 n=1.1 tt=8n cjo=300p vj=0.4 m=0.38
++ bv=40 ibv=1m eg=0.69 xti=2)
+
+* ---------------------------------------------------------------------------
+* SMAJ24A unidirectional 24V TVS (SMA, 400W): standoff 24V, breakdown
+* 26.7-29.5V @ 1mA (bv/ibv), clamping 38.9V @ 10.3A. The exponential breakdown
+* only adds ~n*Vt*ln(Ipp/ibv) ~ 0.24V from 1mA to 10.3A, so rs=1.16 supplies
+* the remaining (38.9-26.7-0.24)/10.3 ~ 1.16 ohm of clamp slope. Forward path
+* is an ordinary Si diode; Cj~280pF.
+.model DSMAJ24A D(is=1e-12 rs=1.16 n=1 cjo=280p vj=0.75 m=0.333
++ bv=26.7 ibv=1m eg=1.11)
+
+* ---------------------------------------------------------------------------
 * BZX55C5V1 / 5V1 zener diode (Vz=5.1V @ 5mA).
 * Reverse breakdown modeled via bv/ibv; forward path is an ordinary Si diode.
 .model DZ5V1 D(is=1n rs=0.5 n=1.7 tt=50n cjo=175p vj=0.75 m=0.333

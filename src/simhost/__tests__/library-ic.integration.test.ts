@@ -38,6 +38,8 @@ function libLines(file: string): string[] {
 const opampLib = libLines('opamp.lib')
 const regLib = libLines('regulators.lib')
 const t555Lib = libLines('timer555.lib')
+const mosfetLib = libLines('mosfet.lib')
+const diodesLib = libLines('diodes.lib')
 
 interface IndexEntry {
   id: string
@@ -198,7 +200,14 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     const loaded: string[] = []
     const failures: string[] = []
     for (const e of subcktEntries) {
-      const lib = e.model.file === 'opamp.lib' ? opampLib : e.model.file === 'regulators.lib' ? regLib : t555Lib
+      const lib =
+        e.model.file === 'opamp.lib'
+          ? opampLib
+          : e.model.file === 'regulators.lib'
+            ? regLib
+            : e.model.file === 'mosfet.lib'
+              ? mosfetLib
+              : t555Lib
       // A minimal bias deck per class. All subckts get rails + a probe load.
       let deck: string[]
       const name = e.model.name
@@ -208,6 +217,10 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
         deck = ['* cmp', 'vcc vcc 0 dc 5', 'rpu vcc out 10k', 'vp p 0 dc 3', 'vn n 0 dc 1', `x1 p n out vcc 0 ${name}`, ...lib, '.op', '.end']
       } else if (e.model.file === 'regulators.lib') {
         deck = ['* reg', 'vin vin 0 dc 15', `x1 vin 0 vout ${name}`, 'rl vout 0 200', ...lib, '.op', '.end']
+      } else if (e.model.file === 'mosfet.lib') {
+        // Dual FET (terminals d1 g1 s1 d2 g2 s2): both gates high, both channels
+        // pull their drains low through the load resistors.
+        deck = ['* dualfet', 'vd d 0 dc 5', 'vg g 0 dc 5', 'rd1 d drn1 100', 'rd2 d drn2 100', `x1 drn1 g 0 drn2 g 0 ${name}`, ...lib, '.op', '.end']
       } else {
         // NE555 static bias (op just needs to load; oscillation is the tran test)
         deck = ['* 555', 'vcc vcc 0 dc 5', `x1 0 trig out vcc ctrl thres disch vcc NE555`, 'vt trig 0 dc 1', 'vth thres 0 dc 1', ...lib, '.op', '.end']
@@ -253,6 +266,170 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     console.log(`\n[TL431 shunt ref] k=${r.v['k']?.toFixed(4)}V (target 2.495V)\n`)
     expect(r.errs).toEqual([])
     expect(r.v['k']).toBeCloseTo(2.495, 2)
+  }, 60_000)
+
+  it('NCE6005AS back-to-back pair with both gates high conducts ~1A with a small drop', async () => {
+    // Battery-protection wiring: d1=PACK side, s1=s2=COM (common source), d2=OUT
+    // tied to 0. With both gates driven well above the common source, the loop
+    // current is set by rl and the pair drop is ~2*Rds(on)*I ≈ 64 mV.
+    const deck = [
+      '* NCE6005AS back-to-back battery-protection pair, both channels on',
+      'vbat vbat 0 dc 5',
+      'vg g 0 dc 5',
+      'rl vbat pack 4.9',
+      'x1 pack g com 0 g com NCE6005AS',
+      ...mosfetLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    const drop = r.v['pack']
+    const amps = (5 - drop) / 4.9
+    // eslint-disable-next-line no-console
+    console.log(`\n[NCE6005AS pair] I=${amps.toFixed(3)}A drop=${(drop * 1e3).toFixed(1)}mV (expect ~64mV @ 1A)\n`)
+    expect(r.errs).toEqual([])
+    expect(amps).toBeGreaterThan(0.95)
+    expect(amps).toBeLessThan(1.05)
+    // Small on-state drop: well below a body-diode drop, above a dead short.
+    expect(drop).toBeGreaterThan(0.02)
+    expect(drop).toBeLessThan(0.15)
+  }, 60_000)
+
+  it('SS54 Schottky: forward drop ~0.5-0.6V at 5A', async () => {
+    const deck = [
+      '* SS54 forward drop at the 5A datasheet test current',
+      'i1 0 a dc 5',
+      'd1 a 0 DSS54',
+      ...diodesLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    // eslint-disable-next-line no-console
+    console.log(`\n[SS54] Vf@5A=${r.v['a']?.toFixed(4)}V (datasheet typ ~0.55V)\n`)
+    expect(r.errs).toEqual([])
+    expect(r.v['a']).toBeGreaterThan(0.45)
+    expect(r.v['a']).toBeLessThan(0.65)
+  }, 60_000)
+
+  it('SMAJ24A TVS: reverse clamp ~38.9V at the 10.3A datasheet surge current', async () => {
+    // Reverse-drive the TVS: 10.3 A forced into the cathode with the anode
+    // grounded → the diode operates in breakdown and v(k) is the clamp voltage.
+    // Datasheet: Vc=38.9V max @ Ipp=10.3A (10/1000us). Assert ±10%.
+    const deck = [
+      '* SMAJ24A reverse clamp at the 10.3A datasheet surge current',
+      'i1 0 k dc 10.3',
+      'd1 0 k DSMAJ24A',
+      ...diodesLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    // eslint-disable-next-line no-console
+    console.log(`\n[SMAJ24A] Vclamp@10.3A=${r.v['k']?.toFixed(4)}V (datasheet 38.9V max)\n`)
+    expect(r.errs).toEqual([])
+    expect(r.v['k']).toBeGreaterThan(38.9 * 0.9)
+    expect(r.v['k']).toBeLessThan(38.9 * 1.1)
+  }, 60_000)
+
+  it('MAO3401 P-FET high-side switch: gate low turns it on hard (drop < 100mV at ~1A)', async () => {
+    // High-side P-channel switch: source at 5V, gate pulled to 0.5V
+    // (Vgs = -4.5V, well past vto=-1.1), drain feeding a 5-ohm load to ground.
+    // With Rds(on) ~ tens of milliohms the load carries close to 1A and the
+    // source→drain drop stays below 100mV.
+    const deck = [
+      '* MAO3401 high-side switch, gate low (on)',
+      'vcc vcc 0 dc 5',
+      'vg g 0 dc 0.5',
+      'm1 drn g vcc vcc MAO3401',
+      'rl drn 0 5',
+      ...mosfetLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    const amps = r.v['drn'] / 5
+    const drop = 5 - r.v['drn']
+    // eslint-disable-next-line no-console
+    console.log(`\n[MAO3401 on] I=${amps.toFixed(3)}A drop=${(drop * 1e3).toFixed(1)}mV (expect ~1A, <100mV)\n`)
+    expect(r.errs).toEqual([])
+    // Current flows source→drain into the load: close to the 1A full-on value.
+    expect(amps).toBeGreaterThan(0.95)
+    expect(amps).toBeLessThan(1.05)
+    expect(drop).toBeGreaterThan(0)
+    expect(drop).toBeLessThan(0.1)
+  }, 60_000)
+
+  it('MAO3401 P-FET high-side switch: gate high (Vgs=0) turns it off (load current ~0)', async () => {
+    // Gate tied to the 5V source rail → Vgs=0, channel off; the body diode
+    // (drain→source for a P-FET) is reverse-biased in this topology, so the
+    // load sees essentially no current and the drain sits near ground.
+    const deck = [
+      '* MAO3401 high-side switch, gate high (off)',
+      'vcc vcc 0 dc 5',
+      'm1 drn vcc vcc vcc MAO3401',
+      'rl drn 0 5',
+      ...mosfetLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    const amps = r.v['drn'] / 5
+    // eslint-disable-next-line no-console
+    console.log(`\n[MAO3401 off] I=${(amps * 1e6).toFixed(3)}uA v(drn)=${r.v['drn']?.toExponential(3)}V (expect ~0)\n`)
+    expect(r.errs).toEqual([])
+    expect(Math.abs(amps)).toBeLessThan(1e-3)
+  }, 60_000)
+
+  it('MAO3401 P-FET switching transient completes without "timestep too small"', async () => {
+    // The dedicated MAO3401 card exists because the MPMOS_GEN generic aborted a
+    // real-board transient with "TRAN: Timestep too small". Drive the gate of a
+    // high-side switch with a pulse (on/off at 10kHz-ish) for 100us and assert
+    // the transient produces data instead of aborting.
+    const deck = [
+      '* MAO3401 high-side switch, pulsed gate transient',
+      'vcc vcc 0 dc 5',
+      'vg g 0 dc 5 pulse(5 0.5 5u 1u 1u 40u 100u)',
+      'm1 drn g vcc vcc MAO3401',
+      'rl drn 0 5',
+      'cl drn 0 1n',
+      ...mosfetLib,
+      '.end'
+    ]
+    const r = await runTran(deck, '50n', '100u')
+    const drn = r.series['drn'] ?? []
+    const vOn = Math.max(...drn)
+    const vOff = Math.min(...drn)
+    // eslint-disable-next-line no-console
+    console.log(
+      `\n[MAO3401 tran] rows=${r.t.length} v(drn) min=${vOff.toFixed(3)}V max=${vOn.toFixed(3)}V errs=[${r.errs.join('|')}]\n`
+    )
+    expect(r.errs.join('|')).not.toMatch(/timestep too small/i)
+    expect(r.errs).toEqual([])
+    expect(r.t.length).toBeGreaterThan(0)
+    // Sanity: the load node actually swings (switch turns on and off).
+    expect(vOn).toBeGreaterThan(4.5)
+    expect(vOff).toBeLessThan(0.5)
+  }, 90_000)
+
+  it('NCE4012S body diode conducts when the gate is low and the source sits above the drain', async () => {
+    // Gate tied to source (channel off); 1A forced into the source with the
+    // drain grounded → the VDMOS body diode (source→drain) carries the current
+    // at a diode-like drop.
+    const deck = [
+      '* NCE4012S body-diode conduction (gate low, source above drain)',
+      'i1 0 s dc 1',
+      'm1 0 s s s MNCE4012S',
+      ...mosfetLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    // eslint-disable-next-line no-console
+    console.log(`\n[NCE4012S body diode] Vsd@1A=${r.v['s']?.toFixed(4)}V (expect diode-like 0.4-1.2V)\n`)
+    expect(r.errs).toEqual([])
+    expect(r.v['s']).toBeGreaterThan(0.4)
+    expect(r.v['s']).toBeLessThan(1.2)
   }, 60_000)
 
   it('NE555 astable: period within 20% of 0.693*(R1+2R2)*C', async () => {

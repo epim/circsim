@@ -44,6 +44,19 @@
       "provenance": "Written for circsim from 1N5819 Schottky datasheet parameters (Vf~0.6V@1A, Vbr=40V, eg=0.69), MIT."
     },
     {
+      "id": "schottky-ss54",
+      "match": {
+        "mpn": ["SS54", "SS52", "SS56", "SB540"]
+      },
+      "model": { "type": "model-card", "file": "diodes.lib", "name": "DSS54" },
+      "$comment": "5A/40V-class Schottky (DO-214AB/SMC). MPN/value matching only — a D + SMA/SMB/SMC fallback would collide with the 1N4001/1N5819 fallback rules. pinMaps keys are for pin mapping, not matching; the (D_)? prefix covers bare routed-board footprint names like SMC_L7.1-….",
+      "pinMaps": {
+        "(D_)?(SMC|SMB|SMA|DO-214|DO-201).*": { "1": "2", "2": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "1" },
+      "provenance": "Written for circsim from SS54 Schottky datasheet parameters (Vf~0.55V@5A, Vbr=40V, eg=0.69), MIT."
+    },
+    {
       "id": "zener-5v1",
       "match": {
         "mpn": ["BZX55C5V1", "BZX84C5V1", "1N4733A", "5V1"],
@@ -72,6 +85,19 @@
       },
       "defaultPinMap": { "1": "2", "2": "1" },
       "provenance": "Written for circsim from BZX84C3V0 / 3V0 zener datasheet parameters (Vz=3.0V@1mA via bv/ibv), MIT."
+    },
+    {
+      "id": "tvs-smaj24a",
+      "match": {
+        "mpn": ["SMAJ24A"]
+      },
+      "model": { "type": "model-card", "file": "diodes.lib", "name": "DSMAJ24A" },
+      "$comment": "Unidirectional 24V TVS (SMA). MPN/value matching only — the D + SMA refdes/footprint fallback tier gave a live 3-way false ambiguity on a real board (D3). pinMaps keys are for pin mapping, not matching.",
+      "pinMaps": {
+        "(D_)?(SMA|SMB|SMC|DO-214).*": { "1": "2", "2": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "1" },
+      "provenance": "Written for circsim from SMAJ24A TVS datasheet parameters (Vbr=26.7V@1mA, Vc=38.9V@10.3A via rs, Cj~280pF), MIT."
     },
     {
       "id": "led-generic",
@@ -260,16 +286,56 @@
     {
       "id": "mosfet-pmos-generic",
       "match": {
-        "mpn": ["AO3401", "AO3401A", "DMP2305U", "SI2301", "BSS84"],
+        "mpn": ["DMP2305U", "SI2301", "BSS84"],
         "refdesPrefix": ["Q", "M", "T"],
         "footprintRegex": "(SOT-23|SOT-323)"
       },
       "model": { "type": "model-card", "file": "mosfet.lib", "name": "MPMOS_GEN" },
+      "$comment": "AO3401/AO3401A moved to the dedicated mosfet-ao3401 entry (keeping them here would make the mpn tier ambiguous).",
       "pinMaps": {
         "SOT-23.*": { "1": "2", "2": "3", "3": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "3", "3": "1" },
-      "provenance": "Written for circsim from generic logic-level P-MOSFET (AO3401/DMP-class) datasheet parameters, VDMOS PMOS. SOT-23 pinout pin1=Gate, pin2=Source, pin3=Drain, MIT."
+      "provenance": "Written for circsim from generic logic-level P-MOSFET (DMP-class) datasheet parameters, VDMOS PMOS. SOT-23 pinout pin1=Gate, pin2=Source, pin3=Drain, MIT."
+    },
+    {
+      "id": "mosfet-ao3401",
+      "match": {
+        "mpn": ["AO3401", "AO3401A"]
+      },
+      "model": { "type": "model-card", "file": "mosfet.lib", "name": "MAO3401" },
+      "$comment": "Dedicated datasheet-tuned AO3401 card (the MPMOS_GEN generic aborted a real-board transient). MPN/value matching only — the SOT-23 Q fallback tier stays with mosfet-pmos-generic.",
+      "pinMaps": {
+        "SOT-23.*": { "1": "2", "2": "3", "3": "1" }
+      },
+      "defaultPinMap": { "1": "2", "2": "3", "3": "1" },
+      "provenance": "Written for circsim from AO3401/AO3401A datasheet parameters (Vgs(th) typ -0.9V, Rds(on)~50-60mohm@-4.5V, Ciss~900pF), VDMOS PMOS. SOT-23 pinout pin1=Gate, pin2=Source, pin3=Drain, MIT."
+    },
+    {
+      "id": "mosfet-nce4012s",
+      "match": {
+        "mpn": ["NCE4012S"]
+      },
+      "model": { "type": "model-card", "file": "mosfet.lib", "name": "MNCE4012S" },
+      "$comment": "SOP-8 power NMOS: pads 1-3=S, 4=G, 5-8=D. The deck generator emits ONE node per pinMap entry, so exactly one representative pad per VDMOS terminal is mapped (5=D, 4=G, 1=S) — mapping two pads to one terminal position would emit extra nodes. MPN/value matching only (a Q + SOP-8 fallback would collide with mosfet-nce6005as and false-positive on unknown SOP-8 parts).",
+      "pinMaps": {
+        "SOP-?8.*": { "5": "1", "4": "2", "1": "3" }
+      },
+      "defaultPinMap": { "5": "1", "4": "2", "1": "3" },
+      "provenance": "Written for circsim from NCE4012S datasheet parameters (Vgs(th) typ 2.2V, Rds(on)~18mohm@4.5V, Ciss~1.7nF, Crss~160pF), VDMOS NMOS, MIT."
+    },
+    {
+      "id": "mosfet-nce6005as",
+      "match": {
+        "mpn": ["NCE6005AS"]
+      },
+      "model": { "type": "subckt", "file": "mosfet.lib", "name": "NCE6005AS" },
+      "$comment": "Dual 60V/5A NMOS in SOP-8 (1=S1 2=G1 3=S2 4=G2 5,6=D2 7,8=D1): subckt terminals d1 g1 s1 d2 g2 s2, two VDMOS devices; the .model card lives inside the subckt so deck inlining carries it. One representative pad per terminal (7=D1, 5=D2). MPN/value matching only.",
+      "pinMaps": {
+        "SOP-?8.*": { "7": "d1", "2": "g1", "1": "s1", "5": "d2", "4": "g2", "3": "s2" }
+      },
+      "defaultPinMap": { "7": "d1", "2": "g1", "1": "s1", "5": "d2", "4": "g2", "3": "s2" },
+      "provenance": "Written for circsim from NCE6005AS dual-NMOS datasheet parameters (Vgs(th) typ 1.6V, Rds(on)~32mohm@4.5V per FET), two VDMOS devices in a subckt, MIT."
     },
     {
       "id": "opamp-lm358",
