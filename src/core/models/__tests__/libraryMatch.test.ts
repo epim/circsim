@@ -864,21 +864,86 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
     }
   })
 
-  it('U6 "CD4538" and U1 "CH224K" stay unresolved (index schema has no deliberate-open entry kind)', async () => {
-    // DOCUMENTED GAP: the CD4538 dual monostable (RC-programmed pulse width)
-    // and CH224K USB-PD sink controller are not simulatable with the existing
-    // primitives, and LibraryEntry.model.type has no stub/open kind — so a
-    // "known part, deliberately open" library entry is NOT expressible today.
-    // They fall through to red-unresolved; connectors are the only parts that
-    // get the ok-with-note open treatment (resolve.ts isConnector).
-    for (const [ref, value, fp] of [
-      ['U6', 'CD4538', 'JLC-MCP:SOP-16_L10.0-W3.9-P1.27-LS6.0-BL'],
-      ['U1', 'CH224K', 'JLC-MCP:ESSOP-10_L4.9-W3.9-P1.0-LS6.0-TL-EP'],
+  it('U6 "CD4538" and U1 "CH224K" resolve documented-open with the note (never another model\'s deck)', async () => {
+    // M9 DOCUMENTED OPENS: the CD4538 dual monostable and CH224K USB-PD sink
+    // controller are known parts we intentionally do not model — the index now
+    // carries documented-open entries whose required note says WHY. They must
+    // resolve 'documented-open' (an open stub carrying the note), and — the
+    // original intent of this gap test — must NEVER silently resolve to some
+    // other model's deck (e.g. a 74HC595 false-positive on the SOP-16 U6).
+    for (const [ref, value, fp, notePattern] of [
+      ['U6', 'CD4538', 'JLC-MCP:SOP-16_L10.0-W3.9-P1.27-LS6.0-BL', /monostable/i],
+      ['U1', 'CH224K', 'JLC-MCP:ESSOP-10_L4.9-W3.9-P1.0-LS6.0-TL-EP', /USB Type-C PD/i],
     ] as const) {
       const part = makePart(ref, value, fp)
       const circuit = makeCircuit([part])
       const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
-      expect(res.status, `${value} has no model`).toBe('unresolved')
+      expect(res.status, `${value} is a documented open`).toBe('documented-open')
+      expect(res.tier).toBe(3)
+      // Deck-gen sees exactly today's open-stub shape — no other model's deck.
+      expect(res.model).toEqual({ kind: 'stub', mode: 'open' })
+      expect(res.note, `${value} must carry the why-not-modeled note`).toBeTruthy()
+      expect(res.note).toMatch(notePattern)
+      expect(res.note).toMatch(/Intentionally left open/i)
     }
+  })
+
+  it('real-board census: the two lantern justified opens are 0 unresolved / 2 documented-open', async () => {
+    // History: the lantern board went 14 → 2 unresolved across M1–M5c; the two
+    // residuals (U1 CH224K, U6 CD4538) are justified opens. With M9 they leave
+    // the red-unresolved bucket entirely.
+    const parts = [
+      makePart('U6', 'CD4538', 'JLC-MCP:SOP-16_L10.0-W3.9-P1.27-LS6.0-BL'),
+      makePart('U1', 'CH224K', 'JLC-MCP:ESSOP-10_L4.9-W3.9-P1.0-TL-EP'),
+    ]
+    const circuit = makeCircuit(parts)
+    const resolutions = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(resolutions.filter((r) => r.status === 'unresolved')).toHaveLength(0)
+    expect(resolutions.filter((r) => r.status === 'documented-open')).toHaveLength(2)
+  })
+})
+
+// ─── M9: documented-open entries (known part, intentionally not modeled) ──────
+
+describe('resolveAll tier 3 — documented-open entries (M9)', () => {
+  const openEntry: LibraryEntry = {
+    id: 'open-widget',
+    match: { mpn: ['WIDGET1'] },
+    model: { type: 'documented-open', name: 'WIDGET1' },
+    note: 'Test widget — no SPICE-level analog. Intentionally left open.',
+    pinMaps: {},
+    provenance: 'test entry, MIT',
+  }
+
+  it('a matched documented-open entry → status documented-open, open stub, note carried', () => {
+    const part = makePart('U9', 'WIDGET1', 'Package_SO:SOIC-8')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, [openEntry])
+    expect(res.status).toBe('documented-open')
+    expect(res.tier).toBe(3)
+    expect(res.model).toEqual({ kind: 'stub', mode: 'open' })
+    expect(res.note).toBe('Test widget — no SPICE-level analog. Intentionally left open.')
+  })
+
+  it('a modeled entry with the same MPN wins over the documented-open entry (user-import override path)', () => {
+    // The store injects user models as LibraryEntry objects with the same MPN.
+    // A documented-open entry must yield — not create a false mpn-tier ambiguity —
+    // or "Import .lib…" on an open-by-design part could never take effect.
+    const userEntry = makeEntry('user-model-widget1', { mpn: ['WIDGET1'] }, { 'SOIC-8.*': { '1': '1' } })
+    const result = matchLibraryEntry(
+      { mpn: 'WIDGET1', libId: 'Package_SO:SOIC-8', value: 'WIDGET1', ref: 'U9' },
+      [userEntry, openEntry],
+    )
+    expect(result.kind).toBe('match')
+    if (result.kind === 'match') expect(result.entry.id).toBe('user-model-widget1')
+  })
+
+  it('a Model Doctor stub override still wins over documented-open', () => {
+    const part = makePart('U9', 'WIDGET1', 'Package_SO:SOIC-8')
+    const circuit = makeCircuit([part])
+    const overrides = new Map([['U9', { kind: 'stub', mode: 'short' } as const]])
+    const [res] = resolveAll(circuit, undefined, undefined, [openEntry], overrides)
+    expect(res.status).toBe('stubbed')
+    expect(res.model).toEqual({ kind: 'stub', mode: 'short' })
   })
 })

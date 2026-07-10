@@ -340,8 +340,9 @@ type ResolvedModel =
   | { kind: 'subckt'; libFile: string; subcktName: string; pinMap: PinMap }
   | { kind: 'xspice-digital'; templateId: string; pinMap: PinMap }       // expands to adc_bridge+gates+dac_bridge
   | { kind: 'stub'; mode: 'open' | 'short' | 'interactive-pins' };
-interface Resolution { ref: string; status: 'ok' | 'stubbed' | 'unresolved'; model?: ResolvedModel;
-                       tier: 1|2|3|4|5|6; warnings: string[] }
+interface Resolution { ref: string; status: 'ok' | 'stubbed' | 'unresolved' | 'documented-open'; model?: ResolvedModel;
+                       tier: 1|2|3|4|5|6; warnings: string[];
+                       note?: string /* why intentionally not modeled — documented-open only */ }
 type PinMap = Record<string /* pad number */, string /* subckt node position or name */>;
 ```
 
@@ -351,8 +352,9 @@ type PinMap = Record<string /* pad number */, string /* subckt node position or 
 interface LibraryEntry {
   id: string;
   match: { mpn?: string[]; valueRegex?: string; refdesPrefix?: string[]; footprintRegex?: string };
-  model: { type: 'subckt' | 'model-card' | 'xspice-digital'; file?: string; name: string };
-  pinMaps: Record<string /* footprint pattern, e.g. "SOT-23" */, PinMap>;  // REQUIRED — see pin-mapping note
+  model: { type: 'subckt' | 'model-card' | 'xspice-digital' | 'documented-open'; file?: string; name: string };
+  note?: string;        // REQUIRED for documented-open: why the part is intentionally not modeled
+  pinMaps: Record<string /* footprint pattern, e.g. "SOT-23" */, PinMap>;  // REQUIRED — see pin-mapping note ({} for documented-open)
   defaultPinMap?: PinMap;
   provenance: string;   // who wrote it, from which datasheet — every entry must have this
 }

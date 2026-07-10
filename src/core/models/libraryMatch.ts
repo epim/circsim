@@ -226,13 +226,26 @@ function matchesByFallback(entry: LibraryEntry, part: PartDescriptor): boolean {
 // ─── Main matching function ───────────────────────────────────────────────────
 
 /**
+ * Documented-open entries ("we know this part and intentionally don't model
+ * it") yield to modeled entries at the same tier: a user-imported model with
+ * the same MPN must WIN, not create a false mpn-tier ambiguity — otherwise
+ * "Import .lib…" on an open-by-design part could never take effect.
+ */
+function preferModeled(matches: LibraryEntry[]): LibraryEntry[] {
+  if (matches.length < 2) return matches
+  const modeled = matches.filter(e => e.model.type !== 'documented-open')
+  return modeled.length > 0 ? modeled : matches
+}
+
+/**
  * Attempt to find a library entry matching the given part descriptor.
  *
  * Implements the three-tier matching precedence:
  *   mpn > valueRegex > fallback (refdesPrefix + footprintRegex)
  *
  * At each tier, if exactly one entry matches → 'match'.
- * If two or more match at the same tier → 'ambiguous' (do not fall through).
+ * If two or more match at the same tier → 'ambiguous' (do not fall through),
+ * except that documented-open entries yield to modeled ones first.
  * If zero match at a tier → try the next tier.
  */
 export function matchLibraryEntry(
@@ -240,7 +253,7 @@ export function matchLibraryEntry(
   library: LibraryEntry[],
 ): MatchResult {
   // ── Tier A: MPN ────────────────────────────────────────────────────────────
-  const mpnMatches = library.filter(e => matchesByMpn(e, part.mpn))
+  const mpnMatches = preferModeled(library.filter(e => matchesByMpn(e, part.mpn)))
   if (mpnMatches.length === 1) {
     return { kind: 'match', entry: mpnMatches[0], tier: 'mpn' }
   }
@@ -249,7 +262,7 @@ export function matchLibraryEntry(
   }
 
   // ── Tier B: Value regex ────────────────────────────────────────────────────
-  const valueMatches = library.filter(e => matchesByValueRegex(e, part.value))
+  const valueMatches = preferModeled(library.filter(e => matchesByValueRegex(e, part.value)))
   if (valueMatches.length === 1) {
     return { kind: 'match', entry: valueMatches[0], tier: 'valueRegex' }
   }
@@ -258,7 +271,7 @@ export function matchLibraryEntry(
   }
 
   // ── Tier C: Fallback (refdesPrefix + footprintRegex) ──────────────────────
-  const fallbackMatches = library.filter(e => matchesByFallback(e, part))
+  const fallbackMatches = preferModeled(library.filter(e => matchesByFallback(e, part)))
   if (fallbackMatches.length === 1) {
     return { kind: 'match', entry: fallbackMatches[0], tier: 'fallback' }
   }

@@ -61,24 +61,34 @@ export interface ResolutionSummary {
   ok: number
   stubbed: number
   unresolved: number
+  /** Known parts intentionally not modeled (library documented-open entries — M9). */
+  documentedOpen: number
 }
 
 /** Count resolutions by status — drives the fidelity banner + parts badges. */
 export function resolutionSummary(resolutions: Resolution[]): ResolutionSummary {
-  const summary: ResolutionSummary = { total: resolutions.length, ok: 0, stubbed: 0, unresolved: 0 }
+  const summary: ResolutionSummary = {
+    total: resolutions.length, ok: 0, stubbed: 0, unresolved: 0, documentedOpen: 0,
+  }
   for (const r of resolutions) {
     if (r.status === 'ok') summary.ok++
     else if (r.status === 'stubbed') summary.stubbed++
+    else if (r.status === 'documented-open') summary.documentedOpen++
     else summary.unresolved++
   }
   return summary
 }
 
-/** UI status badge color for a resolution: ok → green, stubbed → amber, unresolved → red. */
-export type StatusBadge = 'ok' | 'amber' | 'red'
+/**
+ * UI status badge color for a resolution: ok → green, stubbed → amber,
+ * documented-open → grey ("open by design" — deliberate, not an error),
+ * unresolved → red.
+ */
+export type StatusBadge = 'ok' | 'amber' | 'red' | 'grey'
 export function statusBadge(r: Resolution): StatusBadge {
   if (r.status === 'ok') return 'ok'
   if (r.status === 'stubbed') return 'amber'
+  if (r.status === 'documented-open') return 'grey'
   return 'red'
 }
 
@@ -86,13 +96,15 @@ export function statusBadge(r: Resolution): StatusBadge {
 
 export interface FidelityBannerItem {
   ref: string
-  /** Plain-language mode, e.g. "stubbed (open)" or "unresolved". */
+  /** Plain-language mode, e.g. "stubbed (open)", "unresolved" or "open by design". */
   mode: string
 }
 
 /**
  * Build the persistent fidelity-banner list (Spec §8.6 / §12): one entry per part
  * whose `status !== 'ok'`, in resolution order, naming the ref + the stub mode.
+ * Documented opens read "open by design" — they are still approximations, but
+ * deliberate ones (M9), never lumped in with "unresolved".
  * Empty list ⇒ banner hidden (the simulation is fully resolved).
  */
 export function fidelityBannerItems(resolutions: Resolution[]): FidelityBannerItem[] {
@@ -103,6 +115,8 @@ export function fidelityBannerItems(resolutions: Resolution[]): FidelityBannerIt
     if (r.status === 'stubbed') {
       const stubMode = r.model?.kind === 'stub' ? r.model.mode : 'open'
       mode = `stubbed (${stubMode})`
+    } else if (r.status === 'documented-open') {
+      mode = 'open by design'
     } else {
       mode = 'unresolved'
     }
@@ -146,14 +160,20 @@ export function opCaveatMessage(method: Exclude<OpSolveMethod, 'direct'>): strin
  * a wall of refs (M7 F9): more than 3 problem parts → "N parts unresolved"
  * (naming stubs honestly when they're in the mix); 3 or fewer → null, meaning
  * the banner should keep listing the individual refs (that's useful).
+ *
+ * Documented opens (M9) are counted separately — never as "unresolved":
+ * all-open → "N parts open by design"; mixed → "… · N open by design".
  */
 export function collapsedFidelitySummary(items: FidelityBannerItem[]): string | null {
   if (items.length <= 3) return null
   const unresolved = items.filter(i => i.mode === 'unresolved').length
-  const stubbed = items.length - unresolved
+  const openByDesign = items.filter(i => i.mode === 'open by design').length
+  const stubbed = items.length - unresolved - openByDesign
+  if (unresolved + stubbed === 0) return `${items.length} parts open by design`
   const what =
     unresolved === 0 ? 'stubbed' : stubbed === 0 ? 'unresolved' : 'unresolved or stubbed'
-  return `${items.length} parts ${what}`
+  const openSuffix = openByDesign > 0 ? ` · ${openByDesign} open by design` : ''
+  return `${unresolved + stubbed} parts ${what}${openSuffix}`
 }
 
 /**

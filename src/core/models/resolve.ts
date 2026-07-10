@@ -514,6 +514,22 @@ function tryTier3(
 
   // Single match
   const entry = matchResult.entry
+
+  // Documented open: known part, intentionally not modeled. Resolves to the
+  // SAME open-stub shape deck-gen already handles for unresolved parts (no
+  // elements emitted), but with a distinct status + the library's required
+  // note so the UI can say WHY instead of showing red "unresolved".
+  if (entry.model.type === 'documented-open') {
+    return {
+      ref: part.ref,
+      status: 'documented-open',
+      model: { kind: 'stub', mode: 'open' },
+      note: entry.note,
+      tier: 3,
+      warnings: [],
+    }
+  }
+
   const warnings: string[] = []
 
   // Select pin map

@@ -2,7 +2,8 @@
  * renderer/panels/PartsPanel.tsx — Task 21
  *
  * Left-dock Parts / BOM list (Spec §11). For every part in the circuit shows the
- * ref, value, and a status badge (ok = green, stubbed = amber, unresolved = red).
+ * ref, value, and a status badge (ok = green, stubbed = amber, unresolved = red,
+ * documented-open = grey "Open by design" — M9).
  * The list is searchable (ref or value substring) and selection is synced
  * bidirectionally with the viewport via the store's `selectedRef`:
  *   - clicking a row sets `selectedRef` (→ viewport highlights the component)
@@ -21,12 +22,14 @@ const BADGE_COLORS: Record<StatusBadge, string> = {
   ok: '#2ecc71',
   amber: '#f1c40f',
   red: '#e74c3c',
+  grey: '#95a5a6',
 }
 
 const BADGE_LABEL: Record<StatusBadge, string> = {
   ok: 'OK',
   amber: 'Stubbed',
   red: 'No model',
+  grey: 'Open by design',
 }
 
 export default function PartsPanel(): React.ReactElement {
@@ -99,7 +102,7 @@ export default function PartsPanel(): React.ReactElement {
               <span
                 style={{ ...badgeStyle, background: BADGE_COLORS[badge] }}
                 title={BADGE_LABEL[badge]}
-                data-testid={badge === 'red' ? 'status-badge-red' : badge === 'amber' ? 'status-badge-amber' : 'status-badge-ok'}
+                data-testid={`status-badge-${badge}`}
               />
               <span style={refStyle}>{part.ref}</span>
               <span style={valueStyle}>{part.value || '—'}</span>

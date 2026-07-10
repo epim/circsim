@@ -23,6 +23,8 @@ import {
   fidelityBannerItems,
   collapsedFidelitySummary,
   opCaveatMessage,
+  resolutionSummary,
+  statusBadge,
   type AppStore,
 } from '../appStore'
 import { createMockSimClient, type MockSimClient } from '../../ipc/simClient'
@@ -448,6 +450,65 @@ describe('Spec §12 — fidelity banner is non-dismissable and lists refs', () =
 
     const mixed = fidelityBannerItems([unres('U1'), unres('U2'), unres('U3'), stub('U4')])
     expect(collapsedFidelitySummary(mixed)).toBe('4 parts unresolved or stubbed')
+  })
+
+  // ── M9: documented opens are "open by design", never "unresolved" ──────────
+
+  it('fidelityBannerItems lists documented-open refs with "open by design"', () => {
+    const resolutions: Resolution[] = [
+      {
+        ref: 'U1', status: 'documented-open', tier: 3, warnings: [],
+        model: { kind: 'stub', mode: 'open' },
+        note: 'USB Type-C PD sink controller — intentionally left open.',
+      },
+    ]
+    const items = fidelityBannerItems(resolutions)
+    expect(items).toHaveLength(1)
+    expect(items[0].ref).toBe('U1')
+    expect(items[0].mode).toBe('open by design')
+  })
+
+  it('collapsedFidelitySummary: only documented opens → "N parts open by design"', () => {
+    const open = (ref: string): Resolution => ({
+      ref, status: 'documented-open', tier: 3, warnings: [],
+      model: { kind: 'stub', mode: 'open' }, note: 'why not modeled',
+    })
+    const items = fidelityBannerItems([open('U1'), open('U2'), open('U3'), open('U6')])
+    expect(collapsedFidelitySummary(items)).toBe('4 parts open by design')
+  })
+
+  it('collapsedFidelitySummary: documented opens do NOT count as unresolved in the mix', () => {
+    const open = (ref: string): Resolution => ({
+      ref, status: 'documented-open', tier: 3, warnings: [],
+      model: { kind: 'stub', mode: 'open' }, note: 'why not modeled',
+    })
+    const unres = (ref: string): Resolution => ({ ref, status: 'unresolved', tier: 6, warnings: [] })
+    const items = fidelityBannerItems([unres('Q1'), unres('Q2'), unres('Q3'), unres('Q4'), open('U1'), open('U6')])
+    expect(collapsedFidelitySummary(items)).toBe('4 parts unresolved · 2 open by design')
+  })
+
+  it('resolutionSummary counts documented opens separately from unresolved', () => {
+    const resolutions: Resolution[] = [
+      { ref: 'R1', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'r_r1 a b 10k' } },
+      {
+        ref: 'U1', status: 'documented-open', tier: 3, warnings: [],
+        model: { kind: 'stub', mode: 'open' }, note: 'why not modeled',
+      },
+      { ref: 'U9', status: 'unresolved', tier: 6, warnings: [] },
+    ]
+    const summary = resolutionSummary(resolutions)
+    expect(summary.total).toBe(3)
+    expect(summary.ok).toBe(1)
+    expect(summary.documentedOpen).toBe(1)
+    expect(summary.unresolved).toBe(1)
+  })
+
+  it('statusBadge: documented-open → grey (not red, not amber)', () => {
+    const res: Resolution = {
+      ref: 'U1', status: 'documented-open', tier: 3, warnings: [],
+      model: { kind: 'stub', mode: 'open' }, note: 'why not modeled',
+    }
+    expect(statusBadge(res)).toBe('grey')
   })
 
   it('the store does NOT expose any action to dismiss the fidelity banner (it is non-dismissable)', () => {

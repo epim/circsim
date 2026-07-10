@@ -34,6 +34,10 @@ export default function WarningsBar(): React.ReactElement | null {
   const fidelity = fidelityBannerItems(resolutions)
   // M7 F9: >3 problem parts → one-line count instead of a wall of refs.
   const fidelityCollapsed = collapsedFidelitySummary(fidelity)
+  // M9: when the only remaining items are documented opens ("open by design"),
+  // the banner is informational — a deliberate library decision, not a problem.
+  const onlyOpenByDesign =
+    fidelity.length > 0 && fidelity.every(it => it.mode === 'open by design')
   const [rawOpen, setRawOpen] = useState(false)
 
   // "open Model Doctor": the Doctor drawer (left dock) is already visible
@@ -123,16 +127,27 @@ export default function WarningsBar(): React.ReactElement | null {
 
       {/* ── Fidelity banner (persistent, non-dismissable) ─────────────────── */}
       {fidelity.length > 0 && (
-        <div style={fidelityStyle}>
-          <strong>Results approximate:</strong>{' '}
-          {fidelityCollapsed ??
-            fidelity.map((it, i) => (
-              <span key={it.ref}>
-                {i > 0 && ', '}
-                <span style={refStyle}>{it.ref}</span> {it.mode}
-              </span>
-            ))}
-          {' — '}
+        <div
+          style={onlyOpenByDesign ? fidelityInfoStyle : fidelityStyle}
+          data-testid={onlyOpenByDesign ? 'fidelity-info' : undefined}
+        >
+          <strong>{onlyOpenByDesign ? 'Open by design:' : 'Results approximate:'}</strong>{' '}
+          {onlyOpenByDesign && fidelityCollapsed
+            ? `${fidelity.length} parts`
+            : fidelityCollapsed ??
+              fidelity.map((it, i) => (
+                <span key={it.ref}>
+                  {i > 0 && ', '}
+                  <span style={refStyle}>{it.ref}</span>
+                  {/* M9: the all-open header already names the mode — no per-ref repeat. */}
+                  {!onlyOpenByDesign && <> {it.mode}</>}
+                </span>
+              ))}
+          {/* M9: calm tone, honest content — state the consequence of the opens. */}
+          {onlyOpenByDesign && (
+            <> — these parts are not simulated; circuits they drive won&apos;t respond.</>
+          )}
+          {onlyOpenByDesign ? ' ' : ' — '}
           <span
             style={linkStyle}
             title="Fix or stub these parts in the Model Doctor"
@@ -190,6 +205,13 @@ const fidelityStyle: React.CSSProperties = {
   background: '#3a2e12',
   color: '#fde9b0',
   borderTop: '1px solid #5a4a22',
+}
+/** M9: only documented opens remain — informational grey-blue, not warning amber. */
+const fidelityInfoStyle: React.CSSProperties = {
+  ...baseRow,
+  background: '#1c2733',
+  color: '#bcd3e8',
+  borderTop: '1px solid #2c4152',
 }
 const opCaveatStyle: React.CSSProperties = {
   ...baseRow,

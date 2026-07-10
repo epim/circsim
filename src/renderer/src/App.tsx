@@ -259,6 +259,7 @@ function Shell(): React.ReactElement {
           <span style={{ fontSize: 12, color: '#9ab' }}>
             {summary.total} parts · {summary.ok} ok
             {summary.stubbed > 0 && ` · ${summary.stubbed} stubbed`}
+            {summary.documentedOpen > 0 && ` · ${summary.documentedOpen} open by design`}
             {summary.unresolved > 0 && ` · ${summary.unresolved} unresolved`}
           </span>
         )}

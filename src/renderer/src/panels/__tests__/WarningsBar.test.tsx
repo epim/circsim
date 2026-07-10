@@ -62,3 +62,56 @@ describe('M7 F9 — fidelity banner collapses a wall of refs', () => {
     expect(html).not.toContain('Results approximate')
   })
 })
+
+// ─── M9: documented opens are informational, never "unresolved" ────────────────
+
+function documentedOpen(ref: string): Resolution {
+  return {
+    ref,
+    status: 'documented-open',
+    tier: 3,
+    warnings: [],
+    model: { kind: 'stub', mode: 'open' },
+    note: 'Known part, intentionally left open.',
+  }
+}
+
+describe('M9 — documented opens in the fidelity banner', () => {
+  it('only documented opens → informational banner that still carries the consequence', () => {
+    const html = renderBar([documentedOpen('U1'), documentedOpen('U6')])
+    expect(html).not.toContain('Results approximate')
+    expect(html).toContain('Open by design')
+    expect(html).toContain('U1')
+    expect(html).toContain('U6')
+    // Calm tone, honest content: the user must learn their results are affected.
+    expect(html).toContain('these parts are not simulated')
+    expect(html).toContain('circuits they drive')
+    // No redundant per-ref "open by design" repetition after the header.
+    expect(html.match(/open by design/gi)).toHaveLength(1)
+    expect(html).toContain('open Model Doctor')
+    expect(html).toContain('data-testid="open-model-doctor"')
+  })
+
+  it('>3 items, all documented opens → collapsed informational count + consequence', () => {
+    const html = renderBar(['U1', 'U2', 'U3', 'U6'].map(documentedOpen))
+    expect(html).toContain('Open by design')
+    expect(html).toContain('4 parts')
+    expect(html).toContain('these parts are not simulated')
+    // The header already says it — no "4 parts open by design" repetition.
+    expect(html.match(/open by design/gi)).toHaveLength(1)
+    expect(html).not.toContain('unresolved')
+  })
+
+  it('mixed: documented opens do not count toward the "unresolved" number', () => {
+    const html = renderBar([
+      ...['Q1', 'Q2', 'Q3', 'Q4'].map(unresolved),
+      documentedOpen('U1'),
+      documentedOpen('U6'),
+    ])
+    // Real problems keep the honest error tone…
+    expect(html).toContain('Results approximate')
+    // …and the count separates the two populations.
+    expect(html).toContain('4 parts unresolved · 2 open by design')
+    expect(html).not.toContain('6 parts unresolved')
+  })
+})

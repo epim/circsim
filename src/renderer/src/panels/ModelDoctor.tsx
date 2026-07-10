@@ -3,7 +3,8 @@
  *
  * Docked drawer (NEVER a blocking modal — Spec §8.6) listing every part whose
  * resolution status ≠ ok. Per part:
- *   - amber/red status pill + warnings
+ *   - amber/red status pill + warnings (grey "open by design" + informational
+ *     why-note for documented opens — M9)
  *   - actions: [Stub open] [Stub short] [Interactive pins] [Import .lib…] [Ask your LLM]
  *   - a pin-map editor: a table mapping each pad number ↔ model terminal name
  *
@@ -91,6 +92,16 @@ function DoctorRow({
   const [forcePinMapOpen, setForcePinMapOpen] = useState(false)
 
   const isStubbed = res.status === 'stubbed'
+  // M9: documented open — the library knows this part and intentionally doesn't
+  // model it. Informational (grey), with the required why-note shown prominently.
+  const isOpenByDesign = res.status === 'documented-open'
+  // Reset must appear whenever ANY stored override exists for this ref: a pin-map
+  // edit on a documented-open card (tier 3, not stubbed) stores state that is
+  // inert on the open stub but would apply to a later import — it must never be
+  // uncleanable silent state (M9 review fix).
+  const hasOverride = useApp(
+    s => s.stubOverrides.has(res.ref) || s.pinMapOverrides.has(res.ref),
+  )
 
   // Selection sync (F4): the highlight keys on selectedRef; the SCROLL keys on
   // the explicit revealDoctorRequest (ref + nonce), so re-requesting the
@@ -201,13 +212,25 @@ function DoctorRow({
       data-selected={isSelected || undefined}
     >
       <div style={rowHeaderStyle}>
-        <span style={{ ...pillStyle, background: isStubbed ? '#f1c40f' : '#e74c3c' }}>
-          {isStubbed ? 'stubbed' : 'no model'}
+        <span
+          style={{
+            ...pillStyle,
+            background: isOpenByDesign ? '#95a5a6' : isStubbed ? '#f1c40f' : '#e74c3c',
+          }}
+        >
+          {isOpenByDesign ? 'open by design' : isStubbed ? 'stubbed' : 'no model'}
         </span>
         <strong>{res.ref}</strong>
         <span style={{ color: '#aaa' }}>{part.value || '—'}</span>
         <span style={{ color: '#777', fontSize: 11 }}>{part.libId}</span>
       </div>
+
+      {/* M9: the why-not-modeled note — informational, not an error. */}
+      {res.note && (
+        <div style={noteStyle} data-testid="doctor-note">
+          {res.note}
+        </div>
+      )}
 
       {res.warnings.length > 0 && (
         <ul style={warnListStyle}>
@@ -242,7 +265,7 @@ function DoctorRow({
         >
           {pinEditorOpen ? 'Hide pin map' : 'Pin map'}
         </button>
-        {(isStubbed || res.tier === 6) && (
+        {(isStubbed || res.tier === 6 || hasOverride) && (
           <button style={btnGhostStyle} onClick={() => store.getState().clearPartOverride(res.ref)}>
             Reset
           </button>
@@ -428,6 +451,16 @@ const pillStyle: React.CSSProperties = {
   padding: '1px 6px',
   fontSize: 11,
   fontWeight: 700,
+}
+/** M9: informational why-not-modeled note (documented opens) — calm, not error-pink. */
+const noteStyle: React.CSSProperties = {
+  marginTop: 6,
+  padding: '6px 8px',
+  background: '#1c2733',
+  color: '#bcd3e8',
+  borderLeft: '3px solid #5b7a94',
+  borderRadius: 4,
+  fontSize: 12,
 }
 const warnListStyle: React.CSSProperties = {
   margin: '6px 0 6px 18px',

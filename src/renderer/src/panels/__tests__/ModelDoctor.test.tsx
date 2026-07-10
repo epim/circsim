@@ -12,13 +12,15 @@
 
 import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ModelDoctor, { _revealDoctorCard } from '../ModelDoctor'
 import { AppStoreProvider } from '../../store/storeContext'
 import { createAppStore } from '../../store/appStore'
 import { createMockSimClient } from '../../ipc/simClient'
 import type { Circuit, Part } from '../../../../core/netlist/extract'
-import type { Resolution } from '../../../../core/models/types'
+import type { LibraryEntry, Resolution } from '../../../../core/models/types'
 import type { AppState } from '../../store/appStore'
 
 function part(ref: string, value: string): Part {
@@ -85,6 +87,91 @@ describe('ModelDoctor — selection sync (F4)', () => {
     const html = renderDoctor('R99')
     expect(html).toContain('data-ref="U1"') // drawer still renders
     expect(html).not.toContain('data-selected')
+  })
+})
+
+// ─── M9: documented-open cards — informational note + full override actions ───
+
+function renderDoctorWith(resolutions: Resolution[], parts: Part[]): string {
+  const store = createAppStore({ simClient: createMockSimClient() })
+  const circuit: Circuit = { nets: [], parts, warnings: [] }
+  store.setState({ circuit, resolutions, selectedRef: null })
+  ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+    store.getState()
+  return renderToStaticMarkup(
+    <AppStoreProvider store={store}>
+      <ModelDoctor />
+    </AppStoreProvider>,
+  )
+}
+
+describe('ModelDoctor — documented-open cards (M9)', () => {
+  const openRes: Resolution = {
+    ref: 'U1',
+    status: 'documented-open',
+    tier: 3,
+    warnings: [],
+    model: { kind: 'stub', mode: 'open' },
+    note: 'USB Type-C PD sink controller — electrically passive at a fixed 5 V bench supply. Intentionally left open.',
+  }
+
+  it('shows the note prominently as informational (not an error pill)', () => {
+    const html = renderDoctorWith([openRes], [part('U1', 'CH224K')])
+    expect(html).toContain('data-testid="doctor-note"')
+    expect(html).toContain('Intentionally left open.')
+    // Pill reads "open by design", not "no model" / "stubbed".
+    expect(html).toContain('open by design')
+    expect(html).not.toContain('no model')
+  })
+
+  it('still offers every override action (stub / interactive / import / pin map)', () => {
+    const html = renderDoctorWith([openRes], [part('U1', 'CH224K')])
+    for (const label of ['Stub open', 'Stub short', 'Interactive pins', 'Import .lib…', 'Pin map']) {
+      expect(html, `action "${label}" must stay available`).toContain(label)
+    }
+  })
+
+  it('an unresolved card keeps the red "no model" pill and shows no note block', () => {
+    const html = renderDoctorWith([unresolved('U2')], [part('U2', 'MYSTERY99')])
+    expect(html).toContain('no model')
+    expect(html).not.toContain('data-testid="doctor-note"')
+  })
+
+  it('a pin-map override on a documented-open card is clearable: override → Reset visible → clears', () => {
+    // A Pin map edit on a documented-open part stores a pinMapOverrides entry
+    // that has NO effect on the open stub — legitimate prep for a later import,
+    // but it must surface as resettable state, never uncleanable silent state
+    // that ambushes that import. Uses the REAL library so U1 (CH224K) resolves
+    // documented-open at tier 3 throughout (a tier-6 card shows Reset anyway).
+    const realLibrary = (
+      JSON.parse(
+        readFileSync(join(process.cwd(), 'resources', 'models', 'index.json'), 'utf8'),
+      ) as { entries: LibraryEntry[] }
+    ).entries
+    const store = createAppStore({ simClient: createMockSimClient() })
+    const circuit: Circuit = { nets: [], parts: [part('U1', 'CH224K')], warnings: [] }
+    store.setState({ circuit })
+    store.getState().setModelLibrary(realLibrary, {})
+    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+      store.getState()
+    const render = (): string =>
+      renderToStaticMarkup(
+        <AppStoreProvider store={store}>
+          <ModelDoctor />
+        </AppStoreProvider>,
+      )
+
+    expect(store.getState().resolutions[0].status).toBe('documented-open')
+    // No override yet → nothing to reset.
+    expect(render()).not.toContain('>Reset<')
+
+    store.getState().setPinMap('U1', { '1': 'vdd' })
+    expect(store.getState().resolutions[0].status).toBe('documented-open')
+    expect(render()).toContain('>Reset<')
+
+    store.getState().clearPartOverride('U1')
+    expect(store.getState().pinMapOverrides.has('U1')).toBe(false)
+    expect(render()).not.toContain('>Reset<')
   })
 })
 

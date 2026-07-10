@@ -25,10 +25,12 @@ export type ResolvedModel =
 
 export interface Resolution {
   ref: string;
-  status: 'ok' | 'stubbed' | 'unresolved';
+  status: 'ok' | 'stubbed' | 'unresolved' | 'documented-open';
   model?: ResolvedModel;
   tier: 1 | 2 | 3 | 4 | 5 | 6;
   warnings: string[];
+  /** Why the part is intentionally not modeled — documented-open only. */
+  note?: string;
 }
 
 // ─── LibraryEntry ─────────────────────────────────────────────────────────────
@@ -42,11 +44,13 @@ export interface LibraryEntry {
     footprintRegex?: string;
   };
   model: {
-    type: 'subckt' | 'model-card' | 'xspice-digital';
-    file?: string;
+    type: 'subckt' | 'model-card' | 'xspice-digital' | 'documented-open';
+    file?: string;   // absent for documented-open (no model text by definition)
     name: string;
   };
-  pinMaps: Record<string /* footprint pattern, e.g. "SOT-23" */, PinMap>;  // REQUIRED — see pin-mapping note
+  /** REQUIRED for documented-open entries: why the part is intentionally not modeled. */
+  note?: string;
+  pinMaps: Record<string /* footprint pattern, e.g. "SOT-23" */, PinMap>;  // REQUIRED — see pin-mapping note ({} for documented-open)
   defaultPinMap?: PinMap;
   provenance: string;   // who wrote it, from which datasheet — every entry must have this
 }

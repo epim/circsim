@@ -659,6 +659,24 @@
         "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2Y", "5": "2A", "6": "2B", "7": "GND", "8": "3A", "9": "3B", "10": "3Y", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
       },
       "provenance": "XSPICE behavioral CD4011 quad NAND written for circsim from datasheet pinout + typical tpd (d_nand) at the fixed 12 V family rail, MIT."
+    },
+    {
+      "id": "open-ch224k",
+      "match": { "mpn": ["CH224K"] },
+      "model": { "type": "documented-open", "name": "CH224K" },
+      "note": "USB Type-C PD sink controller — power-role negotiation happens in protocol logic that has no SPICE-level analog; at a fixed 5 V bench supply the part is electrically passive. Intentionally left open.",
+      "$comment": "Documented open: known part, deliberately not modeled — resolves to an open stub carrying the note (grey 'open by design' in the UI, not red-unresolved). No model text, no pin map (an open wires no pads). MPN/value matching only.",
+      "pinMaps": {},
+      "provenance": "Documented-open entry written for circsim from the WCH CH224K datasheet review (PD negotiation is protocol logic; electrically passive at a fixed 5 V bench rail) — no model text by design, MIT."
+    },
+    {
+      "id": "open-cd4538",
+      "match": { "mpn": ["CD4538", "CD4538B", "CD4538BM", "HEF4538", "MC14538"] },
+      "model": { "type": "documented-open", "name": "CD4538" },
+      "note": "Dual precision monostable — needs an edge-triggered event model and multi-unit pin mapping that the XSPICE digital family doesn't support yet. Intentionally left open.",
+      "$comment": "Documented open: known part, deliberately not modeled — resolves to an open stub carrying the note. MPN/value matching only — a U + 16-pin fallback would collide with logic-74hc595 (the exact false-positive the CD4538 gap test exists to catch).",
+      "pinMaps": {},
+      "provenance": "Documented-open entry written for circsim from the TI CD4538B datasheet review (retriggerable monostable, per-unit RC timing pins) — no model text by design, MIT."
     }
   ]
 }

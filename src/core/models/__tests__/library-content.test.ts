@@ -87,6 +87,11 @@ describe('bundled model library — index resolution (Spec §8.5)', () => {
   it.each(readIndex().entries.map((e) => [e.id, e] as const))(
     'entry %s resolves: model.name exists in model.file',
     (_id, entry) => {
+      if (entry.model.type === 'documented-open') {
+        // Documented opens carry no model text by definition — the note is the content.
+        expect(entry.model.file, `entry ${entry.id} must not name a model file`).toBeUndefined()
+        return
+      }
       expect(entry.model.file, `entry ${entry.id} must name a model file`).toBeTruthy()
       const names = definedNames(entry.model.file as string)
       expect(
@@ -99,6 +104,12 @@ describe('bundled model library — index resolution (Spec §8.5)', () => {
   it.each(readIndex().entries.map((e) => [e.id, e] as const))(
     'entry %s has pinMaps or defaultPinMap',
     (_id, entry) => {
+      if (entry.model.type === 'documented-open') {
+        // An open stub wires no pads — a pin map would be meaningless.
+        expect(Object.keys(entry.pinMaps ?? {}).length).toBe(0)
+        expect(entry.defaultPinMap).toBeUndefined()
+        return
+      }
       const hasPinMaps = entry.pinMaps && Object.keys(entry.pinMaps).length > 0
       const hasDefault = entry.defaultPinMap && Object.keys(entry.defaultPinMap).length > 0
       expect(
@@ -614,6 +625,50 @@ describe('bundled model library — Milestone 3 behavioral power-IC stubs', () =
     expect(new RegExp(key!, 'i').test('JLC-MCP:MSOP-8_L3.0-W3.0-P0.65-LS4.9-BL-EP1.8')).toBe(true)
     const terms = new Set(subcktTerminals('AL8860'))
     for (const t of Object.values(e.pinMaps[key!])) expect(terms.has(t), `terminal ${t}`).toBe(true)
+  })
+})
+
+// ─── M9: documented opens (known parts, intentionally not modeled) ────────────
+
+describe('bundled model library — M9 documented opens', () => {
+  const index = readIndex()
+  const byId = new Map(index.entries.map((e) => [e.id, e]))
+
+  it('every documented-open entry carries a non-empty note explaining WHY', () => {
+    const opens = index.entries.filter((e) => e.model.type === 'documented-open')
+    expect(opens.length).toBeGreaterThanOrEqual(2)
+    for (const e of opens) {
+      expect(typeof e.note, `${e.id} note`).toBe('string')
+      expect((e.note ?? '').length, `${e.id} note must explain why`).toBeGreaterThan(20)
+      expect(e.note, `${e.id} note must state the intent`).toMatch(/Intentionally left open/i)
+      // MPN/value matching ONLY — the hard-learned repo rule; a refdes/footprint
+      // fallback would claim unknown parts as "open by design" (worse than red).
+      expect(e.match.mpn && e.match.mpn.length > 0, `${e.id} must match by mpn`).toBe(true)
+      expect(e.match.refdesPrefix, `${e.id} must not have a refdes fallback`).toBeUndefined()
+      expect(e.match.footprintRegex, `${e.id} must not have a footprint fallback`).toBeUndefined()
+      // Provenance convention holds for documented opens too.
+      expect(e.provenance).toMatch(/MIT/)
+    }
+  })
+
+  it('open-ch224k: USB-PD sink controller (lantern U1), electrically passive at a fixed 5 V bench', () => {
+    const e = byId.get('open-ch224k')
+    expect(e, 'open-ch224k entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('documented-open')
+    expect(e!.match.mpn).toContain('CH224K')
+    expect(e!.note).toMatch(/USB Type-C PD sink controller/i)
+    expect(e!.note).toMatch(/no SPICE-level analog/i)
+    expect(e!.note).toMatch(/electrically passive/i)
+  })
+
+  it('open-cd4538: dual precision monostable (lantern U6), no XSPICE event model yet', () => {
+    const e = byId.get('open-cd4538')
+    expect(e, 'open-cd4538 entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('documented-open')
+    expect(e!.match.mpn).toContain('CD4538')
+    expect(e!.note).toMatch(/Dual precision monostable/i)
+    expect(e!.note).toMatch(/edge-triggered event model/i)
+    expect(e!.note).toMatch(/XSPICE digital family/i)
   })
 })
 
