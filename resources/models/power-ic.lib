@@ -1,0 +1,84 @@
+* Provenance: written for circsim from manufacturer datasheet parameters, MIT.
+* In-house BEHAVIORAL power-management-IC stubs. No vendor model text is
+* copied: each subckt is a deliberately SIMPLIFIED operating-point model that
+* covers only what a bench DC bias / live-bench run needs (gate-driver rest
+* states, internal LDO rails, averaged regulation targets). The datasheet
+* electrical characteristics used (drive levels, LDO voltage, mean sense
+* voltage, dimming thresholds) are facts; every simplification is documented
+* in the per-part SIMPLIFICATIONS note below.
+
+* ---------------------------------------------------------------------------
+* BQ77915 family (BQ77915xx, TI) 3S-5S battery protector — NORMAL-mode stub.
+* Nodes: vdd vss chg dsg
+* Datasheet basis: in NORMAL mode both external-FET drivers are ON — CHG and
+* DSG drive to the supply rail; Iq ~ 8 uA. E-sources hold chg and dsg at
+* v(vdd) relative to vss, and a 10Meg vdd->vss load keeps the part's own
+* draw ~0. The stub answers one bench question: "with the protector happy,
+* does the battery loop conduct?"
+* SIMPLIFICATIONS: no protection trips (OV/UV/OCD/SCD and the temperature
+* faults never fire — the drivers are unconditionally on), no cell balancing,
+* no AVDD/VTB outputs, no HIBERNATE/SHUTDOWN modes, no SRP/SRN sensing.
+.subckt BQ7791502 vdd vss chg dsg
+echg chg vss vdd vss 1
+edsg dsg vss vdd vss 1
+rq vdd vss 10Meg
+.ends BQ7791502
+
+* ---------------------------------------------------------------------------
+* LTC4020 (ADI) 55V buck-boost multi-chemistry charge controller — idle/off
+* stub V1. Nodes: vin intvcc tg1 bg1 tg2 bg2 gnd
+* Datasheet basis: INTVCC is the internal 5V LDO (regulated to 5V from VIN);
+* modeled as a behavioral source v = max(0, min(v(vin,gnd)-0.3, 5)) behind a
+* ~1 ohm PURELY RESISTIVE output (no cap — keeps op robust), plus a 1Meg
+* vin->gnd quiescent trickle. 100k pulldowns from each external gate-driver
+* pin (tg1/bg1/tg2/bg2) to gnd hold all four external FETs OFF so the SW
+* nodes are defined instead of floating.
+* SIMPLIFICATIONS: no switching, no charging, no PowerPath/ideal-diode
+* control, no status pins — the intended bench workflow drives the output
+* rail from a CC/CV bench supply; this stub only makes the converter cluster
+* inert and well-defined at the operating point.
+.subckt LTC4020 vin intvcc tg1 bg1 tg2 bg2 gnd
+bint int gnd v = max(0, min(v(vin,gnd)-0.3, 5))
+rint int intvcc 1
+rtg1 tg1 gnd 100k
+rbg1 bg1 gnd 100k
+rtg2 tg2 gnd 100k
+rbg2 bg2 gnd 100k
+rq vin gnd 1Meg
+.ends LTC4020
+
+* ---------------------------------------------------------------------------
+* AL8860 (Diodes Inc.) 40V/1.5A hysteretic buck LED driver — DC-AVERAGED
+* constant-current sink. Nodes: vin set sw ctrl gnd
+* Datasheet basis: mean current-sense threshold voltage 100 mV measured on
+* the SET pin with respect to VIN (Iled ~= 100mV / Rs for the external sense
+* resistor VIN->SET); CTRL analog dimming ~0..2.5V full scale, device off
+* below ~0.2V, and ON by default when CTRL floats (internal pull-up, modeled
+* as 1Meg ctrl->vin). The behavioral sink sw->gnd servos the loop closed by
+* the external Rs: a smooth tanh error stage (5 mV linear band, 3 A cap)
+* raises the sink current until v(vin,set) reaches the dim-scaled target All limiting is
+* via smooth min/max/tanh forms — no ternary discontinuities (convergence
+* safety, same rationale as the TL431 behavioral cell). An output-compliance
+* clamp collapses the sink smoothly as v(sw,gnd) approaches 0 (the averaged
+* switch node cannot be pulled below ground), which also keeps the op
+* well-posed when the LED path is open (e.g. an unfitted LED connector on a
+* real board would otherwise strand a forced current source on a dead-end
+* node — a hard singular matrix).
+* SIMPLIFICATIONS: DC-averaged (no switching ripple, no inductor/freewheel
+* dynamics — the LED string carries the mean current directly), CTRL dimming
+* scales the 100 mV sense target linearly (v(ctrl)/2.5 clamped to [0,1] ->
+* target 0..100 mV, i.e. Iled tracks ctrl; smooth cutoff below the 0.2V
+* off threshold), no thermal foldback, no UVLO.
+.subckt AL8860 vin set sw ctrl gnd
+* sink = 3A cap * off-gate * dim-scaled 100mV sense servo * compliance
+bled sw gnd i = 3 *
++ 0.5*(1+tanh((v(ctrl,gnd)-0.2)/0.02)) *
++ 0.5*(1+tanh((0.1*min(1, max(0, v(ctrl,gnd)/2.5)) - v(vin,set))/0.005)) *
++ 0.5*(1+tanh((v(sw,gnd)-0.15)/0.05))
+* internal CTRL pull-up (device is ON when CTRL is left floating)
+rctrl ctrl vin 1Meg
+* SET pin definedness (input bias path; >> any real sense resistor)
+rset vin set 10Meg
+* quiescent trickle so the part draws a bench-visible ~uA from vin
+rq vin gnd 1Meg
+.ends AL8860

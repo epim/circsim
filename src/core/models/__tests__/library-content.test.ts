@@ -458,6 +458,162 @@ describe('bundled model library — Milestone 2 power-path discretes', () => {
   })
 })
 
+// ─── Milestone 3: behavioral power-management IC stubs (real-board coverage) ──
+
+describe('bundled model library — Milestone 3 behavioral power-IC stubs', () => {
+  const index = readIndex()
+  const byId = new Map(index.entries.map((e) => [e.id, e]))
+  const powerIcText = readFileSync(join(MODELS_DIR, 'power-ic.lib'), 'utf8').replace(/\r?\n\+/g, ' ')
+
+  /** Terminal list of a .subckt line in power-ic.lib (continuations folded). */
+  function subcktTerminals(name: string): string[] {
+    const m = powerIcText.match(new RegExp(`^\\s*\\.subckt\\s+${name}\\s+([^\\r\\n]*)$`, 'im'))
+    return m ? m[1].trim().split(/\s+/) : []
+  }
+
+  it('power-ic.lib documents each stub as SIMPLIFIED behavioral (MIT provenance header)', () => {
+    expect(powerIcText).toMatch(/Provenance:/)
+    expect(powerIcText).toMatch(/MIT/)
+    // The simplifications must be spelled out in the lib text itself.
+    expect(powerIcText).toMatch(/SIMPLIFICATIONS/i)
+  })
+
+  it('protector-bq77915 entry: NORMAL-mode stub subckt, MPN-only matching', () => {
+    const e = byId.get('protector-bq77915')
+    expect(e, 'protector-bq77915 entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('subckt')
+    expect(e!.model.file).toBe('power-ic.lib')
+    expect(e!.model.name).toBe('BQ7791502')
+    expect(definedNames('power-ic.lib').has('BQ7791502')).toBe(true)
+    for (const m of ['BQ7791502', 'BQ77915', 'BQ7791500', 'BQ7791503', 'BQ7791505']) {
+      expect(e!.match.mpn, `mpn list must include ${m}`).toContain(m)
+    }
+    // MPN/value matching only — a U + TSSOP-24 fallback would false-positive
+    // on unknown 24-pin parts (the LM339/CD4011 lesson).
+    expect(e!.match.refdesPrefix).toBeUndefined()
+    expect(e!.match.footprintRegex).toBeUndefined()
+  })
+
+  it('BQ7791502 subckt: terminals vdd vss chg dsg; both gate drivers held at v(vdd)', () => {
+    expect(subcktTerminals('BQ7791502')).toEqual(['vdd', 'vss', 'chg', 'dsg'])
+    const block = powerIcText.match(/\.subckt\s+BQ7791502[\s\S]*?\.ends\s+BQ7791502/i)?.[0] ?? ''
+    expect(block, '.subckt BQ7791502 block must exist').toBeTruthy()
+    // E-sources holding chg and dsg at v(vdd) relative to vss (NORMAL mode:
+    // both external-FET drivers ON), plus a tiny load so the part draws ~0.
+    expect(block).toMatch(/^\s*echg\s+chg\s+vss\s+vdd\s+vss\s+1\b/im)
+    expect(block).toMatch(/^\s*edsg\s+dsg\s+vss\s+vdd\s+vss\s+1\b/im)
+    expect(block).toMatch(/^\s*r\w*\s+vdd\s+vss\s+10Meg\b/im)
+    // Documented simplifications: no protection trips, no balancing, no AVDD/VTB.
+    expect(powerIcText).toMatch(/no protection trips/i)
+    expect(powerIcText).toMatch(/cell balancing/i)
+    expect(powerIcText).toMatch(/AVDD/i)
+  })
+
+  it('protector-bq77915 pinMap: datasheet TSSOP-24 pins 1=VDD 9=VSS 13=CHG 12=DSG', () => {
+    const e = byId.get('protector-bq77915')!
+    const key = Object.keys(e.pinMaps).find((k) => /TSSOP/i.test(k))
+    expect(key, 'TSSOP-24 pinMap key must exist').toBeTruthy()
+    expect(e.pinMaps[key!]).toEqual({ '1': 'vdd', '9': 'vss', '13': 'chg', '12': 'dsg' })
+    // The key must match the real board's JLC footprint name.
+    expect(new RegExp(key!, 'i').test('JLC-MCP:TSSOP-24_L7.8-W4.4-P0.65-LS6.4-BL_1')).toBe(true)
+    // Every mapped terminal name exists in the subckt terminal list.
+    const terms = new Set(subcktTerminals('BQ7791502'))
+    for (const t of Object.values(e.pinMaps[key!])) expect(terms.has(t), `terminal ${t}`).toBe(true)
+  })
+
+  it('charger-ltc4020 entry: idle/off stub subckt with the #TRPBF alias (suffix not stripped by normalizeMpn)', () => {
+    const e = byId.get('charger-ltc4020')
+    expect(e, 'charger-ltc4020 entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('subckt')
+    expect(e!.model.file).toBe('power-ic.lib')
+    expect(e!.model.name).toBe('LTC4020')
+    expect(definedNames('power-ic.lib').has('LTC4020')).toBe(true)
+    for (const m of ['LTC4020', 'LTC4020EUHF', 'LTC4020EUHF#TRPBF']) {
+      expect(e!.match.mpn, `mpn list must include ${m}`).toContain(m)
+    }
+    expect(e!.match.refdesPrefix).toBeUndefined()
+    expect(e!.match.footprintRegex).toBeUndefined()
+  })
+
+  it('LTC4020 subckt: terminals vin intvcc tg1 bg1 tg2 bg2 gnd; 5V LDO + gate pulldowns', () => {
+    expect(subcktTerminals('LTC4020')).toEqual(['vin', 'intvcc', 'tg1', 'bg1', 'tg2', 'bg2', 'gnd'])
+    const block = powerIcText.match(/\.subckt\s+LTC4020[\s\S]*?\.ends\s+LTC4020/i)?.[0] ?? ''
+    expect(block, '.subckt LTC4020 block must exist').toBeTruthy()
+    // Behavioral INTVCC LDO: v = vin-0.3 clamped to [0, 5], small resistive Rout.
+    expect(block).toMatch(/^\s*bint\s+\S+\s+gnd\s+v\s*=\s*max\(0,\s*min\(v\(vin,gnd\)-0\.3,\s*5\)\)/im)
+    // 100k pulldowns hold all four external gate pins low (FETs OFF, SW defined).
+    for (const g of ['tg1', 'bg1', 'tg2', 'bg2']) {
+      expect(block).toMatch(new RegExp(`^\\s*r\\w*\\s+${g}\\s+gnd\\s+100k\\b`, 'im'))
+    }
+    // Documented simplifications: no switching, no charging.
+    expect(powerIcText).toMatch(/no switching/i)
+    expect(powerIcText).toMatch(/no charging/i)
+  })
+
+  it('charger-ltc4020 pinMap: board-verified QFN-38 pads (one representative pad per rail)', () => {
+    const e = byId.get('charger-ltc4020')!
+    const key = Object.keys(e.pinMaps).find((k) => /QFN/i.test(k))
+    expect(key, 'QFN-38 pinMap key must exist').toBeTruthy()
+    expect(e.pinMaps[key!]).toEqual({
+      '7': 'vin', '10': 'intvcc', '1': 'tg1', '37': 'bg1', '31': 'tg2', '33': 'bg2', '3': 'gnd',
+    })
+    expect(new RegExp(key!, 'i').test('QFN-38_L5.0-W7.0-P0.50-TL-EP')).toBe(true)
+    const terms = new Set(subcktTerminals('LTC4020'))
+    for (const t of Object.values(e.pinMaps[key!])) expect(terms.has(t), `terminal ${t}`).toBe(true)
+  })
+
+  it('leddriver-al8860 entry: DC-averaged constant-current sink, MPN-only matching', () => {
+    const e = byId.get('leddriver-al8860')
+    expect(e, 'leddriver-al8860 entry must exist').toBeDefined()
+    expect(e!.model.type).toBe('subckt')
+    expect(e!.model.file).toBe('power-ic.lib')
+    expect(e!.model.name).toBe('AL8860')
+    expect(definedNames('power-ic.lib').has('AL8860')).toBe(true)
+    for (const m of ['AL8860', 'AL8860MP', 'AL8860MP-13']) {
+      expect(e!.match.mpn, `mpn list must include ${m}`).toContain(m)
+    }
+    expect(e!.match.refdesPrefix).toBeUndefined()
+    expect(e!.match.footprintRegex).toBeUndefined()
+  })
+
+  it('AL8860 subckt: terminals vin set sw ctrl gnd; smooth (tanh) servo + 1Meg trickle', () => {
+    expect(subcktTerminals('AL8860')).toEqual(['vin', 'set', 'sw', 'ctrl', 'gnd'])
+    const block = powerIcText.match(/\.subckt\s+AL8860[\s\S]*?\.ends\s+AL8860/i)?.[0] ?? ''
+    expect(block, '.subckt AL8860 block must exist').toBeTruthy()
+    // The servo is a B-source current sink sw->gnd built from SMOOTH limiting
+    // functions (tanh) — no ternary discontinuities (convergence safety).
+    expect(block).toMatch(/^\s*bled\s+sw\s+gnd\s+i\s*=/im)
+    expect(block).toMatch(/tanh/i)
+    expect(block).not.toMatch(/\?/)
+    // 100 mV mean sense target across v(vin,set); CTRL 2.5V full-scale.
+    expect(block).toMatch(/v\(vin,set\)/i)
+    expect(block).toMatch(/2\.5/)
+    // Output-compliance clamp: the sink collapses smoothly as v(sw,gnd) → 0,
+    // so an OPEN LED path (unfitted connector on a real board) cannot strand
+    // a forced current source on a dead-end node (hard singular matrix).
+    expect(block).toMatch(/v\(sw,gnd\)/i)
+    // 1Meg vin->gnd trickle.
+    expect(block).toMatch(/^\s*r\w*\s+vin\s+gnd\s+1Meg\b/im)
+    // Documented simplifications: averaged (no ripple), and CTRL dimming that
+    // scales the 100 mV sense TARGET (not the current cap — an earlier form
+    // cap-scaled and mid-range dimming silently returned full current; see the
+    // mid-dim regression in library-ic.integration.test.ts).
+    expect(powerIcText).toMatch(/no switching ripple/i)
+    expect(powerIcText).toMatch(/scales the 100 mV sense target/i)
+    expect(block).toMatch(/0\.1\*min\(1,\s*max\(0,\s*v\(ctrl,gnd\)\/2\.5\)\)/i)
+  })
+
+  it('leddriver-al8860 pinMap: MSOP-8EP pads 8=VIN 1=SET 5=SW 4=CTRL 2=GND', () => {
+    const e = byId.get('leddriver-al8860')!
+    const key = Object.keys(e.pinMaps).find((k) => /MSOP/i.test(k))
+    expect(key, 'MSOP-8 pinMap key must exist').toBeTruthy()
+    expect(e.pinMaps[key!]).toEqual({ '8': 'vin', '1': 'set', '5': 'sw', '4': 'ctrl', '2': 'gnd' })
+    expect(new RegExp(key!, 'i').test('JLC-MCP:MSOP-8_L3.0-W3.0-P0.65-LS4.9-BL-EP1.8')).toBe(true)
+    const terms = new Set(subcktTerminals('AL8860'))
+    for (const t of Object.values(e.pinMaps[key!])) expect(terms.has(t), `terminal ${t}`).toBe(true)
+  })
+})
+
 describe('logic74hc.json — XSPICE template structure (Spec §8.5)', () => {
   const j = JSON.parse(readFileSync(join(MODELS_DIR, 'logic74hc.json'), 'utf8')) as {
     templates: Record<

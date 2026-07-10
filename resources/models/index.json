@@ -501,6 +501,45 @@
       "provenance": "Behavioral shunt reference written for circsim from TL431 datasheet parameters (Vref=2.495V, high-gain error stage + shunt element, off-state leakage), MIT."
     },
     {
+      "id": "protector-bq77915",
+      "match": {
+        "mpn": ["BQ7791502", "BQ77915", "BQ7791500", "BQ7791503", "BQ7791505"]
+      },
+      "model": { "type": "subckt", "file": "power-ic.lib", "name": "BQ7791502" },
+      "$comment": "SIMPLIFIED NORMAL-mode stub (subckt terminals vdd vss chg dsg): both external-FET gate drivers held at v(vdd) — no protection trips, no cell balancing, no AVDD/VTB (see power-ic.lib). TSSOP-24 datasheet pins: 1=VDD, 9=VSS, 13=CHG, 12=DSG (board-verified: pad1=PACK+, pad9=BATT-, pad13=CHG_DRV, pad12=DSG_DRV). Unmapped pads (VCx, SRP/SRN, TS, …) are left unconnected by design. MPN/value matching only — a U + TSSOP-24 fallback would false-positive on unknown 24-pin parts.",
+      "pinMaps": {
+        "TSSOP-?24.*": { "1": "vdd", "9": "vss", "13": "chg", "12": "dsg" }
+      },
+      "defaultPinMap": { "1": "vdd", "9": "vss", "13": "chg", "12": "dsg" },
+      "provenance": "Behavioral NORMAL-mode stub written for circsim from the TI BQ77915 datasheet (SLUSCU0: NORMAL-mode CHG/DSG drive to the rail, Iq~8uA, TSSOP-24 pin table), MIT."
+    },
+    {
+      "id": "charger-ltc4020",
+      "match": {
+        "mpn": ["LTC4020", "LTC4020EUHF", "LTC4020EUHF#TRPBF"]
+      },
+      "model": { "type": "subckt", "file": "power-ic.lib", "name": "LTC4020" },
+      "$comment": "SIMPLIFIED idle/off stub V1 (subckt terminals vin intvcc tg1 bg1 tg2 bg2 gnd): behavioral 5V INTVCC LDO + 100k pulldowns holding all four external gate pins low — no switching, no charging (bench a CC/CV source on the output rail instead; see power-ic.lib). normalizeMpn does NOT strip ADI's #TRPBF ordering suffix, so the full board value is listed as an alias. Pad numbers are the JLC QFN-38 footprint's, verified from the routed board nets (pad7=VIN_CHG, pad10=INTVCC, pad1=TG1, pad37=BG1, pad31=TG2, pad33=BG2, pad3=GND) — they differ from the ADI datasheet pin numbering. One representative pad per rail (vin also on 36; intvcc also on 25/34). MPN/value matching only.",
+      "pinMaps": {
+        "QFN-?38.*": { "7": "vin", "10": "intvcc", "1": "tg1", "37": "bg1", "31": "tg2", "33": "bg2", "3": "gnd" }
+      },
+      "defaultPinMap": { "7": "vin", "10": "intvcc", "1": "tg1", "37": "bg1", "31": "tg2", "33": "bg2", "3": "gnd" },
+      "provenance": "Behavioral idle/off stub written for circsim from the ADI LTC4020 datasheet (INTVCC=5V LDO from VIN, gate-driver pins; QFN-38), MIT."
+    },
+    {
+      "id": "leddriver-al8860",
+      "match": {
+        "mpn": ["AL8860", "AL8860MP", "AL8860MP-13"]
+      },
+      "model": { "type": "subckt", "file": "power-ic.lib", "name": "AL8860" },
+      "$comment": "SIMPLIFIED DC-AVERAGED constant-current sink (subckt terminals vin set sw ctrl gnd): smooth tanh servo holds v(vin,set) at the 100mV mean sense threshold so Iled~=100mV/Rs; CTRL dimming is a linear v/2.5 approximation with a smooth <0.2V off gate; no switching ripple (see power-ic.lib). MSOP-8EP pins: 8=VIN, 1=SET(ISET), 5=SW, 4=CTRL, 2=GND (one representative pad — SW also on 6, GND also on 3/EP). MPN/value matching only — before this entry, U + MSOP-8 fallback matched four nonsense opamp/comparator/timer entries on a real board (live false ambiguity).",
+      "pinMaps": {
+        "MSOP-?8.*": { "8": "vin", "1": "set", "5": "sw", "4": "ctrl", "2": "gnd" }
+      },
+      "defaultPinMap": { "8": "vin", "1": "set", "5": "sw", "4": "ctrl", "2": "gnd" },
+      "provenance": "Behavioral DC-averaged LED-driver model written for circsim from the Diodes Inc. AL8860 datasheet (VSENSE mean 100mV on SET wrt VIN, CTRL dimming 0.3-2.5V / off <0.2V, MSOP-8EP pinout), MIT."
+    },
+    {
       "id": "timer-ne555",
       "match": {
         "mpn": ["NE555", "NE555P", "NE555N", "LM555", "TLC555", "ICM7555", "555"],

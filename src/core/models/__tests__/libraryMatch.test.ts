@@ -722,6 +722,65 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
     }
   })
 
+  // ── Milestone 3: behavioral power-IC stubs resolve end-to-end ──────────────
+
+  it('U3 value "BQ7791502" on JLC TSSOP-24 → protector-bq77915 stub', async () => {
+    const part = makePart('U3', 'BQ7791502', 'JLC-MCP:TSSOP-24_L7.8-W4.4-P0.65-LS6.4-BL_1')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('BQ7791502')
+      // Datasheet TSSOP-24 pins (board-verified): 1=VDD, 9=VSS, 13=CHG, 12=DSG.
+      expect(res.model.pinMap).toEqual({ '1': 'vdd', '9': 'vss', '13': 'chg', '12': 'dsg' })
+    }
+  })
+
+  it('U2 value "LTC4020EUHF#TRPBF" (exact board value — #TRPBF is NOT a stripped suffix) → charger-ltc4020', async () => {
+    // normalizeMpn's suffix rules do not cover ADI's "#TRPBF" ordering suffix,
+    // so the full string is listed as an mpn alias; this asserts the exact
+    // board VALUE resolves without any schematic mpn property.
+    const part = makePart('U2', 'LTC4020EUHF#TRPBF', 'QFN-38_L5.0-W7.0-P0.50-TL-EP')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('LTC4020')
+      expect(res.model.pinMap).toEqual({
+        '7': 'vin', '10': 'intvcc', '1': 'tg1', '37': 'bg1', '31': 'tg2', '33': 'bg2', '3': 'gnd',
+      })
+    }
+  })
+
+  it('U4 value "AL8860MP" on MSOP-8 → leddriver-al8860 (kills the live 4-way fallback false ambiguity)', async () => {
+    // Regression: with no AL8860 entry, U4 fell to the refdes+footprint tier
+    // where U + MSOP-8 matched four nonsense entries (opamp-lm358, opamp-tl072,
+    // comparator-lm393, timer-ne555) → false-ambiguous, unresolved.
+    const part = makePart('U4', 'AL8860MP', 'JLC-MCP:MSOP-8_L3.0-W3.0-P0.65-LS4.9-BL-EP1.8')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('AL8860')
+      expect(res.model.pinMap).toEqual({ '8': 'vin', '1': 'set', '5': 'sw', '4': 'ctrl', '2': 'gnd' })
+    }
+    expect(res.warnings.some((w) => w.includes('Ambiguous'))).toBe(false)
+  })
+
+  it('U4 value "AL8860MP-13" (reel-qualified MPN) also → leddriver-al8860', async () => {
+    const part = makePart('U4', 'AL8860MP-13', 'JLC-MCP:MSOP-8_L3.0-W3.0-P0.65-LS4.9-BL-EP1.8')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    if (res.model?.kind === 'subckt') {
+      expect(res.model.subcktName).toBe('AL8860')
+    }
+  })
+
   it('D3 value "SMAJ24A" on D_SMA → tvs-smaj24a (kills the live 3-way fallback ambiguity)', async () => {
     // Regression: with no SMAJ24A entry, D3 fell to the refdes+footprint tier
     // where D + SMA matched three diode entries → false-ambiguous, unresolved.

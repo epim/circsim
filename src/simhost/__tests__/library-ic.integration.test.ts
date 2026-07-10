@@ -40,6 +40,7 @@ const regLib = libLines('regulators.lib')
 const t555Lib = libLines('timer555.lib')
 const mosfetLib = libLines('mosfet.lib')
 const diodesLib = libLines('diodes.lib')
+const powerIcLib = libLines('power-ic.lib')
 
 interface IndexEntry {
   id: string
@@ -207,7 +208,9 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
             ? regLib
             : e.model.file === 'mosfet.lib'
               ? mosfetLib
-              : t555Lib
+              : e.model.file === 'power-ic.lib'
+                ? powerIcLib
+                : t555Lib
       // A minimal bias deck per class. All subckts get rails + a probe load.
       let deck: string[]
       const name = e.model.name
@@ -221,6 +224,12 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
         // Dual FET (terminals d1 g1 s1 d2 g2 s2): both gates high, both channels
         // pull their drains low through the load resistors.
         deck = ['* dualfet', 'vd d 0 dc 5', 'vg g 0 dc 5', 'rd1 d drn1 100', 'rd2 d drn2 100', `x1 drn1 g 0 drn2 g 0 ${name}`, ...lib, '.op', '.end']
+      } else if (name === 'BQ7791502') {
+        deck = ['* bq77915 stub', 'vdd vdd 0 dc 12', 'x1 vdd 0 chg dsg BQ7791502', ...lib, '.op', '.end']
+      } else if (name === 'LTC4020') {
+        deck = ['* ltc4020 stub', 'vin vin 0 dc 12', 'x1 vin intvcc tg1 bg1 tg2 bg2 0 LTC4020', ...lib, '.op', '.end']
+      } else if (name === 'AL8860') {
+        deck = ['* al8860 stub', 'vin vin 0 dc 12', 'rs vin set 0.2', 'rled set sw 5', 'x1 vin set sw ctrl 0 AL8860', ...lib, '.op', '.end']
       } else {
         // NE555 static bias (op just needs to load; oscillation is the tran test)
         deck = ['* 555', 'vcc vcc 0 dc 5', `x1 0 trig out vcc ctrl thres disch vcc NE555`, 'vt trig 0 dc 1', 'vth thres 0 dc 1', ...lib, '.op', '.end']
@@ -293,6 +302,146 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     // Small on-state drop: well below a body-diode drop, above a dead short.
     expect(drop).toBeGreaterThan(0.02)
     expect(drop).toBeLessThan(0.15)
+  }, 60_000)
+
+  it('BQ7791502 stub drives a real NCE6005AS back-to-back pair: 12V battery loop conducts 1A', async () => {
+    // THE battery-loop closure test: 12V stack powers the protector (vdd=vbat,
+    // vss=0); its NORMAL-mode CHG/DSG drivers (held at v(vdd)=12V) gate the
+    // dual-FET back-to-back pair (d1=PACK side, common source, d2=ground/OUT).
+    // With Vgs ≈ 12V ≫ vth both channels are hard on; the loop current is set
+    // by rl and the pair drop is ~2*Rds(on)*I ≈ 64 mV.
+    const deck = [
+      '* BQ7791502 NORMAL-mode stub gating the NCE6005AS protection pair',
+      'vbat vbat 0 dc 12',
+      'xprot vbat 0 chg dsg BQ7791502',
+      'rl vbat pack 11.9',
+      'x1 pack dsg com 0 chg com NCE6005AS',
+      ...powerIcLib,
+      ...mosfetLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    const drop = r.v['pack']
+    const amps = (12 - drop) / 11.9
+    // eslint-disable-next-line no-console
+    console.log(
+      `\n[BQ7791502 + NCE6005AS] I=${amps.toFixed(3)}A drop=${(drop * 1e3).toFixed(1)}mV ` +
+        `chg=${r.v['chg']?.toFixed(2)}V dsg=${r.v['dsg']?.toFixed(2)}V (expect ~1A, ~64mV, 12V gates)\n`
+    )
+    expect(r.errs).toEqual([])
+    // Both gate drivers sit at v(vdd) = 12V (NORMAL mode, both FETs enabled).
+    expect(r.v['chg']).toBeGreaterThan(11.5)
+    expect(r.v['dsg']).toBeGreaterThan(11.5)
+    expect(amps).toBeGreaterThan(0.95)
+    expect(amps).toBeLessThan(1.05)
+    // Small on-state drop: well below a body-diode drop, above a dead short.
+    expect(drop).toBeGreaterThan(0.02)
+    expect(drop).toBeLessThan(0.15)
+  }, 60_000)
+
+  it('LTC4020 idle/off stub: INTVCC ≈ 5V from a 12V vin, all four gate pins pulled low', async () => {
+    const deck = [
+      '* LTC4020 idle/off stub: behavioral INTVCC LDO + gate pulldowns',
+      'vin vin 0 dc 12',
+      'x1 vin intvcc tg1 bg1 tg2 bg2 0 LTC4020',
+      'rl intvcc 0 1k',
+      ...powerIcLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    // eslint-disable-next-line no-console
+    console.log(
+      `\n[LTC4020 stub] intvcc=${r.v['intvcc']?.toFixed(4)}V gates=[${['tg1', 'bg1', 'tg2', 'bg2']
+        .map((g) => r.v[g]?.toExponential(2))
+        .join(', ')}] (expect ~5V, all ~0)\n`
+    )
+    expect(r.errs).toEqual([])
+    expect(r.v['intvcc']).toBeCloseTo(5, 1)
+    for (const g of ['tg1', 'bg1', 'tg2', 'bg2']) {
+      expect(Math.abs(r.v[g]), `gate ${g} must be held low`).toBeLessThan(0.01)
+    }
+  }, 60_000)
+
+  it('AL8860 DC-averaged sink: 0.2Ω sense → 0.5A ± 15% through the LED path with ctrl open', async () => {
+    // Real-application wiring, inductor-less for the DC-averaged model:
+    // vin → Rs(0.2Ω) → set → LED-ish load → sw; the behavioral sink sw→gnd
+    // servos v(vin)-v(set) to the 100 mV datasheet mean sense voltage, so
+    // I ≈ 100mV / 0.2Ω = 0.5 A. ctrl is left open (internal pull-up = on).
+    const deck = [
+      '* AL8860 DC-averaged constant-current sink, ctrl open (full brightness)',
+      'vin vin 0 dc 12',
+      'rs vin set 0.2',
+      'rled set sw 5',
+      'x1 vin set sw ctrl 0 AL8860',
+      ...powerIcLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    const amps = (12 - r.v['set']) / 0.2
+    // eslint-disable-next-line no-console
+    console.log(
+      `\n[AL8860 on] I=${amps.toFixed(4)}A sense=${((12 - r.v['set']) * 1e3).toFixed(1)}mV ` +
+        `v(sw)=${r.v['sw']?.toFixed(3)}V (expect 0.5A ± 15%, ~100mV)\n`
+    )
+    expect(r.errs).toEqual([])
+    expect(amps).toBeGreaterThan(0.5 * 0.85)
+    expect(amps).toBeLessThan(0.5 * 1.15)
+    // The LED-ish load actually carries the current (drop = I * 5Ω).
+    expect(r.v['set'] - r.v['sw']).toBeGreaterThan(2)
+  }, 60_000)
+
+  it('AL8860 DC-averaged sink: ctrl at mid-scale (1.25V) dims to ~50% (0.25A ± 15%)', async () => {
+    // Regression for the adversarial-review finding: an earlier form of the
+    // model multiplied the dim factor into the 3 A current CAP instead of the
+    // 100 mV sense TARGET — the servo then compensated and mid-scale dimming
+    // silently returned full current. Datasheet analog dimming is linear in
+    // v(ctrl)/2.5, so ctrl = 1.25 V must halve the regulation target
+    // (50 mV / 0.2 Ω ≈ 0.25 A). This deck fails against the cap-scaled form
+    // (which measured ~0.5 A here) and passes against the target-scaled form.
+    const deck = [
+      '* AL8860 DC-averaged constant-current sink, ctrl mid-scale (50% dim)',
+      'vin vin 0 dc 12',
+      'rs vin set 0.2',
+      'rled set sw 5',
+      'x1 vin set sw ctrl 0 AL8860',
+      'vc ctrl 0 dc 1.25',
+      ...powerIcLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    const amps = (12 - r.v['set']) / 0.2
+    // eslint-disable-next-line no-console
+    console.log(
+      `\n[AL8860 mid-dim] I=${amps.toFixed(4)}A sense=${((12 - r.v['set']) * 1e3).toFixed(1)}mV ` +
+        `(expect 0.25A ± 15%)\n`
+    )
+    expect(r.errs).toEqual([])
+    expect(amps).toBeGreaterThan(0.25 * 0.85)
+    expect(amps).toBeLessThan(0.25 * 1.15)
+  }, 60_000)
+
+  it('AL8860 DC-averaged sink: ctrl grounded (< 0.2V) turns the sink off (< 1 mA)', async () => {
+    const deck = [
+      '* AL8860 DC-averaged constant-current sink, ctrl low (off)',
+      'vin vin 0 dc 12',
+      'rs vin set 0.2',
+      'rled set sw 5',
+      'x1 vin set sw ctrl 0 AL8860',
+      'vc ctrl 0 dc 0',
+      ...powerIcLib,
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    const amps = (12 - r.v['set']) / 0.2
+    // eslint-disable-next-line no-console
+    console.log(`\n[AL8860 off] I=${(amps * 1e6).toFixed(3)}uA (expect < 1mA)\n`)
+    expect(r.errs).toEqual([])
+    expect(Math.abs(amps)).toBeLessThan(1e-3)
   }, 60_000)
 
   it('SS54 Schottky: forward drop ~0.5-0.6V at 5A', async () => {
