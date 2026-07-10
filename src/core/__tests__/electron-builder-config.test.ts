@@ -140,11 +140,19 @@ describe('electron-builder.yml — per-platform ngspice bundling (Spec §15)', (
     expect(cfg.mac?.identity).toBeNull()
   })
 
-  it('macOS target is dmg for x64 + arm64', () => {
+  it('macOS target is dmg with NO arch list (host arch only)', () => {
+    // Listing both arches here made every mac runner cross-build the OTHER
+    // arch's dmg too — with the wrong ngspice dir inside, since each runner
+    // only has its own arch's ngspice and extraResources skips a missing
+    // `from:` with just a warning. The last release leg to attach then
+    // overwrote both dmgs, shipping one mac installer per release whose
+    // simulator could not load. Host-arch-only builds (the electron-builder
+    // default when no arch is listed) + one runner per arch produce both
+    // dmgs correctly; ci.yml's release job verifies the bundled ngspice arch.
     const t = cfg.mac?.target ?? []
     const dmg = t.find((x) => x.target === 'dmg')
     expect(dmg, 'dmg target present').toBeTruthy()
-    expect(dmg!.arch).toEqual(expect.arrayContaining(['x64', 'arm64']))
+    expect(dmg!.arch).toBeUndefined()
   })
 
   it('Linux bundles ONLY linux-x64 ngspice', () => {

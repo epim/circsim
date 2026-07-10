@@ -373,6 +373,38 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Guard against the cross-arch dmg regression: electron-builder.yml must
+      # build HOST arch only (no mac arch list), because each runner has ngspice
+      # for its own arch alone. When both arches were listed, every mac runner
+      # also produced the other arch's dmg with the wrong ngspice inside, and
+      # the last release leg to attach overwrote both dmgs — shipping one mac
+      # installer per release whose simulator could not load. Fail loudly if
+      # the packaged app is missing host-arch ngspice or a stray second dmg
+      # appears.
+      - name: Verify mac app bundles host-arch ngspice
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ARCH="$(uname -m)"
+          case "$ARCH" in
+            x86_64) WANT="darwin-x64" ;;
+            arm64)  WANT="darwin-arm64" ;;
+            *) echo "::error::unexpected mac arch: $ARCH"; exit 1 ;;
+          esac
+          DMG_COUNT="$(ls dist/*.dmg | wc -l | tr -d ' ')"
+          if [ "$DMG_COUNT" != "1" ]; then
+            echo "::error::expected exactly 1 dmg (host arch), found $DMG_COUNT — cross-arch build is back?"
+            ls -l dist/*.dmg
+            exit 1
+          fi
+          APP="$(ls -d dist/mac*/circsim.app | head -1)"
+          if [ ! -d "$APP/Contents/Resources/ngspice/$WANT" ]; then
+            echo "::error::packaged app is missing Resources/ngspice/$WANT"
+            ls "$APP/Contents/Resources/ngspice" || true
+            exit 1
+          fi
+          echo "ok: $APP bundles ngspice/$WANT and exactly one dmg was built"
+
       - name: Upload build artifacts (CI retention)
         uses: actions/upload-artifact@v4
         with:

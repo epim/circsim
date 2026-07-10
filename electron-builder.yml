@@ -94,18 +94,24 @@ nsis:
   allowToChangeInstallationDirectory: true
   artifactName: ${productName}-${version}-${arch}-setup.${ext}
 
-# ─── macOS: dmg, x64 + arm64 ─────────────────────────────────────────────────
+# ─── macOS: dmg, HOST ARCH ONLY ──────────────────────────────────────────────
 mac:
   category: public.app-category.developer-tools
+  # No arch list here ON PURPOSE — electron-builder then builds only the host
+  # arch. Each release runner has ngspice built only for its own arch
+  # (macos-15-intel → darwin-x64, macos-14 → darwin-arm64); the two legs
+  # together produce both dmgs. When both arches were listed here, every mac
+  # runner ALSO cross-built the other arch's dmg with the WRONG ngspice dir
+  # inside (extraResources skips a missing `from:` with just a warning), and
+  # whichever release leg attached its assets last overwrote both dmgs — so
+  # each release shipped one mac installer whose simulator could not load.
+  # A deliberate cross-build (`--arm64` on an Intel mac) requires providing
+  # that arch's ngspice under resources/ngspice/ first; CI verifies the built
+  # app bundles host-arch ngspice before attaching (see ci.yml release job).
   target:
     - target: dmg
-      arch:
-        - x64
-        - arm64
-  # Both mac archs share the same dmg config; the matching arch's ngspice dir is
-  # what exists on each runner (macos-15-intel builds darwin-x64; macos-14 builds
-  # darwin-arm64). Both `from:` dirs are listed; electron-builder skips a missing
-  # source with a warning, so each runner ships only the arch it actually built.
+  # Both `from:` dirs are listed; only the one that exists on the runner is
+  # copied, so each dmg ships exactly the arch it was built for.
   extraResources:
     - from: resources/ngspice/darwin-x64
       to: ngspice/darwin-x64
