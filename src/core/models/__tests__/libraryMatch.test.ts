@@ -619,14 +619,20 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
     }
   })
 
-  it('U8 value "CD4011" on SOP-14 must stay unresolved (no lm339 fallback misresolution)', async () => {
-    // Regression: comparator-lm339 must match on mpn/value ONLY. With refdes/
-    // footprint fallback rules it silently misresolved a CD4011 quad NAND in
-    // SOP-14 as an LM393 comparator on a real board.
+  it('U8 value "CD4011" on SOP-14 → logic-cd4011 (never the LM393 comparator)', async () => {
+    // Regression (two eras): comparator-lm339 must match on mpn/value ONLY —
+    // with refdes/footprint fallback rules it silently misresolved a CD4011
+    // quad NAND in SOP-14 as an LM393 comparator on a real board. Now that a
+    // dedicated CD4011 entry exists it must resolve as the xspice-digital NAND.
     const part = makePart('U8', 'CD4011', 'Package_SO:SOP-14_3.9x8.7mm_P1.27mm')
     const circuit = makeCircuit([part])
     const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
-    expect(res.status).toBe('unresolved')
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    expect(res.model?.kind).toBe('xspice-digital')
+    if (res.model?.kind === 'xspice-digital') {
+      expect(res.model.templateId).toBe('CD4011')
+    }
   })
 
   it('U3 value "TL431" on SOT-23 → ref-tl431 shunt reference', async () => {
@@ -794,5 +800,85 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
       expect(res.model.pinMap).toEqual({ '1': '2', '2': '1' })
     }
     expect(res.warnings.some((w) => w.includes('Ambiguous'))).toBe(false)
+  })
+
+  // ── Milestone 5c: CD4000-series logic (12 V family file logic4000.json) ────
+
+  it('U7 value "CD40106" on JLC SOIC-14 → logic-cd40106 hex Schmitt inverter', async () => {
+    const part = makePart('U7', 'CD40106', 'JLC-MCP:SOIC-14_L8.7-W3.9-P1.27-LS6.0-BL')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.tier).toBe(3)
+    expect(res.status).toBe('ok')
+    expect(res.model?.kind).toBe('xspice-digital')
+    if (res.model?.kind === 'xspice-digital') {
+      expect(res.model.templateId).toBe('CD40106')
+      // Pin-compatible with the 74HC14: inverter outputs on even pins 2..12.
+      expect(res.model.pinMap['1']).toBe('1A')
+      expect(res.model.pinMap['2']).toBe('1Y')
+      expect(res.model.pinMap['7']).toBe('GND')
+      expect(res.model.pinMap['14']).toBe('VCC')
+    }
+    expect(res.warnings.some((w) => w.includes('pinmap-unverified'))).toBe(false)
+  })
+
+  it('CD40106 aliases HEF40106 / MC14584 / CD40106BM also → logic-cd40106', async () => {
+    for (const value of ['HEF40106', 'MC14584', 'CD40106BM', 'CD40106B']) {
+      const part = makePart('U7', value, 'Package_SO:SOIC-14_3.9x8.7mm_P1.27mm')
+      const circuit = makeCircuit([part])
+      const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+      expect(res.status, `${value} must resolve`).toBe('ok')
+      if (res.model?.kind === 'xspice-digital') {
+        expect(res.model.templateId).toBe('CD40106')
+      }
+    }
+  })
+
+  it('CD4011 pinMap has the CD4000 pinout — outputs on pads 3, 4, 10, 11 (NOT the 74HC00 pinout)', async () => {
+    // Regression guard against copying the 74HC00 pinMap: on the CD4011 the
+    // gate outputs are pins 3/4/10/11 (74HC00 has them on 3/6/8/11).
+    const part = makePart('U8', 'CD4011', 'JLC-MCP:SOP-14_L8.6-W3.9-P1.27-LS6.0-BL')
+    const circuit = makeCircuit([part])
+    const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+    expect(res.status).toBe('ok')
+    expect(res.model?.kind).toBe('xspice-digital')
+    if (res.model?.kind === 'xspice-digital') {
+      expect(res.model.pinMap).toEqual({
+        '1': '1A', '2': '1B', '3': '1Y', '4': '2Y', '5': '2A', '6': '2B',
+        '7': 'GND', '8': '3A', '9': '3B', '10': '3Y', '11': '4Y', '12': '4A',
+        '13': '4B', '14': 'VCC',
+      })
+    }
+    expect(res.warnings.some((w) => w.includes('pinmap-unverified'))).toBe(false)
+  })
+
+  it('CD4011 aliases HEF4011 / MC14011 / CD4011BM also → logic-cd4011', async () => {
+    for (const value of ['HEF4011', 'MC14011', 'CD4011BM', 'CD4011B']) {
+      const part = makePart('U8', value, 'Package_SO:SOP-14_3.9x8.7mm_P1.27mm')
+      const circuit = makeCircuit([part])
+      const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+      expect(res.status, `${value} must resolve`).toBe('ok')
+      if (res.model?.kind === 'xspice-digital') {
+        expect(res.model.templateId).toBe('CD4011')
+      }
+    }
+  })
+
+  it('U6 "CD4538" and U1 "CH224K" stay unresolved (index schema has no deliberate-open entry kind)', async () => {
+    // DOCUMENTED GAP: the CD4538 dual monostable (RC-programmed pulse width)
+    // and CH224K USB-PD sink controller are not simulatable with the existing
+    // primitives, and LibraryEntry.model.type has no stub/open kind — so a
+    // "known part, deliberately open" library entry is NOT expressible today.
+    // They fall through to red-unresolved; connectors are the only parts that
+    // get the ok-with-note open treatment (resolve.ts isConnector).
+    for (const [ref, value, fp] of [
+      ['U6', 'CD4538', 'JLC-MCP:SOP-16_L10.0-W3.9-P1.27-LS6.0-BL'],
+      ['U1', 'CH224K', 'JLC-MCP:ESSOP-10_L4.9-W3.9-P1.0-LS6.0-TL-EP'],
+    ] as const) {
+      const part = makePart(ref, value, fp)
+      const circuit = makeCircuit([part])
+      const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
+      expect(res.status, `${value} has no model`).toBe('unresolved')
+    }
   })
 })

@@ -50,13 +50,14 @@ export interface GenerateOptions {
    *
    * When provided, generateDeck inlines the matching `.subckt … .ends` block or
    * `.model …` card for every subckt / model-card part (deduplicated), and
-   * expands xspice-digital templates from the matching logic74hc.json — ngspice
-   * loads decks from memory, so definitions are inlined, NEVER `.include`d by
-   * path. When OMITTED the generator emits primitives + subckt instantiations
-   * only (the existing golden-deck behaviour is unchanged).
+   * expands xspice-digital templates from the matching family JSON
+   * (logic74hc.json / logic4000.json) — ngspice loads decks from memory, so
+   * definitions are inlined, NEVER `.include`d by path. When OMITTED the
+   * generator emits primitives + subckt instantiations only (the existing
+   * golden-deck behaviour is unchanged).
    *
    * The lookup key is the resolution's `model.libFile` (subckt/model-card) or
-   * the digital template's source file (logic74hc.json).
+   * the digital family file that contains the template id.
    */
   modelTexts?: Record<string, string>
 }
@@ -560,15 +561,18 @@ function expandXspiceDigital(
   netIdToNode: Map<number, string>,
   idx: ModelTextIndex,
   templateFile: string | undefined,
-): string[] {
+): { lines: string[]; expanded: boolean } {
   const logic = templateFile ? parseLogic74(idx, templateFile) : null
   const tpl = logic?.templates?.[model.templateId]
   if (!logic || !tpl) {
     // No template text available — keep the historic placeholder (golden tests).
-    return [
-      `* xspice-digital template: ${ref} (${model.templateId})`,
-      `* adc_bridge/gates/dac_bridge expansion — template text unavailable`,
-    ]
+    return {
+      lines: [
+        `* xspice-digital template: ${ref} (${model.templateId})`,
+        `* adc_bridge/gates/dac_bridge expansion — template text unavailable`,
+      ],
+      expanded: false,
+    }
   }
 
   const vHigh = logic.family.vHighDefault
@@ -646,7 +650,7 @@ function expandXspiceDigital(
     lines.push(`abr_${refLc}_out_${sig.toLowerCase()} [${dNode(sig)}] [${aNode(sig)}] ${dacModel}`)
   }
 
-  return lines
+  return { lines, expanded: true }
 }
 
 // ─── Main deck generator ──────────────────────────────────────────────────────
@@ -678,6 +682,8 @@ export function generateDeck(opts: GenerateOptions): string[] {
   const haveModelTexts = !!modelTexts && Object.keys(modelTexts).length > 0
   const modelDefLines: string[] = []
   const emittedDefKeys = new Set<string>()
+  /** True once at least one xspice-digital part was actually expanded (not the placeholder). */
+  let anyXspiceExpanded = false
   /** Queue a definition block once, keyed by file:name. */
   const queueDef = (key: string, defLines: string[]): void => {
     if (emittedDefKeys.has(key)) return
@@ -971,16 +977,29 @@ export function generateDeck(opts: GenerateOptions): string[] {
     }
 
     if (model.kind === 'xspice-digital') {
-      // The digital template lives in a logic74hc-style JSON. Find its file from
-      // the resolution if present; otherwise default to logic74hc.json (the only
-      // digital template file in the bundled library).
+      // The digital template lives in a logic74hc-style family JSON. The bundled
+      // library ships one file per family (logic74hc.json at 5 V, logic4000.json
+      // at 12 V) because vHigh is a per-file constant — so pick the file that
+      // actually CONTAINS this templateId (never hard-prefer one family file).
       const templateFile = haveModelTexts
-        ? (modelIndex.texts['logic74hc.json'] ? 'logic74hc.json' : findDigitalTemplateFile(modelIndex, model.templateId))
+        ? findDigitalTemplateFile(modelIndex, model.templateId)
         : undefined
-      const xspiceLines = expandXspiceDigital(res.ref, model, part, netIdToNode, modelIndex, templateFile)
-      lines.push(...xspiceLines)
+      const xspice = expandXspiceDigital(res.ref, model, part, netIdToNode, modelIndex, templateFile)
+      lines.push(...xspice.lines)
+      if (xspice.expanded) anyXspiceExpanded = true
       continue
     }
+  }
+
+  // ── Mixed-mode DCOP option (only when digital bridges are in the deck) ─────
+  // Digital feedback loops (astables, latches, cross-coupled gates) have no
+  // consistent DC event fixpoint, so ngspice's DCOP analog/event alternation
+  // never terminates and the WHOLE board op fails (verified against real
+  // ngspice-46 on a real board's CD40106 RC astable). noopalter takes one
+  // event pass instead: the op becomes a defined bias snapshot, and transients
+  // still run the full event simulation.
+  if (anyXspiceExpanded) {
+    lines.push('.options noopalter')
   }
 
   // ── Inlined model definitions (subckts + model cards) ──────────────────────
@@ -1181,19 +1200,16 @@ function orderNodesByTerminals(
 }
 
 /**
- * Find the logic74hc-style template file that contains a given templateId. Used
- * when the digital template file is not the default logic74hc.json (defensive;
- * the bundled library only ships logic74hc.json today).
+ * Find the logic74hc-style family file that contains a given templateId. Each
+ * family file carries its own vHigh constant (logic74hc.json = 5 V, logic4000.json
+ * = 12 V), so the lookup is by template membership, never by a preferred filename.
+ * Uses the per-index parse cache (parseLogic74) so each text parses once.
  */
 function findDigitalTemplateFile(idx: ModelTextIndex, templateId: string): string | undefined {
-  for (const [file, text] of Object.entries(idx.texts)) {
+  for (const file of Object.keys(idx.texts)) {
     if (!file.endsWith('.json')) continue
-    try {
-      const parsed = JSON.parse(text) as { templates?: Record<string, unknown> }
-      if (parsed.templates && templateId in parsed.templates) return file
-    } catch {
-      // not a template json
-    }
+    const parsed = parseLogic74(idx, file)
+    if (parsed?.templates && templateId in parsed.templates) return file
   }
   return undefined
 }

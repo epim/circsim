@@ -667,4 +667,150 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     expect(r.errs).toEqual([])
     expect(measured).toEqual(expectedTT)
   }, 90_000)
+
+  // ── Milestone 5c: CD4000-series family (logic4000.json, fixed 12 V swing) ────
+
+  it('CD4011 NAND truth table via ONE .tran at the 12 V family swing (out high ≈ 12 V)', async () => {
+    const logic = JSON.parse(readFileSync(join(MODELS, 'logic4000.json'), 'utf8')) as Logic74
+    const vHigh = logic.family.vHighDefault // 12 V family constant
+    const expand = expandTemplate(logic, 'CD4011', vHigh)
+    const deck = [
+      '* CD4011 NAND truth table — one transient, four states, 12 V swing',
+      // 1A: 0 (0-2us) then 12 (2-4us)
+      'v1a 1a 0 dc 0 pwl(0 0 1.999u 0 2u 12 4u 12)',
+      // 1B: toggles every 1us: 0,12,0,12
+      'v1b 1b 0 dc 0 pwl(0 0 0.999u 0 1u 12 1.999u 12 2u 0 2.999u 0 3u 12 4u 12)',
+      // tie the other inputs low so their gates/bridges have a defined level
+      'v2a 2a 0 dc 0',
+      'v2b 2b 0 dc 0',
+      'v3a 3a 0 dc 0',
+      'v3b 3b 0 dc 0',
+      'v4a 4a 0 dc 0',
+      'v4b 4b 0 dc 0',
+      ...expand,
+      '.end'
+    ]
+    const r = await runTran(deck, '20n', '4u')
+    const y = r.series['1y'] ?? []
+    const t = r.t
+    const states = [
+      { a: 0, b: 0, at: 0.7e-6 },
+      { a: 0, b: 1, at: 1.7e-6 },
+      { a: 1, b: 0, at: 2.7e-6 },
+      { a: 1, b: 1, at: 3.7e-6 }
+    ]
+    const rows: string[] = []
+    const measured: number[] = []
+    for (const s of states) {
+      const v = valueAt(y, t, s.at)
+      measured.push(v > vHigh / 2 ? 1 : 0)
+      rows.push(`A=${s.a} B=${s.b} -> 1Y=${v.toFixed(3)}V (${v > vHigh / 2 ? 'H' : 'L'})`)
+    }
+    // eslint-disable-next-line no-console
+    console.log(`\n[CD4011 NAND @12V]\n${rows.join('\n')}\nexpected H/H/H/L -> [1,1,1,0]  measured=[${measured.join(',')}]  errs=[${r.errs.join('|')}]\n`)
+    expect(r.errs).toEqual([])
+    expect(measured).toEqual([1, 1, 1, 0])
+    // The HIGH level is the documented fixed 12 V family swing (not 5 V).
+    const vHighState = valueAt(y, t, 0.7e-6)
+    expect(vHighState).toBeGreaterThan(11)
+    const vLowState = valueAt(y, t, 3.7e-6)
+    expect(vLowState).toBeLessThan(1)
+  }, 90_000)
+
+  it('CD40106 Schmitt band: 4.8/7.2 V thresholds are live in sim (adc_bridge undefined band, not state-holding)', async () => {
+    // MEASURED LIMITATION (this is the documented fallback, not a bug): the
+    // XSPICE adc_bridge does NOT hold its previous state between in_low and
+    // in_high — inside the band it emits UNKNOWN, which the dac_bridge maps to
+    // mid-rail (6.000 V measured at vin=6 V on both legs). So true CD40106
+    // state-retention hysteresis is not expressible with the bridge; what IS
+    // verifiable in-sim is that BOTH threshold edges are live: full-high output
+    // only below in_low=4.8 V, full-low output only above in_high=7.2 V, and
+    // the 4.8/7.2 V band appears in the generated expansion text.
+    const logic = JSON.parse(readFileSync(join(MODELS, 'logic4000.json'), 'utf8')) as Logic74
+    const vHigh = logic.family.vHighDefault // 12 V family constant
+    const expand = expandTemplate(logic, 'CD40106', vHigh)
+    const expandText = expand.join('\n')
+    expect(expandText).toContain('adc_bridge(in_low=4.8000 in_high=7.2000)')
+    expect(expandText).toContain('dac_bridge(out_low=0 out_high=12.0000)')
+
+    // One slow triangle 0 -> 12 -> 0 V over 2 ms on input 1A (delays are ~80 ns,
+    // so the ramp is quasi-static). Other inputs tied low.
+    const deck = [
+      '* CD40106 Schmitt band — slow triangle in, sample both directions',
+      'v1a 1a 0 dc 0 pwl(0 0 1m 12 2m 0)',
+      'v2a 2a 0 dc 0',
+      'v3a 3a 0 dc 0',
+      'v4a 4a 0 dc 0',
+      'v5a 5a 0 dc 0',
+      'v6a 6a 0 dc 0',
+      ...expand,
+      '.end'
+    ]
+    const r = await runTran(deck, '2u', '2m')
+    const y = r.series['1y'] ?? []
+    const t = r.t
+    // Rising leg: vin = 12*t/1m. Falling leg: vin = 12*(2m-t)/1m.
+    const samples = [
+      { label: 'vin=3.0V rising', at: 0.25e-3, kind: 'H' },   // clearly below in_low -> 12 V
+      { label: 'vin=4.2V rising', at: 0.35e-3, kind: 'H' },   // still below in_low=4.8 -> 12 V
+      { label: 'vin=5.4V rising', at: 0.45e-3, kind: 'U' },   // inside the band -> mid-rail 6 V
+      { label: 'vin=7.8V rising', at: 0.65e-3, kind: 'L' },   // above in_high=7.2 -> 0 V
+      { label: 'vin=9.0V rising', at: 0.75e-3, kind: 'L' },
+      { label: 'vin=6.0V falling', at: 1.50e-3, kind: 'U' },  // inside the band -> mid-rail 6 V
+      { label: 'vin=3.0V falling', at: 1.75e-3, kind: 'H' }   // back below in_low -> 12 V
+    ] as const
+    const rows: string[] = []
+    const measured: string[] = []
+    for (const s of samples) {
+      const v = valueAt(y, t, s.at)
+      const kind = v > 11 ? 'H' : v < 1 ? 'L' : v > 5 && v < 7 ? 'U' : '?'
+      measured.push(kind)
+      rows.push(`${s.label} -> 1Y=${v.toFixed(3)}V (${kind}, expect ${s.kind})`)
+    }
+    // eslint-disable-next-line no-console
+    console.log(`\n[CD40106 Schmitt band @12V]\n${rows.join('\n')}\nerrs=[${r.errs.join('|')}]\n`)
+    expect(r.errs).toEqual([])
+    // The output leaves full-high at the 4.8 V edge and reaches full-low at the
+    // 7.2 V edge — the two Schmitt thresholds are distinct and live in-sim.
+    expect(measured).toEqual(samples.map((s) => s.kind))
+  }, 90_000)
+
+  it('.options noopalter: mixed-signal DCOP with an RC astable (no DC fixpoint) yields a defined op', async () => {
+    // Review follow-up: generateDeck emits `.options noopalter` whenever a
+    // digital part was expanded — because an inverter wired as an RC astable
+    // (exactly the lantern board's CD40106 blink oscillator: 1Y→R→1A, C on 1A)
+    // has NO consistent DC event fixpoint, and ngspice's default mixed-mode
+    // DCOP alternation wedges ("Convergence problems at node (d_…)") and
+    // returns an EMPTY op. With noopalter the DCOP is a single event pass and
+    // the op is defined. This pins the option's behavior in real ngspice so
+    // the generator's reliance on it can't silently rot.
+    const deck = [
+      '* RC-astable inverter DCOP under noopalter',
+      '.model adcx adc_bridge(in_low=4.8 in_high=7.2)',
+      '.model dacx dac_bridge(out_low=0 out_high=12)',
+      '.model invx d_inverter(rise_delay=80n fall_delay=80n)',
+      'abr [in] [d_in] adcx',
+      'ainv d_in d_out invx',
+      'adac [d_out] [out] dacx',
+      'r1 out in 470k',
+      'c1 in 0 680n',
+      '.options noopalter',
+      '.op',
+      '.end'
+    ]
+    const r = await runOp(deck)
+    // eslint-disable-next-line no-console
+    console.log(
+      `\n[noopalter DCOP] v(out)=${r.v['out']?.toFixed(3)} v(in)=${r.v['in']?.toFixed(3)} ` +
+        `errs=[${r.errs.join('|')}]\n`
+    )
+    expect(r.errs).toEqual([])
+    // The op must be DEFINED (non-empty result with the output node present).
+    // Without noopalter this deck produces convergence warnings and an empty
+    // op result. The single event pass leaves out at a rail (or mid-rail
+    // UNKNOWN) — any finite value is acceptable; existence is the contract.
+    expect(Object.keys(r.v).length).toBeGreaterThan(0)
+    expect(Number.isFinite(r.v['out'])).toBe(true)
+    expect(Number.isFinite(r.v['in'])).toBe(true)
+  }, 60_000)
 })

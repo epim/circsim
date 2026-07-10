@@ -561,84 +561,104 @@
     },
     {
       "id": "logic-74hc00",
-      "match": { "mpn": ["74HC00", "74HCT00", "SN74HC00", "74LS00", "74HC00D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "match": { "mpn": ["74HC00", "74HCT00", "SN74HC00", "74LS00", "74HC00D"] },
       "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC00" },
       "pinMaps": {
-        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y", "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y", "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
       },
       "provenance": "XSPICE behavioral 74HC00 quad NAND written for circsim from datasheet pinout + typical tpd (d_nand), MIT."
     },
     {
       "id": "logic-74hc04",
-      "match": { "mpn": ["74HC04", "74HCT04", "SN74HC04", "74HC04D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "match": { "mpn": ["74HC04", "74HCT04", "SN74HC04", "74HC04D"] },
       "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC04" },
       "pinMaps": {
-        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1A", "2": "1Y", "3": "2A", "4": "2Y", "5": "3A", "6": "3Y", "7": "GND", "8": "4Y", "9": "4A", "10": "5Y", "11": "5A", "12": "6Y", "13": "6A", "14": "VCC" }
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": { "1": "1A", "2": "1Y", "3": "2A", "4": "2Y", "5": "3A", "6": "3Y", "7": "GND", "8": "4Y", "9": "4A", "10": "5Y", "11": "5A", "12": "6Y", "13": "6A", "14": "VCC" }
       },
       "provenance": "XSPICE behavioral 74HC04 hex inverter written for circsim from datasheet pinout + typical tpd (d_inverter), MIT."
     },
     {
       "id": "logic-74hc08",
-      "match": { "mpn": ["74HC08", "74HCT08", "SN74HC08", "74HC08D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "match": { "mpn": ["74HC08", "74HCT08", "SN74HC08", "74HC08D"] },
       "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC08" },
       "pinMaps": {
-        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y", "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y", "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
       },
       "provenance": "XSPICE behavioral 74HC08 quad AND written for circsim from datasheet pinout + typical tpd (d_and), MIT."
     },
     {
       "id": "logic-74hc14",
-      "match": { "mpn": ["74HC14", "74HCT14", "SN74HC14", "74HC14D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "match": { "mpn": ["74HC14", "74HCT14", "SN74HC14", "74HC14D"] },
       "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC14" },
       "pinMaps": {
-        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1A", "2": "1Y", "3": "2A", "4": "2Y", "5": "3A", "6": "3Y", "7": "GND", "8": "4Y", "9": "4A", "10": "5Y", "11": "5A", "12": "6Y", "13": "6A", "14": "VCC" }
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": { "1": "1A", "2": "1Y", "3": "2A", "4": "2Y", "5": "3A", "6": "3Y", "7": "GND", "8": "4Y", "9": "4A", "10": "5Y", "11": "5A", "12": "6Y", "13": "6A", "14": "VCC" }
       },
       "provenance": "XSPICE behavioral 74HC14 hex inverting Schmitt trigger written for circsim from datasheet pinout; hysteresis via adc_bridge in_low/in_high band, MIT."
     },
     {
       "id": "logic-74hc32",
-      "match": { "mpn": ["74HC32", "74HCT32", "SN74HC32", "74HC32D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "match": { "mpn": ["74HC32", "74HCT32", "SN74HC32", "74HC32D"] },
       "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC32" },
       "pinMaps": {
-        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y", "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y", "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
       },
       "provenance": "XSPICE behavioral 74HC32 quad OR written for circsim from datasheet pinout + typical tpd (d_or), MIT."
     },
     {
       "id": "logic-74hc74",
-      "match": { "mpn": ["74HC74", "74HCT74", "SN74HC74", "74HC74D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "match": { "mpn": ["74HC74", "74HCT74", "SN74HC74", "74HC74D"] },
       "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC74" },
       "pinMaps": {
-        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1CLR_N", "2": "1D", "3": "1CLK", "4": "1PRE_N", "5": "1Q", "6": "1Q_N", "7": "GND", "8": "2Q_N", "9": "2Q", "10": "2PRE_N", "11": "2CLK", "12": "2D", "13": "2CLR_N", "14": "VCC" }
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": { "1": "1CLR_N", "2": "1D", "3": "1CLK", "4": "1PRE_N", "5": "1Q", "6": "1Q_N", "7": "GND", "8": "2Q_N", "9": "2Q", "10": "2PRE_N", "11": "2CLK", "12": "2D", "13": "2CLR_N", "14": "VCC" }
       },
       "provenance": "XSPICE behavioral 74HC74 dual D flip-flop written for circsim from datasheet pinout (d_dff, positive edge, async set/reset), MIT."
     },
     {
       "id": "logic-74hc86",
-      "match": { "mpn": ["74HC86", "74HCT86", "SN74HC86", "74HC86D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "match": { "mpn": ["74HC86", "74HCT86", "SN74HC86", "74HC86D"] },
       "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC86" },
       "pinMaps": {
-        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y", "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2A", "5": "2B", "6": "2Y", "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
       },
       "provenance": "XSPICE behavioral 74HC86 quad XOR written for circsim from datasheet pinout + typical tpd (d_xor), MIT."
     },
     {
       "id": "logic-74hc164",
-      "match": { "mpn": ["74HC164", "74HCT164", "SN74HC164", "74HC164D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?14" },
+      "match": { "mpn": ["74HC164", "74HCT164", "SN74HC164", "74HC164D"] },
       "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC164" },
       "pinMaps": {
-        "(DIP|SOIC|TSSOP|SO)-?14.*": { "1": "A", "2": "B", "3": "Q0", "4": "Q1", "5": "Q2", "6": "Q3", "7": "GND", "8": "CLK", "9": "CLR_N", "10": "Q4", "11": "Q5", "12": "Q6", "13": "Q7", "14": "VCC" }
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": { "1": "A", "2": "B", "3": "Q0", "4": "Q1", "5": "Q2", "6": "Q3", "7": "GND", "8": "CLK", "9": "CLR_N", "10": "Q4", "11": "Q5", "12": "Q6", "13": "Q7", "14": "VCC" }
       },
       "provenance": "XSPICE behavioral 74HC164 8-bit SIPO shift register written for circsim from datasheet pinout (d_dff chain, AND-gated serial in, active-low clear), MIT."
     },
     {
       "id": "logic-74hc595",
-      "match": { "mpn": ["74HC595", "74HCT595", "SN74HC595", "74HC595D"], "refdesPrefix": ["U", "IC"], "footprintRegex": "(DIP|SOIC|TSSOP|SO)-?16" },
+      "match": { "mpn": ["74HC595", "74HCT595", "SN74HC595", "74HC595D"] },
       "model": { "type": "xspice-digital", "file": "logic74hc.json", "name": "74HC595" },
       "pinMaps": {
-        "(DIP|SOIC|TSSOP|SO)-?16.*": { "1": "Q1", "2": "Q2", "3": "Q3", "4": "Q4", "5": "Q5", "6": "Q6", "7": "Q7", "8": "GND", "9": "Q7S", "10": "MR_N", "11": "SHCP", "12": "STCP", "13": "OE_N", "14": "DS", "15": "Q0", "16": "VCC" }
+        "(DIP|SOIC|TSSOP|SOP|SO)-?16.*": { "1": "Q1", "2": "Q2", "3": "Q3", "4": "Q4", "5": "Q5", "6": "Q6", "7": "Q7", "8": "GND", "9": "Q7S", "10": "MR_N", "11": "SHCP", "12": "STCP", "13": "OE_N", "14": "DS", "15": "Q0", "16": "VCC" }
       },
       "provenance": "XSPICE behavioral 74HC595 8-bit shift register with output latch written for circsim from datasheet pinout (two-rank d_dff: shift + storage), MIT."
+    },
+    {
+      "id": "logic-cd40106",
+      "match": { "mpn": ["CD40106", "CD40106B", "CD40106BM", "HEF40106", "MC14584"] },
+      "model": { "type": "xspice-digital", "file": "logic4000.json", "name": "CD40106" },
+      "$comment": "CD4000-series hex inverting Schmitt trigger, pin-compatible with the 74HC14. FIXED-SWING CAVEAT: outputs are modeled at the logic4000.json family constant of 12 V regardless of the actual rail (dac_bridge out_high is per-family; real part runs 3-18 V) — same accepted limitation as the 74HC family's 5 V. Schmitt threshold band 4.8/7.2 V (40%/60% of 12 V) via adc_bridge — in-band input yields an undefined mid-rail output (measured 6 V), not held state. MPN/value matching only — a U + 14-pin fallback would collide with the nine 74HC fallback rules (the LM339/CD4011 lesson).",
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": { "1": "1A", "2": "1Y", "3": "2A", "4": "2Y", "5": "3A", "6": "3Y", "7": "GND", "8": "4Y", "9": "4A", "10": "5Y", "11": "5A", "12": "6Y", "13": "6A", "14": "VCC" }
+      },
+      "provenance": "XSPICE behavioral CD40106 hex inverting Schmitt trigger written for circsim from datasheet pinout; hysteresis via adc_bridge in_low/in_high band at the fixed 12 V family rail, MIT."
+    },
+    {
+      "id": "logic-cd4011",
+      "match": { "mpn": ["CD4011", "CD4011B", "CD4011BM", "HEF4011", "MC14011"] },
+      "model": { "type": "xspice-digital", "file": "logic4000.json", "name": "CD4011" },
+      "$comment": "CD4000-series quad 2-input NAND. CRITICAL: the CD4011 pinout is NOT the 74HC00 pinout — outputs are on pins 3, 4, 10, 11 (74HC00 has 3, 6, 8, 11). FIXED-SWING CAVEAT: outputs are modeled at the logic4000.json family constant of 12 V regardless of the actual rail (dac_bridge out_high is per-family; real part runs 3-18 V). MPN/value matching only — a U + 14-pin fallback misresolved this exact part as an LM393 comparator on a real board before mpn gating.",
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": { "1": "1A", "2": "1B", "3": "1Y", "4": "2Y", "5": "2A", "6": "2B", "7": "GND", "8": "3A", "9": "3B", "10": "3Y", "11": "4Y", "12": "4A", "13": "4B", "14": "VCC" }
+      },
+      "provenance": "XSPICE behavioral CD4011 quad NAND written for circsim from datasheet pinout + typical tpd (d_nand) at the fixed 12 V family rail, MIT."
     }
   ]
 }

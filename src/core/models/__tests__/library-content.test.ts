@@ -181,7 +181,9 @@ describe('bundled model library — Task 14b IC + digital entries (Spec §8.5)',
   })
 
   it('includes all nine 74HC xspice-digital entries', () => {
-    const digIds = index.entries.filter((e) => e.model.type === 'xspice-digital').map((e) => e.id)
+    const digIds = index.entries
+      .filter((e) => e.model.type === 'xspice-digital' && e.model.file === 'logic74hc.json')
+      .map((e) => e.id)
     for (const part of ['00', '04', '08', '14', '32', '74', '86', '164', '595']) {
       expect(digIds, `missing 74HC${part}`).toContain(`logic-74hc${part}`)
     }
@@ -195,10 +197,11 @@ describe('bundled model library — Task 14b IC + digital entries (Spec §8.5)',
     }
   })
 
-  it('every xspice-digital entry references a template that exists in logic74hc.json', () => {
+  it('every xspice-digital entry references a template that exists in its family file', () => {
+    const FAMILY_FILES = ['logic74hc.json', 'logic4000.json']
     for (const e of index.entries.filter((x) => x.model.type === 'xspice-digital')) {
-      expect(e.model.file).toBe('logic74hc.json')
-      const names = definedNames('logic74hc.json')
+      expect(FAMILY_FILES, `${e.id}: unknown family file ${e.model.file}`).toContain(e.model.file)
+      const names = definedNames(e.model.file as string)
       expect(names.has(e.model.name.toUpperCase()), `${e.id}: template ${e.model.name} missing`).toBe(true)
     }
   })
@@ -710,5 +713,192 @@ describe('logic74hc.json — XSPICE template structure (Spec §8.5)', () => {
         }
       }
     }
+  })
+})
+
+// ─── Milestone 5c: CD4000-series family file (12 V swing) ─────────────────────
+
+describe('logic4000.json — CD4000 XSPICE family (Spec §8.5)', () => {
+  interface FamilyJson {
+    family: {
+      name: string
+      vHighDefault: number
+      adc: { inLowFrac: number; inHighFrac: number }
+      schmittAdc: { inLowFrac: number; inHighFrac: number }
+    }
+    templates: Record<
+      string,
+      {
+        gates: Array<Record<string, unknown> & { prim: string }>
+        inputs: string[]
+        outputs: string[]
+        power: { vcc: string; gnd: string }
+        pinMaps: Record<string, Record<string, string>>
+        delaysNs: number
+        schmitt?: boolean
+      }
+    >
+  }
+  const raw = readFileSync(join(MODELS_DIR, 'logic4000.json'), 'utf8')
+  const j = JSON.parse(raw) as FamilyJson
+
+  // Same verified ngspice-46 primitive set as the 74HC family tests.
+  const VERIFIED_PRIMS = new Set([
+    'd_inverter', 'd_buffer', 'd_and', 'd_nand', 'd_or', 'd_nor', 'd_xor', 'd_xnor', 'd_dff'
+  ])
+
+  it('family rail is the documented fixed 12 V swing (dac_bridge out_high limitation)', () => {
+    expect(j.family.vHighDefault).toBe(12.0)
+    // The fixed-swing caveat MUST be documented in the file itself: CD4000 runs
+    // 3-18 V but XSPICE dac_bridge out_high is a per-file constant, so outputs
+    // are modeled at 12 V regardless of the actual board rail.
+    expect(raw).toMatch(/12 V swing/i)
+    expect(raw).toMatch(/3-18\s?V/i)
+    expect(raw).toMatch(/Provenance:/)
+    expect(raw).toMatch(/MIT/)
+  })
+
+  it('standard adc thresholds are 30%/70% of rail; Schmitt thresholds 40%/60% (4.8/7.2 V at 12 V)', () => {
+    expect(j.family.adc).toEqual({ inLowFrac: 0.3, inHighFrac: 0.7 })
+    expect(j.family.schmittAdc).toEqual({ inLowFrac: 0.4, inHighFrac: 0.6 })
+    expect(j.family.schmittAdc.inLowFrac * j.family.vHighDefault).toBeCloseTo(4.8, 6)
+    expect(j.family.schmittAdc.inHighFrac * j.family.vHighDefault).toBeCloseTo(7.2, 6)
+  })
+
+  it('every gate uses a primitive name verified to exist in ngspice-46', () => {
+    for (const [id, tpl] of Object.entries(j.templates)) {
+      for (const g of tpl.gates) {
+        expect(VERIFIED_PRIMS.has(g.prim), `${id}: gate prim "${g.prim}" is not a verified ngspice-46 primitive`).toBe(
+          true
+        )
+      }
+    }
+  })
+
+  it('CD40106 is six Schmitt inverters with the 74HC14-compatible pinout', () => {
+    const tpl = j.templates['CD40106']
+    expect(tpl, 'CD40106 template must exist').toBeDefined()
+    expect(tpl.schmitt).toBe(true)
+    expect(tpl.gates.length).toBe(6)
+    expect(tpl.gates.every((g) => g.prim === 'd_inverter')).toBe(true)
+    const key = Object.keys(tpl.pinMaps).find((k) => /14/.test(k))!
+    const map = tpl.pinMaps[key]
+    // Pin-compatible with the 74HC14: 1=1A 2=1Y … 7=GND 13=6A 14=VCC.
+    expect(map).toEqual({
+      '1': '1A', '2': '1Y', '3': '2A', '4': '2Y', '5': '3A', '6': '3Y',
+      '7': 'GND', '8': '4Y', '9': '4A', '10': '5Y', '11': '5A', '12': '6Y',
+      '13': '6A', '14': 'VCC',
+    })
+  })
+
+  it('CD4011 is four 2-input NANDs with outputs on pins 3/4/10/11 (NOT the 74HC00 pinout)', () => {
+    const tpl = j.templates['CD4011']
+    expect(tpl, 'CD4011 template must exist').toBeDefined()
+    expect(tpl.gates.length).toBe(4)
+    expect(tpl.gates.every((g) => g.prim === 'd_nand')).toBe(true)
+    const key = Object.keys(tpl.pinMaps).find((k) => /14/.test(k))!
+    const map = tpl.pinMaps[key]
+    expect(map).toEqual({
+      '1': '1A', '2': '1B', '3': '1Y', '4': '2Y', '5': '2A', '6': '2B',
+      '7': 'GND', '8': '3A', '9': '3B', '10': '3Y', '11': '4Y', '12': '4A',
+      '13': '4B', '14': 'VCC',
+    })
+  })
+
+  it('every template has power pins, inputs, outputs, delays and pads 1..14 with VCC+GND', () => {
+    for (const [id, tpl] of Object.entries(j.templates)) {
+      expect(tpl.power.vcc, `${id} power.vcc`).toBeTruthy()
+      expect(tpl.power.gnd, `${id} power.gnd`).toBeTruthy()
+      expect(tpl.inputs.length, `${id} inputs`).toBeGreaterThan(0)
+      expect(tpl.outputs.length, `${id} outputs`).toBeGreaterThan(0)
+      expect(typeof tpl.delaysNs, `${id} delaysNs`).toBe('number')
+      const key = Object.keys(tpl.pinMaps).find((k) => /14/.test(k))!
+      const map = tpl.pinMaps[key]
+      const pads = Object.keys(map).map(Number).sort((a, b) => a - b)
+      expect(pads, `${id} pads`).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
+      const signals = Object.values(map)
+      expect(signals, `${id} VCC`).toContain('VCC')
+      expect(signals, `${id} GND`).toContain('GND')
+    }
+  })
+
+  it('index entries logic-cd40106 / logic-cd4011: mpn/value matching only, 12 V caveat documented', () => {
+    const index = readIndex()
+    const byId = new Map(index.entries.map((e) => [e.id, e]))
+    const expected: Array<[string, string, string[]]> = [
+      ['logic-cd40106', 'CD40106', ['CD40106', 'CD40106B', 'CD40106BM', 'HEF40106', 'MC14584']],
+      ['logic-cd4011', 'CD4011', ['CD4011', 'CD4011B', 'CD4011BM', 'HEF4011', 'MC14011']],
+    ]
+    for (const [id, template, mpns] of expected) {
+      const e = byId.get(id)
+      expect(e, `${id} entry must exist`).toBeDefined()
+      expect(e!.model.type).toBe('xspice-digital')
+      expect(e!.model.file).toBe('logic4000.json')
+      expect(e!.model.name).toBe(template)
+      for (const m of mpns) expect(e!.match.mpn, `${id} mpn list must include ${m}`).toContain(m)
+      // MPN/value matching only — a U + 14-pin fallback would collide with the
+      // nine 74HC fallback rules (the LM339/CD4011 lesson).
+      expect(e!.match.refdesPrefix).toBeUndefined()
+      expect(e!.match.footprintRegex).toBeUndefined()
+      // Each entry documents the fixed 12 V swing caveat in its $comment.
+      const withComment = e as unknown as { $comment?: string }
+      expect(withComment.$comment, `${id} $comment`).toBeTruthy()
+      expect(withComment.$comment).toMatch(/12 V/i)
+    }
+  })
+
+  it('pinMaps keys match the real routed-board JLC footprint names (SOIC-14 / SOP-14)', () => {
+    const index = readIndex()
+    const byId = new Map(index.entries.map((e) => [e.id, e]))
+    const boards: Array<[string, string]> = [
+      ['logic-cd40106', 'JLC-MCP:SOIC-14_L8.7-W3.9-P1.27-LS6.0-BL'],
+      ['logic-cd4011', 'JLC-MCP:SOP-14_L8.6-W3.9-P1.27-LS6.0-BL'],
+    ]
+    for (const [id, fp] of boards) {
+      const e = byId.get(id)!
+      const key = Object.keys(e.pinMaps).find((k) => new RegExp(k, 'i').test(fp))
+      expect(key, `${id}: no pinMaps key matches ${fp}`).toBeTruthy()
+    }
+  })
+
+  it('EVERY xspice-digital entry covers bare SOP-nn footprints (JLC boards use SOP-14, not SOIC-14)', () => {
+    // Review follow-up: the nine 74HC entries' `(DIP|SOIC|TSSOP|SO)-?14` did
+    // not match `SOP-14…` (the `SO` alternative needs the digit right after
+    // `-?`, and `SOP` was absent) — a 74HC part on a JLC SOP-14 board resolved
+    // by mpn but got an EMPTY pinMap (pinmap-unverified, no pads wired). Every
+    // digital entry's match.footprintRegex and at least one pinMaps key must
+    // now match a bare SOP-style name.
+    const index = readIndex()
+    for (const e of index.entries.filter((x) => x.model.type === 'xspice-digital')) {
+      const pins = /16/.test(e.match.footprintRegex ?? Object.keys(e.pinMaps)[0]) ? 16 : 14
+      const fp = `JLC-MCP:SOP-${pins}_L8.6-W3.9-P1.27-LS6.0-BL`
+      if (e.match.footprintRegex) {
+        expect(
+          new RegExp(e.match.footprintRegex, 'i').test(fp),
+          `${e.id}: match.footprintRegex must cover ${fp}`
+        ).toBe(true)
+      }
+      const key = Object.keys(e.pinMaps).find((k) => new RegExp(k, 'i').test(fp))
+      expect(key, `${e.id}: no pinMaps key matches ${fp}`).toBeTruthy()
+    }
+  })
+
+  it('templateIds are disjoint across XSPICE family files (nondeterministic lookup otherwise)', () => {
+    // findDigitalTemplateFile picks the family file that CONTAINS the
+    // templateId; if two files defined the same id the winner would depend on
+    // file-read completion order (Promise.all in the main-process loader).
+    const families = modelFiles().filter((f) => f.endsWith('.json'))
+    const seen = new Map<string, string>()
+    for (const f of families) {
+      const j = JSON.parse(readFileSync(join(MODELS_DIR, f), 'utf8')) as {
+        templates?: Record<string, unknown>
+      }
+      for (const id of Object.keys(j.templates ?? {})) {
+        const prev = seen.get(id.toUpperCase())
+        expect(prev, `templateId ${id} defined in both ${prev} and ${f}`).toBeUndefined()
+        seen.set(id.toUpperCase(), f)
+      }
+    }
+    expect(seen.size).toBeGreaterThan(0)
   })
 })

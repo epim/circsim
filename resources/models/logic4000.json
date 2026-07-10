@@ -1,0 +1,61 @@
+{
+  "$provenance": "Provenance: written for circsim from CD4000-series (B-family) datasheet pinouts and typical propagation delays, MIT. These are XSPICE behavioral templates (adc_bridge -> ngspice digital primitive(s) -> dac_bridge), same expansion scheme as logic74hc.json. No third-party proprietary CD4000 model text is copied; only datasheet pinouts and datasheet-typical propagation delays inform the templates. IMPORTANT FIXED-SWING CAVEAT: real CD4000 parts run from a 3-18 V rail, but the XSPICE dac_bridge out_high is a per-file family constant, so every CD4000 output here is modeled at a FIXED 12 V swing regardless of the actual board rail (chosen for the ~12-16.8 V battery rails these chips ride on real boards). This is the same accepted limitation as the 74HC family's fixed 5 V swing. Input thresholds scale off the same 12 V constant: standard gates 30%/70% (3.6/8.4 V), Schmitt triggers 40%/60% (4.8/7.2 V band via adc_bridge in_low<in_high, same scheme as the 74HC14). Measured against real ngspice-46: between in_low and in_high the adc_bridge emits UNKNOWN (dac_bridge maps it to mid-rail 6 V) rather than holding the previous state — the two threshold edges are live, but the in-band behavior is an undefined level, not true state-retention hysteresis.",
+  "$schema": {
+    "description": "Each template expands to: one adc_bridge per logic-input pin, the listed digital primitive instances wired on internal d_* nodes, and one dac_bridge per logic-output pin. ADC/DAC thresholds and rails come from the chosen logic family rail (vHigh). Pin roles are by package-independent SIGNAL name; pinMaps translate package pad numbers to signal names.",
+    "gate.prim": "ngspice digital primitive name (d_inverter|d_buffer|d_and|d_nand|d_or|d_nor|d_xor|d_xnor|d_dff)",
+    "gate.in": "array of signal names feeding this gate's input(s)",
+    "gate.out": "signal name produced (also a chip output pin if listed in outputs)",
+    "delaysNs": "rise_delay/fall_delay applied to every gate (datasheet-typical tpd at VDD~10-15 V)"
+  },
+  "family": {
+    "name": "CD4000",
+    "vHighDefault": 12.0,
+    "adc": { "inLowFrac": 0.3, "inHighFrac": 0.7 },
+    "schmittAdc": { "inLowFrac": 0.4, "inHighFrac": 0.6 }
+  },
+  "templates": {
+    "CD40106": {
+      "desc": "Hex inverting Schmitt trigger (adc_bridge threshold band at the fixed 12 V family rail: full-high output below 4.8 V in, full-low above 7.2 V in; in-band input gives an undefined mid-rail output, not held state). Pin-compatible with the 74HC14.",
+      "schmitt": true,
+      "gates": [
+        { "prim": "d_inverter", "in": ["1A"], "out": "1Y" },
+        { "prim": "d_inverter", "in": ["2A"], "out": "2Y" },
+        { "prim": "d_inverter", "in": ["3A"], "out": "3Y" },
+        { "prim": "d_inverter", "in": ["4A"], "out": "4Y" },
+        { "prim": "d_inverter", "in": ["5A"], "out": "5Y" },
+        { "prim": "d_inverter", "in": ["6A"], "out": "6Y" }
+      ],
+      "inputs": ["1A", "2A", "3A", "4A", "5A", "6A"],
+      "outputs": ["1Y", "2Y", "3Y", "4Y", "5Y", "6Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 80,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": {
+          "1": "1A", "2": "1Y", "3": "2A", "4": "2Y", "5": "3A", "6": "3Y",
+          "7": "GND", "8": "4Y", "9": "4A", "10": "5Y", "11": "5A", "12": "6Y",
+          "13": "6A", "14": "VCC"
+        }
+      }
+    },
+    "CD4011": {
+      "desc": "Quad 2-input NAND. NOTE: the CD4011 pinout is NOT the 74HC00 pinout — outputs are on pins 3, 4, 10, 11.",
+      "gates": [
+        { "prim": "d_nand", "in": ["1A", "1B"], "out": "1Y" },
+        { "prim": "d_nand", "in": ["2A", "2B"], "out": "2Y" },
+        { "prim": "d_nand", "in": ["3A", "3B"], "out": "3Y" },
+        { "prim": "d_nand", "in": ["4A", "4B"], "out": "4Y" }
+      ],
+      "inputs": ["1A", "1B", "2A", "2B", "3A", "3B", "4A", "4B"],
+      "outputs": ["1Y", "2Y", "3Y", "4Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 60,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": {
+          "1": "1A", "2": "1B", "3": "1Y", "4": "2Y", "5": "2A", "6": "2B",
+          "7": "GND", "8": "3A", "9": "3B", "10": "3Y", "11": "4Y", "12": "4A",
+          "13": "4B", "14": "VCC"
+        }
+      }
+    }
+  }
+}

@@ -19,7 +19,7 @@
  *   - alterPlan: current-probe on subckt → reload
  */
 
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { describe, test, expect } from 'vitest'
 import { generateDeck, formatSpiceValue, alterPlan, instrumentSpiceName, buildLedSpiceNames, isLedPart } from '../generate'
@@ -859,6 +859,174 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
     const deckText = deck.join('\n')
     expect(deckText).toContain('xspice-digital')
     expect(deckText).not.toContain('d_nand')
+    // Placeholder-only decks carry no digital bridges → no DCOP option either.
+    expect(deckText).not.toContain('.options noopalter')
+  })
+
+  test('a deck with an EXPANDED digital part carries .options noopalter (feedback-logic DCOP wedge)', () => {
+    // Verified against real ngspice-46 on a real board: digital feedback loops
+    // (a CD40106 RC astable) have no consistent DC event fixpoint, so the
+    // mixed-mode DCOP analog/event alternation never terminates and the WHOLE
+    // board op fails. .options noopalter takes one event pass instead.
+    const circuit = makeDigitalCircuit()
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: {
+        kind: 'xspice-digital', templateId: '74HC00',
+        pinMap: { '1': '1A', '2': '1B', '3': '1Y', '7': 'GND', '14': 'VCC' },
+      },
+    }]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 5 }],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON },
+    })
+    expect(deck).toContain('.options noopalter')
+    // Exactly once, even with several digital parts sharing a deck.
+    expect(deck.filter((l) => l === '.options noopalter').length).toBe(1)
+  })
+
+  test('a deck with no digital parts never carries .options noopalter', () => {
+    const circuit = makeRcCircuit()
+    const deck = generateDeck({
+      circuit,
+      resolutions: makeRcResolutions(),
+      instruments: [{ kind: 'ground-ref', netId: 2 }],
+      groundNetId: 2,
+    })
+    expect(deck).not.toContain('.options noopalter')
+  })
+
+  // ── Milestone 5c: two digital family files (74HC at 5 V, CD4000 at 12 V) ────
+
+  const LOGIC4000_JSON = JSON.stringify({
+    family: { vHighDefault: 12.0, adc: { inLowFrac: 0.3, inHighFrac: 0.7 }, schmittAdc: { inLowFrac: 0.4, inHighFrac: 0.6 } },
+    templates: {
+      CD4011: {
+        gates: [
+          { prim: 'd_nand', in: ['1A', '1B'], out: '1Y' },
+          { prim: 'd_nand', in: ['2A', '2B'], out: '2Y' },
+          { prim: 'd_nand', in: ['3A', '3B'], out: '3Y' },
+          { prim: 'd_nand', in: ['4A', '4B'], out: '4Y' },
+        ],
+        inputs: ['1A', '1B', '2A', '2B', '3A', '3B', '4A', '4B'],
+        outputs: ['1Y', '2Y', '3Y', '4Y'],
+        power: { vcc: 'VCC', gnd: 'GND' },
+        delaysNs: 60,
+      },
+      CD40106: {
+        schmitt: true,
+        gates: [{ prim: 'd_inverter', in: ['1A'], out: '1Y' }],
+        inputs: ['1A'],
+        outputs: ['1Y'],
+        power: { vcc: 'VCC', gnd: 'GND' },
+        delaysNs: 80,
+      },
+    },
+  })
+
+  test('CD4011 expands from logic4000.json even when logic74hc.json is ALSO present (12 V rails)', () => {
+    // Regression: the template-file lookup used to hard-prefer logic74hc.json
+    // whenever it was present, which would leave any CD4000 part as a
+    // comment-only placeholder. The lookup must pick the file that actually
+    // contains the templateId.
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD4011'
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: {
+        kind: 'xspice-digital', templateId: 'CD4011',
+        pinMap: { '1': '1A', '2': '1B', '3': '1Y', '7': 'GND', '14': 'VCC' },
+      },
+    }]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 5 }],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    const deckText = deck.join('\n')
+    // d_nand with the CD4011 delays, NOT the placeholder comment.
+    expect(deckText).toMatch(/d_nand\(rise_delay=60n fall_delay=60n\)/)
+    expect(deckText).not.toContain('template text unavailable')
+    // adc/dac rails from the CD4000 family vHigh=12: 30%/70% thresholds.
+    expect(deckText).toContain('adc_bridge(in_low=3.6000 in_high=8.4000)')
+    expect(deckText).toContain('dac_bridge(out_low=0 out_high=12.0000)')
+  })
+
+  test('CD40106 Schmitt template gets the 40%/60% hysteresis band (4.8/7.2 V at 12 V)', () => {
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD40106'
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: {
+        kind: 'xspice-digital', templateId: 'CD40106',
+        pinMap: { '1': '1A', '2': '1Y', '7': 'GND', '14': 'VCC' },
+      },
+    }]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 5 }],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    const deckText = deck.join('\n')
+    expect(deckText).toMatch(/d_inverter\(rise_delay=80n fall_delay=80n\)/)
+    expect(deckText).toContain('adc_bridge(in_low=4.8000 in_high=7.2000)')
+    expect(deckText).toContain('dac_bridge(out_low=0 out_high=12.0000)')
+  })
+
+  test('74HC00 still expands from logic74hc.json (5 V rails) when both family files are loaded', () => {
+    const circuit = makeDigitalCircuit()
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: {
+        kind: 'xspice-digital', templateId: '74HC00',
+        pinMap: { '1': '1A', '2': '1B', '3': '1Y', '7': 'GND', '14': 'VCC' },
+      },
+    }]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 5 }],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
+    })
+    const deckText = deck.join('\n')
+    expect(deckText).toMatch(/d_nand\(rise_delay=9n fall_delay=9n\)/)
+    expect(deckText).toContain('adc_bridge(in_low=1.5000 in_high=3.5000)')
+    expect(deckText).toContain('dac_bridge(out_low=0 out_high=5.0000)')
+  })
+
+  test('the SHIPPED resources/models files expand a CD4011 with 12 V rails (loader loads both family files)', () => {
+    const dir = join(process.cwd(), 'resources', 'models')
+    const texts: Record<string, string> = {}
+    for (const f of readdirSync(dir)) {
+      if (f === 'index.json') continue
+      texts[f] = readFileSync(join(dir, f), 'utf8')
+    }
+    expect(texts['logic74hc.json'], 'shipped logic74hc.json').toBeTruthy()
+    expect(texts['logic4000.json'], 'shipped logic4000.json').toBeTruthy()
+
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD4011'
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: {
+        kind: 'xspice-digital', templateId: 'CD4011',
+        pinMap: { '1': '1A', '2': '1B', '3': '1Y', '7': 'GND', '14': 'VCC' },
+      },
+    }]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 5 }],
+      groundNetId: 5,
+      modelTexts: texts,
+    })
+    const deckText = deck.join('\n')
+    expect(deckText).toContain('dac_bridge(out_low=0 out_high=12.0000)')
+    expect(deckText).toMatch(/d_nand\(/)
+    expect(deckText).not.toContain('template text unavailable')
   })
 })
 
