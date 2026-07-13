@@ -355,7 +355,12 @@ describe.skipIf(!haveLantern)('M8 — real lantern board (headers-only) deck con
 
     const deck = makeLanternDeck(setup, pack!.id)
     const text = deck.join('\n')
-    expect(text).toContain('.model dacm_u7 dac_bridge(out_low=0 out_high=12.0000)')
+    // U7 (CD40106, Schmitt) expands to the self-referential hysteresis B-source
+    // at the 12 V family constant: mid=6.0, V_T+=7.2, V_T-=4.8, rail=12.0
+    // (the node-independent tail is asserted; board nets are not pinned here).
+    expect(text).toContain('b_u7_1 ')
+    expect(text).toContain('> 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000')
+    // U8 (CD4011, plain NAND) keeps the adc/dac path at the 12 V constant.
     expect(text).toContain('.model dacm_u8 dac_bridge(out_low=0 out_high=12.0000)')
     // No part on this board qualifies for supply-derived vHigh.
     expect(text).not.toContain('vhigh:')

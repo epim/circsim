@@ -965,6 +965,36 @@ function expandXspiceDigital(
   const adc = tpl.schmitt ? logic.family.schmittAdc : logic.family.adc
   const inLow = (adc.inLowFrac * vHigh).toFixed(4)
   const inHigh = (adc.inHighFrac * vHigh).toFixed(4)
+
+  // Schmitt-trigger inverters: expand each gate to a self-referential behavioral
+  // B-source that encodes TRUE hysteresis (state retention) instead of the
+  // adc_bridge → d_inverter → dac_bridge chain. The adc_bridge has no memory —
+  // between its thresholds it emits UNKNOWN (mid-rail), so an RC Schmitt astable
+  // would park at mid-rail instead of oscillating. Here the flip state lives in
+  // the OUTPUT node voltage: while the output is HIGH (v(out) > mid), the input
+  // must rise past V_T+ (inHigh) to flip the output LOW; while the output is LOW,
+  // the input must fall past V_T- (inLow) to flip it HIGH. This is an inverting
+  // Schmitt trigger with real hysteresis, so RC astables self-oscillate. Modeled
+  // as zero-delay: the datasheet tpd is negligible against the RC period.
+  if (tpl.schmitt) {
+    const mid = (vHigh / 2).toFixed(4)
+    const analogNodes: string[] = []
+    let gi = 0
+    for (const g of tpl.gates) {
+      gi++
+      const inN = aNode(g.in![0])
+      const outN = aNode(g.out as string)
+      lines.push(
+        `b_${refLc}_${gi} ${outN} 0 V = ` +
+          `(v(${inN}) > (v(${outN}) > ${mid} ? ${inHigh} : ${inLow})) ? 0 : ${vHigh.toFixed(4)}`,
+      )
+      // Both the input and output analog nodes are single-node island terminals
+      // (matches the old adc-input + dac-output push exactly).
+      analogNodes.push(inN, outN)
+    }
+    return { lines, expanded: true, analogNodes }
+  }
+
   const rd = `${tpl.delaysNs}n`
 
   // Per-instance adc/dac model cards (names are ref-scoped to avoid collisions

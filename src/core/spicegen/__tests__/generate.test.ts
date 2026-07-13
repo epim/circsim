@@ -955,7 +955,7 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
     expect(deckText).toContain('dac_bridge(out_low=0 out_high=12.0000)')
   })
 
-  test('CD40106 Schmitt template gets the 40%/60% hysteresis band (4.8/7.2 V at 12 V)', () => {
+  test('CD40106 Schmitt template expands to a self-referential hysteresis B-source (40%/60% band, 4.8/7.2 V at 12 V)', () => {
     const circuit = makeDigitalCircuit()
     circuit.parts[0].value = 'CD40106'
     const resolutions: Resolution[] = [{
@@ -972,9 +972,22 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
       modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
     })
     const deckText = deck.join('\n')
-    expect(deckText).toMatch(/d_inverter\(rise_delay=80n fall_delay=80n\)/)
-    expect(deckText).toContain('adc_bridge(in_low=4.8000 in_high=7.2000)')
-    expect(deckText).toContain('dac_bridge(out_low=0 out_high=12.0000)')
+    // 1A lives on node `a` (pad 1 → net 1), 1Y on node `b` (pad 2 → net 2).
+    // Self-referential Schmitt B-source: state held in the output node voltage.
+    expect(deckText).toContain('b_u1_1 b 0 V =')
+    expect(deckText).toContain('v(b) >')
+    expect(deckText).toContain('6.0000') // mid-rail
+    expect(deckText).toContain('7.2000') // V_T+ (in_high, 60% of 12 V)
+    expect(deckText).toContain('4.8000') // V_T- (in_low, 40% of 12 V)
+    expect(deckText).toContain('12.0000') // rail
+    // Exact emitted line.
+    expect(deckText).toContain(
+      'b_u1_1 b 0 V = (v(a) > (v(b) > 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000',
+    )
+    // The old adc/dac/primitive expansion is gone for Schmitt templates.
+    expect(deckText).not.toContain('adc_bridge')
+    expect(deckText).not.toContain('dac_bridge')
+    expect(deckText).not.toContain('d_inverter')
   })
 
   test('74HC00 still expands from logic74hc.json (5 V rails) when both family files are loaded', () => {
@@ -1090,8 +1103,16 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
       modelTexts: { 'logic74hc.json': LOGIC_JSON, 'logic4000.json': LOGIC4000_JSON },
     })
     const deckText = deck.join('\n')
-    expect(deckText).toContain('adc_bridge(in_low=2.0000 in_high=3.0000)')
-    expect(deckText).toContain('dac_bridge(out_low=0 out_high=5.0000)')
+    // The Schmitt B-source thresholds all scale off the derived 5 V supply:
+    // mid=2.5, V_T+=3.0 (60%), V_T-=2.0 (40%), rail=5.0.
+    expect(deckText).toContain(
+      'b_u1_1 b 0 V = (v(a) > (v(b) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000',
+    )
+    expect(deckText).not.toContain('adc_bridge')
+    expect(deckText).not.toContain('dac_bridge')
+    expect(deckText).not.toContain('out_high=12.0000')
+    // Provenance: the deck says where the rail came from.
+    expect(deck).toContain('* U1 vhigh: 5 (dc-supply on VDD net; family default 12)')
   })
 
   test('M10: a supply attached ELSEWHERE keeps the 12 V family default (expansion byte-identical to a supply-less deck)', () => {

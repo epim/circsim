@@ -1,5 +1,5 @@
 {
-  "$provenance": "Provenance: written for circsim from 74HC-family datasheet pinouts and typical propagation delays, MIT. These are XSPICE behavioral templates (adc_bridge -> ngspice digital primitive(s) -> dac_bridge). No third-party proprietary 74xx model text is copied; only the datasheet pinouts (which pin is which gate's input/output) and datasheet-typical propagation delays (tpd) inform the templates. Verified against ngspice-46 digital.cm: the inverter primitive is d_inverter and the buffer is d_buffer (NOT d_inv/d_buf); gates are d_and/d_nand/d_or/d_nor/d_xor/d_xnor; the D flip-flop is d_dff with terminal order (data clk set reset | q qbar). The Schmitt-trigger HC14 uses adc_bridge hysteresis (in_low<in_high) ahead of d_inverter.",
+  "$provenance": "Provenance: written for circsim from 74HC-family datasheet pinouts and typical propagation delays, MIT. These are XSPICE behavioral templates (adc_bridge -> ngspice digital primitive(s) -> dac_bridge). No third-party proprietary 74xx model text is copied; only the datasheet pinouts (which pin is which gate's input/output) and datasheet-typical propagation delays (tpd) inform the templates. Verified against ngspice-46 digital.cm: the inverter primitive is d_inverter and the buffer is d_buffer (NOT d_inv/d_buf); gates are d_and/d_nand/d_or/d_nor/d_xor/d_xnor; the D flip-flop is d_dff with terminal order (data clk set reset | q qbar). The Schmitt-trigger HC14 does NOT use the adc_bridge path: each gate expands to a self-referential behavioral B-source whose flip state is held in the OUTPUT node voltage, giving TRUE hysteresis (state retention). Switching thresholds are FRACTIONS of vHigh (schmittAdc inLowFrac/inHighFrac = V_T-/V_T+); while the output is HIGH the input must rise past V_T+ to flip it LOW, while LOW it must fall past V_T- to flip HIGH. Validated against real ngspice-46: RC Schmitt astables self-oscillate and a static in-band input holds the previous rail rather than an undefined mid-rail level.",
   "$schema": {
     "description": "Each template expands to: one adc_bridge per logic-input pin, the listed digital primitive instances wired on internal d_* nodes, and one dac_bridge per logic-output pin. ADC/DAC thresholds and rails come from the chosen logic family rail (vHigh). Pin roles are by package-independent SIGNAL name; pinMaps translate package pad numbers to signal names.",
     "gate.prim": "ngspice digital primitive name (d_inverter|d_buffer|d_and|d_nand|d_or|d_nor|d_xor|d_xnor|d_dff)",
@@ -77,7 +77,7 @@
       }
     },
     "74HC14": {
-      "desc": "Hex inverting Schmitt trigger (hysteresis via adc_bridge thresholds)",
+      "desc": "Hex inverting Schmitt trigger (true hysteresis via a self-referential behavioral B-source; switching thresholds at schmittAdc fracs of vHigh, output holds its previous rail inside the band so RC astables self-oscillate)",
       "schmitt": true,
       "gates": [
         { "prim": "d_inverter", "in": ["1A"], "out": "1Y" },

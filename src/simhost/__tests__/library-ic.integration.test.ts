@@ -159,6 +159,25 @@ function expandTemplate(tpl: Logic74, partName: string, vHigh: number): string[]
   const inHigh = (adc.inHighFrac * vHigh).toFixed(4)
   const rd = `${t.delaysNs}n`
 
+  // Schmitt triggers: self-referential hysteresis B-source (mirrors production
+  // expandXspiceDigital). State is held in the output node voltage — no
+  // adc_bridge/dac_bridge, no UNKNOWN in-band level. Analog node names equal the
+  // signal names (e.g. "1a" input, "1y" output), driven/probed by the caller.
+  if (t.schmitt) {
+    const mid = (vHigh / 2).toFixed(4)
+    let sgi = 0
+    for (const g of t.gates) {
+      sgi++
+      const inN = (g.in as string[])[0].toLowerCase()
+      const outN = (g.out as string).toLowerCase()
+      lines.push(
+        `b_${partName.toLowerCase()}_${sgi} ${outN} 0 V = ` +
+          `(v(${inN}) > (v(${outN}) > ${mid} ? ${inHigh} : ${inLow})) ? 0 : ${vHigh.toFixed(4)}`,
+      )
+    }
+    return lines
+  }
+
   // one adc_bridge per input signal (analog signal node -> digital d_<sig>)
   lines.push(`.model adcm74 adc_bridge(in_low=${inLow} in_high=${inHigh})`)
   lines.push(`.model dacm74 dac_bridge(out_low=0 out_high=${vHigh.toFixed(4)})`)
@@ -758,26 +777,27 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     expect(vLowState).toBeLessThan(1)
   }, 90_000)
 
-  it('CD40106 Schmitt band: 4.8/7.2 V thresholds are live in sim (adc_bridge undefined band, not state-holding)', async () => {
-    // MEASURED LIMITATION (this is the documented fallback, not a bug): the
-    // XSPICE adc_bridge does NOT hold its previous state between in_low and
-    // in_high — inside the band it emits UNKNOWN, which the dac_bridge maps to
-    // mid-rail (6.000 V measured at vin=6 V on both legs). So true CD40106
-    // state-retention hysteresis is not expressible with the bridge; what IS
-    // verifiable in-sim is that BOTH threshold edges are live: full-high output
-    // only below in_low=4.8 V, full-low output only above in_high=7.2 V, and
-    // the 4.8/7.2 V band appears in the generated expansion text.
+  it('CD40106 Schmitt band: TRUE hysteresis in sim (in-band output holds the prior rail, not a mid-rail level)', async () => {
+    // The self-referential B-source holds state in the output node voltage, so
+    // inside the 4.8–7.2 V band the output depends on WHICH DIRECTION the input
+    // is moving: on the rising leg (coming from below V_T-) it is still HIGH; on
+    // the falling leg (coming from above V_T+) it is still LOW. Sampling the SAME
+    // in-band input voltage (6.0 V) on each leg yields opposite rails — that
+    // difference IS the hysteresis loop (pre-fix both legs read ~6 V mid-rail).
     const logic = JSON.parse(readFileSync(join(MODELS, 'logic4000.json'), 'utf8')) as Logic74
     const vHigh = logic.family.vHighDefault // 12 V family constant
     const expand = expandTemplate(logic, 'CD40106', vHigh)
     const expandText = expand.join('\n')
-    expect(expandText).toContain('adc_bridge(in_low=4.8000 in_high=7.2000)')
-    expect(expandText).toContain('dac_bridge(out_low=0 out_high=12.0000)')
+    // New expansion: hysteresis B-source, no adc/dac bridges.
+    expect(expandText).toContain('b_cd40106_1 1y 0 V =')
+    expect(expandText).toContain('(v(1y) > 6.0000 ? 7.2000 : 4.8000)')
+    expect(expandText).not.toContain('adc_bridge')
+    expect(expandText).not.toContain('dac_bridge')
 
-    // One slow triangle 0 -> 12 -> 0 V over 2 ms on input 1A (delays are ~80 ns,
-    // so the ramp is quasi-static). Other inputs tied low.
+    // One slow triangle 0 -> 12 -> 0 V over 2 ms on input 1A (the B-source is
+    // zero-delay, so the ramp is quasi-static). Other inputs tied low.
     const deck = [
-      '* CD40106 Schmitt band — slow triangle in, sample both directions',
+      '* CD40106 Schmitt hysteresis — slow triangle in, sample both directions',
       'v1a 1a 0 dc 0 pwl(0 0 1m 12 2m 0)',
       'v2a 2a 0 dc 0',
       'v3a 3a 0 dc 0',
@@ -792,28 +812,37 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     const t = r.t
     // Rising leg: vin = 12*t/1m. Falling leg: vin = 12*(2m-t)/1m.
     const samples = [
-      { label: 'vin=3.0V rising', at: 0.25e-3, kind: 'H' },   // clearly below in_low -> 12 V
-      { label: 'vin=4.2V rising', at: 0.35e-3, kind: 'H' },   // still below in_low=4.8 -> 12 V
-      { label: 'vin=5.4V rising', at: 0.45e-3, kind: 'U' },   // inside the band -> mid-rail 6 V
-      { label: 'vin=7.8V rising', at: 0.65e-3, kind: 'L' },   // above in_high=7.2 -> 0 V
+      { label: 'vin=3.0V rising', at: 0.25e-3, kind: 'H' },   // below the band -> 12 V
+      { label: 'vin=4.2V rising', at: 0.35e-3, kind: 'H' },   // still below V_T+ -> held 12 V
+      { label: 'vin=6.0V rising', at: 0.50e-3, kind: 'H' },   // IN BAND, rose from low -> held HIGH
+      { label: 'vin=7.8V rising', at: 0.65e-3, kind: 'L' },   // above V_T+=7.2 -> flipped 0 V
       { label: 'vin=9.0V rising', at: 0.75e-3, kind: 'L' },
-      { label: 'vin=6.0V falling', at: 1.50e-3, kind: 'U' },  // inside the band -> mid-rail 6 V
-      { label: 'vin=3.0V falling', at: 1.75e-3, kind: 'H' }   // back below in_low -> 12 V
+      { label: 'vin=6.0V falling', at: 1.50e-3, kind: 'L' },  // IN BAND, fell from high -> held LOW
+      { label: 'vin=3.0V falling', at: 1.75e-3, kind: 'H' }   // below V_T-=4.8 -> flipped 12 V
     ] as const
     const rows: string[] = []
     const measured: string[] = []
     for (const s of samples) {
       const v = valueAt(y, t, s.at)
-      const kind = v > 11 ? 'H' : v < 1 ? 'L' : v > 5 && v < 7 ? 'U' : '?'
+      const kind = v > 11 ? 'H' : v < 1 ? 'L' : '?'
       measured.push(kind)
       rows.push(`${s.label} -> 1Y=${v.toFixed(3)}V (${kind}, expect ${s.kind})`)
     }
+    // The crux: same in-band input (6.0 V), opposite outputs on the two legs.
+    const vRising6 = valueAt(y, t, 0.50e-3)
+    const vFalling6 = valueAt(y, t, 1.50e-3)
     // eslint-disable-next-line no-console
-    console.log(`\n[CD40106 Schmitt band @12V]\n${rows.join('\n')}\nerrs=[${r.errs.join('|')}]\n`)
+    console.log(
+      `\n[CD40106 hysteresis @12V]\n${rows.join('\n')}\n` +
+        `in-band 6.0V: rising=${vRising6.toFixed(3)}V falling=${vFalling6.toFixed(3)}V ` +
+        `(hysteresis Δ=${Math.abs(vRising6 - vFalling6).toFixed(3)}V)\nerrs=[${r.errs.join('|')}]\n`
+    )
     expect(r.errs).toEqual([])
-    // The output leaves full-high at the 4.8 V edge and reaches full-low at the
-    // 7.2 V edge — the two Schmitt thresholds are distinct and live in-sim.
+    // The two thresholds are distinct AND the in-band output holds the prior rail.
     expect(measured).toEqual(samples.map((s) => s.kind))
+    // Explicit hysteresis-loop assertion: same input, output HIGH rising / LOW falling.
+    expect(vRising6).toBeGreaterThan(11)
+    expect(vFalling6).toBeLessThan(1)
   }, 90_000)
 
   it('.options noopalter: mixed-signal DCOP with an RC astable (no DC fixpoint) yields a defined op', async () => {
@@ -905,48 +934,52 @@ describe.skipIf(!haveNgspice)('M10 — supply-derived digital vHigh (CD40106 RC 
     })
   }
 
-  it('the generated deck carries 5 V-derived rails (dac out_high AND Schmitt adc thresholds)', () => {
+  it('the generated deck carries the 5 V-derived Schmitt hysteresis B-source (thresholds/rail scale off the bench supply)', () => {
     const deck = buildAstableDeck()
     const text = deck.join('\n')
-    // Supply-derived: 5 V rail, 40 %/60 % Schmitt band of 5 V — not the 12 V family default.
-    expect(text).toContain('dac_bridge(out_low=0 out_high=5.0000)')
-    expect(text).toContain('adc_bridge(in_low=2.0000 in_high=3.0000)')
-    expect(text).not.toContain('out_high=12.0000')
+    // 1A (input) is on node `osc`, 1Y (output) on node `out`. The self-referential
+    // Schmitt B-source carries the 5 V-derived thresholds: mid=2.5, V_T+=3.0 (60%),
+    // V_T-=2.0 (40%), rail=5.0 — not the 12 V family default.
+    expect(text).toContain(
+      'b_u1_1 out 0 V = (v(osc) > (v(out) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000',
+    )
+    // The abandoned adc/dac path and the 12 V default are gone.
+    expect(text).not.toContain('adc_bridge')
+    expect(text).not.toContain('dac_bridge')
+    expect(text).not.toContain('12.0000')
     expect(text).toContain('* U1 vhigh: 5 (dc-supply on VDD net; family default 12)')
   })
 
-  it('the astable output rides the 5 V rail in a real transient (peak < 6 V and > 4 V), not the 12 V family constant', async () => {
-    // MEASURED BEHAVIOR (real ngspice-46): the output drives full-high 5 V while
-    // the cap is below in_low, then — because the adc_bridge emits UNKNOWN
-    // inside the 2.0–3.0 V band rather than holding state (the documented
-    // family limitation, see logic4000.json $provenance) — the dac settles at
-    // MID-RAIL and the cap converges there, so the astable does not sustain
-    // oscillation in-sim. Both measured levels are still decisive for M10:
-    //   peak    = 5.0 V (dac out_high from the bench supply; pre-M10: 12 V)
-    //   trough  = 2.5 V (dac mid-rail UNKNOWN of a 5 V swing; pre-M10: 6 V)
+  it('the astable self-oscillates rail-to-rail on the derived 5 V rail (not a 2.5 V mid-rail stall, not the 12 V family constant)', async () => {
+    // MEASURED BEHAVIOR (real ngspice-46): the self-referential Schmitt B-source
+    // has TRUE hysteresis (state held in the output node voltage), so this
+    // 1Y→R→1A / C-on-1A RC astable actually OSCILLATES. Both the swing rails and
+    // the thresholds scale off the 5 V bench supply (M10):
+    //   peak   ≈ 5.0 V (rail from the bench supply; pre-M10: 12 V)
+    //   trough ≈ 0.0 V (the other rail; pre-fix this stalled at 2.5 V mid-rail)
     const deck = buildAstableDeck()
-    const r = await runTran(deck, '1u', '1m')
+    const r = await runTran(deck, '1u', '5m')
     const out = r.series['out'] ?? []
     expect(r.errs).toEqual([])
     expect(out.length).toBeGreaterThan(0)
     const peak = Math.max(...out)
     const trough = Math.min(...out)
-    // Rising edges through mid-band (2.5 V): oscillation evidence, logged for
-    // diagnosis (measured 0 — see the in-band UNKNOWN note above).
-    let edges = 0
-    for (let i = 1; i < out.length; i++) if (out[i - 1] < 2.5 && out[i] >= 2.5) edges++
+    // Count rising edges through mid-rail (2.5 V) — oscillation evidence, same
+    // detection as the NE555 astable test above.
+    const edgeT: number[] = []
+    for (let i = 1; i < out.length; i++) if (out[i - 1] < 2.5 && out[i] >= 2.5) edgeT.push(r.t[i])
     // eslint-disable-next-line no-console
     console.log(
       `\n[M10 CD40106 astable @5V] peak=${peak.toFixed(3)}V trough=${trough.toFixed(3)}V ` +
-        `risingEdges=${edges} rows=${r.t.length} errs=[${r.errs.join('|')}]\n`
+        `risingEdges=${edgeT.length} rows=${r.t.length} errs=[${r.errs.join('|')}]\n`
     )
-    // THE milestone assertion: the output rides the real 5 V bench rail, not
-    // the 12 V family constant (pre-M10 this peak measured 12 V).
-    expect(peak).toBeLessThan(6)
-    expect(peak).toBeGreaterThan(4)
-    // The stalled level is the mid-rail of the DERIVED 5 V swing (2.5 V), not
-    // of the 12 V default (6 V) — the second half of the levels fix.
-    expect(trough).toBeGreaterThan(2)
-    expect(trough).toBeLessThan(3)
+    // THE milestone assertion: the output rides the real 5 V bench rail, not the
+    // 12 V family constant (pre-M10 this peak measured 12 V).
+    expect(peak).toBeGreaterThan(4.5)
+    // It genuinely oscillates rail-to-rail — the trough reaches ~0 V, NOT the
+    // pre-fix 2.5 V mid-rail park.
+    expect(trough).toBeLessThan(0.5)
+    // Multiple mid-rail crossings prove sustained oscillation (not a single edge).
+    expect(edgeT.length).toBeGreaterThanOrEqual(2)
   }, 90_000)
 })
