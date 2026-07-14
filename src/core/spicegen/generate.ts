@@ -60,6 +60,10 @@ export interface GenerateOptions {
    * the digital family file that contains the template id.
    */
   modelTexts?: Record<string, string>
+  /** OPTIONAL manual per-net rail voltage overrides (netId → volts). Tier 2. */
+  railOverrides?: Map<number, number>
+  /** OPTIONAL op-measured per-net rail voltages (netId → volts). Tier 3. */
+  measuredRailVHigh?: Map<number, number>
 }
 
 // ─── Model-definition parsing (inline from .lib texts) ───────────────────────
@@ -924,6 +928,8 @@ function expandXspiceDigital(
   idx: ModelTextIndex,
   templateFile: string | undefined,
   instruments: Instrument[],
+  railOverrides: Map<number, number> | undefined,
+  measuredRailVHigh: Map<number, number> | undefined,
 ): { lines: string[]; expanded: boolean; analogNodes: string[] } {
   const logic = templateFile ? parseLogic74(idx, templateFile) : null
   const tpl = logic?.templates?.[model.templateId]
@@ -939,11 +945,23 @@ function expandXspiceDigital(
     }
   }
 
-  // M10: prefer the actual bench rail on the part's VDD pad net (direct
-  // attachment, exactly one supply, VSS grounded) over the family constant.
-  // Undetermined cases keep the family default — byte-identical decks.
-  const supplyVHigh = deriveSupplyVHigh(tpl, model.pinMap, part, netIdToNode, instruments)
-  const vHigh = supplyVHigh ?? logic.family.vHighDefault
+  // Rail precedence (4-tier): direct DC supply › manual override › op-measured
+  // rail › family default. Tiers 1/2/4 are known at deck-gen; tier 3's measured
+  // rail is supplied by the caller (op-informed second pass). A tier only wins
+  // if its value is finite and > 0. Undetermined cases keep the family default —
+  // byte-identical decks.
+  const { vddNetId } = digitalVddNet(tpl, model.pinMap, part, netIdToNode)
+  const directVHigh = deriveSupplyVHigh(tpl, model.pinMap, part, netIdToNode, instruments) // tier 1
+  const overrideVHigh = vddNetId !== undefined ? railOverrides?.get(vddNetId) : undefined   // tier 2
+  const measuredVHigh = vddNetId !== undefined ? measuredRailVHigh?.get(vddNetId) : undefined // tier 3
+  const sane = (v: number | undefined): number | undefined =>
+    v !== undefined && Number.isFinite(v) && v > 0 ? v : undefined
+  const railSource =
+    sane(directVHigh) !== undefined ? 'dc-supply on VDD net'
+    : sane(overrideVHigh) !== undefined ? 'user rail override'
+    : sane(measuredVHigh) !== undefined ? 'op-measured rail'
+    : null
+  const vHigh = sane(directVHigh) ?? sane(overrideVHigh) ?? sane(measuredVHigh) ?? logic.family.vHighDefault
   const refLc = ref.toLowerCase()
 
   // Map each chip SIGNAL name (e.g. "1A", "VCC") → the analog node it lives on.
@@ -965,10 +983,10 @@ function expandXspiceDigital(
 
   const lines: string[] = []
   lines.push(`* xspice-digital ${ref} (${model.templateId})`)
-  if (supplyVHigh !== undefined) {
+  if (railSource) {
     // Provenance: saved decks say where a non-default rail came from.
     lines.push(
-      `* ${ref} vhigh: ${formatSpiceValue(supplyVHigh)} (dc-supply on VDD net; ` +
+      `* ${ref} vhigh: ${formatSpiceValue(vHigh)} (${railSource}; ` +
         `family default ${formatSpiceValue(logic.family.vHighDefault)})`,
     )
   }
@@ -1454,6 +1472,7 @@ export function generateDeck(opts: GenerateOptions): string[] {
         : undefined
       const xspice = expandXspiceDigital(
         res.ref, model, part, netIdToNode, modelIndex, templateFile, instruments,
+        opts.railOverrides, opts.measuredRailVHigh,
       )
       lines.push(...xspice.lines)
       if (xspice.expanded) anyXspiceExpanded = true

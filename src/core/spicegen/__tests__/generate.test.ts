@@ -1103,6 +1103,30 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
     expect(deck).toContain('* U1 vhigh: 5 (dc-supply on VDD net; family default 12)')
   })
 
+  test('rail precedence: manual override beats measured rail beats family default', () => {
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].value = 'CD40106'
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: { kind: 'xspice-digital', templateId: 'CD40106',
+        pinMap: { '1': '1A', '2': '1Y', '7': 'GND', '14': 'VCC' } },
+    }]
+    const base = {
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 5 } as any],
+      groundNetId: 5,
+      modelTexts: { 'logic4000.json': LOGIC4000_JSON },
+    }
+    // Family default (12 V): mid 6.0000, V_T+ 7.2000.
+    expect(generateDeck(base).join('\n')).toContain('6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000')
+    // Measured rail 5 V (netId 4 = VDD): mid 2.5, V_T+ 3.0.
+    expect(generateDeck({ ...base, measuredRailVHigh: new Map([[4, 5]]) }).join('\n'))
+      .toContain('2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000')
+    // Manual override 3.3 V beats the measured 5 V.
+    expect(generateDeck({ ...base, measuredRailVHigh: new Map([[4, 5]]), railOverrides: new Map([[4, 3.3]]) }).join('\n'))
+      .toContain('1.6500 ? 1.9800 : 1.3200)) ? 0 : 3.3000')
+  })
+
   test('M10: CD40106 Schmitt thresholds scale too (40 %/60 % of a 5 V supply)', () => {
     const circuit = makeDigitalCircuit()
     circuit.parts[0].value = 'CD40106'
