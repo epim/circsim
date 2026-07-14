@@ -1,6 +1,6 @@
 {
   "name": "circsim",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Cross-platform Electron PCB simulator",
   "main": "./out/main/index.js",
   "author": "circsim maintainers <epim@users.noreply.github.com>",
