@@ -5,13 +5,36 @@
  *   Task 4 — railOverrides state (kicadName→volts), setRailOverride /
  *            clearRailOverride actions, and railOverrideNetMap() resolution.
  *   Task 5 — powerOn's conditional two-pass op orchestration (added below).
+ *
+ * Review fixes:
+ *   FIX 1 — markDeckDirty clears the sensed-rail cache (stale reference frame).
+ *   FIX 2 — the global ingestEvent listener must NOT commit powerOn's interim
+ *           (pass-1, family-default) op result during the pass-2 solve.
+ *   FIX 3 — snapshot railOverrides once per powerOn.
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { createAppStore, type AppStore } from '../appStore'
+import { createAppStore, type AppStore, type BoardHooks } from '../appStore'
 import { createMockSimClient, type MockSimClient } from '../../ipc/simClient'
 import type { Circuit } from '../../../../core/netlist/extract'
 import type { Resolution } from '../../../../core/models/types'
+
+/** Board-hook spy: records every net-voltage set applied to the 3D board. */
+function makeBoardHooks(): {
+  hooks: BoardHooks
+  applied: Map<number, number>[]
+} {
+  const applied: Map<number, number>[] = []
+  return {
+    applied,
+    hooks: {
+      applyNetVoltages(voltages) {
+        applied.push(new Map(voltages))
+      },
+      showOpAnnotations() {},
+    },
+  }
+}
 
 // Same CD40106 (schmitt, family default 12 V) fixture the core sensing tests use.
 const LOGIC4000_JSON = JSON.stringify({
@@ -248,5 +271,87 @@ describe('powerOn two-pass rail sensing (Task 5)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ─── Review fixes ──────────────────────────────────────────────────────────────
+
+describe('sensed-rail cache invalidation (FIX 1)', () => {
+  it('markDeckDirty clears measuredRails and railNotes (stale reference frame)', async () => {
+    const mock = createMockSimClient()
+    const store = createAppStore({ simClient: mock })
+    seedSwitchedRailBoard(store)
+    autoRespond(mock, () => ({ vgated: 12.6, a: 5, b: 0 }))
+
+    await store.getState().powerOn()
+    expect(store.getState().measuredRails?.get(4)).toBeCloseTo(12.6)
+
+    store.getState().markDeckDirty()
+    expect(store.getState().measuredRails).toBeNull()
+    expect(store.getState().railNotes).toEqual([])
+  })
+
+  it('a gated-off railNote is cleared by a deck-dirtying edit (setGround)', async () => {
+    const mock = createMockSimClient()
+    const store = createAppStore({ simClient: mock })
+    seedSwitchedRailBoard(store)
+    autoRespond(mock, () => ({ vgated: 0.0, a: 5, b: 0 }))
+
+    await store.getState().powerOn()
+    expect(store.getState().railNotes.map(n => n.kicadName)).toContain('/VGATED')
+
+    store.getState().setGround(5) // routes through markDeckDirty()
+    expect(store.getState().railNotes).toEqual([])
+    expect(store.getState().measuredRails).toBeNull()
+  })
+})
+
+describe('powerOn is the sole committer for its own ops (FIX 2)', () => {
+  it('never commits the interim pass-1 (family-default) result to the board', async () => {
+    const mock = createMockSimClient()
+    const store = createAppStore({ simClient: mock })
+    const board = makeBoardHooks()
+    store.getState().setBoardHooks(board.hooks)
+    seedSwitchedRailBoard(store)
+    // Pass 1 (family default) reports OUT=1.0 and triggers a re-run (12.6 ≠ 12.0);
+    // pass 2 (measured 12.6) reports the corrected OUT=2.0. The permanent
+    // ingestEvent listener also receives pass-1's opResult — it must NOT push the
+    // wrong interim value onto the board.
+    autoRespond(mock, pass =>
+      pass === 1 ? { vgated: 12.6, a: 5, b: 1.0 } : { vgated: 12.6, a: 5, b: 2.0 },
+    )
+
+    const opVoltages = await store.getState().powerOn()
+
+    const OUT = 2
+    // Final committed value is the pass-2 rail-corrected result.
+    expect(opVoltages?.get(OUT)).toBeCloseTo(2.0)
+    expect(store.getState().opVoltages?.get(OUT)).toBeCloseTo(2.0)
+    // The interim pass-1 value (1.0) was NEVER applied to the board.
+    expect(board.applied.length).toBeGreaterThan(0)
+    for (const snap of board.applied) {
+      expect(snap.get(OUT)).not.toBe(1.0)
+    }
+    expect(board.applied[board.applied.length - 1].get(OUT)).toBeCloseTo(2.0)
+  })
+
+  it('sets opCaveat from its own op method (moved off ingestEvent)', async () => {
+    const mock = createMockSimClient()
+    const store = createAppStore({ simClient: mock })
+    seedSwitchedRailBoard(store)
+    // Single-pass op (measured == family default → no re-run) with a fallback method.
+    const rawSend = mock.send.bind(mock)
+    mock.send = (command): void => {
+      rawSend(command)
+      if (command.type === 'runOp') {
+        queueMicrotask(() =>
+          mock.emit({ type: 'opResult', values: { vgated: 12.0, a: 5, b: 0 }, method: 'gmin' }),
+        )
+      }
+    }
+
+    await store.getState().powerOn()
+
+    expect(store.getState().opCaveat?.method).toBe('gmin')
   })
 })

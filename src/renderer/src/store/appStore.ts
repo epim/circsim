@@ -711,6 +711,15 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   // against an infinite loop). `reopSettled` lets tests await the quiescent point.
   let reopInFlight = false
   let reopRequested = false
+  /**
+   * True while powerOn owns an in-flight op (either pass). The permanent
+   * ingestEvent listener also receives powerOn's opResult events (waitFor and
+   * ingestEvent share onEvent); this flag makes powerOn the SOLE committer for
+   * its own ops, so ingestEvent never commits powerOn's interim pass-1
+   * (family-default) result during the tier-3 pass-2 re-solve. run() /
+   * replayAfterCrash() ops still commit via ingestEvent normally.
+   */
+  let powerOnOpInFlight = false
   /** Snapshot of the instruments the in-flight (or last) op was solved for. */
   let lastSolvedInstruments: Instrument[] | null = null
   let reopSettledResolvers: Array<() => void> = []
@@ -1319,6 +1328,11 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       )
       if (!hasSource) return null
 
+      // Snapshot the resolved rail overrides ONCE per powerOn so the pass-1 deck,
+      // the sensing skip-list, and the pass-2 deck all agree even if the user
+      // edits an override mid-solve (FIX 3).
+      const railOverrides = get().railOverrideNetMap()
+
       const deckLines = generateDeck({
         circuit,
         resolutions,
@@ -1326,7 +1340,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         groundNetId,
         title: get().project.boardFileName ?? undefined,
         modelTexts: buildDeckModelTexts(get()),
-        railOverrides: get().railOverrideNetMap(),
+        railOverrides,
       })
 
       // Retained voltages from a previous run are STALE until the new solve
@@ -1338,101 +1352,119 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         opCaveat: null,
         opVoltagesStale: get().opVoltages !== null,
       })
-      simClient.send({ type: 'loadCircuit', deckLines })
-      simClient.send({ type: 'runOp' })
 
-      let result: { type: 'opResult'; values: Record<string, number> }
+      // powerOn owns every commit for its own op(s): suppress the ingestEvent
+      // listener's opResult handler for the whole section so the interim pass-1
+      // (family-default) result is never committed during the pass-2 re-solve
+      // (FIX 2). The finally covers all exits: success, pass-1 timeout, pass-2
+      // timeout.
+      powerOnOpInFlight = true
       try {
-        result = await simClient.waitFor('opResult', 30_000)
-      } catch {
-        // A timeout drops us back to idle; a convergenceFailure event (ingested
-        // separately) already surfaces the plain-language card.
-        if (get().simState === 'op') set({ simState: 'idle' })
-        return null
-      }
+        simClient.send({ type: 'loadCircuit', deckLines })
+        simClient.send({ type: 'runOp' })
 
-      // ── Op-informed rail sensing (tier 3): sense switched rails, re-solve once ──
-      // Pass 1's deck knew only tiers 1/2/4 (family default for any switched or
-      // derived rail with no attached supply). Sense those rails from the op
-      // result; if a measured rail would actually change a chip's vHigh, rebuild
-      // the deck with the measured rails and re-solve EXACTLY once. `deckLines` is
-      // the family-default baseline (powerOn never seeds measuredRailVHigh into
-      // its own first pass), so comparing the regenerated deck to it — ignoring
-      // provenance comment lines — is precisely "did the measured rail change the
-      // circuit vs the family default?" A measured rail equal to the family
-      // default leaves the deck identical → no wasted second solve.
-      const railOverrides = get().railOverrideNetMap()
-      const { rails, gatedOff } = deriveMeasuredRailVHigh({
-        opValues: result.values,
-        circuit,
-        resolutions,
-        instruments,
-        groundNetId,
-        railOverrides,
-        modelTexts: buildDeckModelTexts(get()),
-      })
-      if (rails.size > 0) {
-        const deck2 = generateDeck({
+        let result: Extract<SimEvent, { type: 'opResult' }>
+        try {
+          result = await simClient.waitFor('opResult', 30_000)
+        } catch {
+          // A timeout drops us back to idle; a convergenceFailure event (ingested
+          // separately) already surfaces the plain-language card.
+          if (get().simState === 'op') set({ simState: 'idle' })
+          return null
+        }
+
+        // ── Op-informed rail sensing (tier 3): sense switched rails, re-solve once ──
+        // Pass 1's deck knew only tiers 1/2/4 (family default for any switched or
+        // derived rail with no attached supply). Sense those rails from the op
+        // result; if a measured rail would actually change a chip's vHigh, rebuild
+        // the deck with the measured rails and re-solve EXACTLY once. `deckLines` is
+        // the family-default baseline (powerOn never seeds measuredRailVHigh into
+        // its own first pass), so comparing the regenerated deck to it — ignoring
+        // provenance comment lines — is precisely "did the measured rail change the
+        // circuit vs the family default?" A measured rail equal to the family
+        // default leaves the deck identical → no wasted second solve.
+        const { rails, gatedOff } = deriveMeasuredRailVHigh({
+          opValues: result.values,
           circuit,
           resolutions,
           instruments,
           groundNetId,
-          title: get().project.boardFileName ?? undefined,
-          modelTexts: buildDeckModelTexts(get()),
           railOverrides,
-          measuredRailVHigh: rails,
+          modelTexts: buildDeckModelTexts(get()),
         })
-        // Compare only the circuit lines (drop `*` comments — the measured-rail
-        // provenance note differs even when the numeric rail matches the default).
-        const circuitLines = (deck: string[]): string =>
-          deck.filter(line => !line.trimStart().startsWith('*')).join('\n')
-        if (circuitLines(deck2) !== circuitLines(deckLines)) {
-          simClient.send({ type: 'loadCircuit', deckLines: deck2 })
-          simClient.send({ type: 'runOp' })
-          try {
-            result = await simClient.waitFor('opResult', 30_000) // pass 2 (single re-run)
-          } catch {
-            // Pass-2 failure/timeout: keep the pass-1 `result` already in hand.
+        if (rails.size > 0) {
+          const deck2 = generateDeck({
+            circuit,
+            resolutions,
+            instruments,
+            groundNetId,
+            title: get().project.boardFileName ?? undefined,
+            modelTexts: buildDeckModelTexts(get()),
+            railOverrides,
+            measuredRailVHigh: rails,
+          })
+          // Compare only the circuit lines (drop `*` comments — the measured-rail
+          // provenance note differs even when the numeric rail matches the default).
+          const circuitLines = (deck: string[]): string =>
+            deck.filter(line => !line.trimStart().startsWith('*')).join('\n')
+          if (circuitLines(deck2) !== circuitLines(deckLines)) {
+            simClient.send({ type: 'loadCircuit', deckLines: deck2 })
+            simClient.send({ type: 'runOp' })
+            try {
+              result = await simClient.waitFor('opResult', 30_000) // pass 2 (single re-run)
+            } catch {
+              // Pass-2 failure/timeout: keep the pass-1 `result` already in hand.
+            }
           }
         }
-      }
-      set({ measuredRails: rails })
-      const railNotes: RailNote[] = gatedOff.map(g => ({ ref: g.ref, kicadName: g.kicadName }))
+        set({ measuredRails: rails })
+        const railNotes: RailNote[] = gatedOff.map(g => ({ ref: g.ref, kicadName: g.kicadName }))
 
-      // Map opResult.values (bare lowercase node names) → netId voltages.
-      const opVoltages = mapOpResultToNetVoltages(result.values, circuit)
-      const voltageRange = computeVoltageRange(opVoltages)
-      const currentsByRef = applyOpCurrents(boardHooks, result.values, resolutions, circuit)
+        // Map opResult.values (bare lowercase node names) → netId voltages.
+        const opVoltages = mapOpResultToNetVoltages(result.values, circuit)
+        const voltageRange = computeVoltageRange(opVoltages)
+        const currentsByRef = applyOpCurrents(boardHooks, result.values, resolutions, circuit)
 
-      // Coach: explain any dark LEDs in plain language (First Light, L3).
-      const coachNotes = diagnoseDarkLeds(
-        buildCoachInput(
-          circuit,
-          currentsByRef,
+        // Coach: explain any dark LEDs in plain language (First Light, L3).
+        const coachNotes = diagnoseDarkLeds(
+          buildCoachInput(
+            circuit,
+            currentsByRef,
+            opVoltages,
+            hasSupplyAttached(instruments, groundNetId),
+            resolutions,
+          ),
+        )
+
+        set({
           opVoltages,
-          hasSupplyAttached(instruments, groundNetId),
-          resolutions,
-        ),
-      )
+          opVoltagesStale: false, // fresh result — no longer showing old numbers
+          voltageRange,
+          currentsByRef,
+          coachNotes,
+          railNotes,
+          // Honesty surface (F1): powerOn is now the sole committer for its own op,
+          // so it carries ingestEvent's caveat logic — an op that converged only
+          // via a fallback rung gets the persistent caveat (absent method ⇒ direct).
+          opCaveat:
+            result.method && result.method !== 'direct'
+              ? { method: result.method, at: Date.now() }
+              : null,
+          deckDirty: false,
+          simState: 'idle',
+        })
 
-      set({
-        opVoltages,
-        opVoltagesStale: false, // fresh result — no longer showing old numbers
-        voltageRange,
-        currentsByRef,
-        coachNotes,
-        railNotes,
-        deckDirty: false,
-        simState: 'idle',
-      })
+        // Push onto the 3D board: floating voltage labels + copper voltage tint.
+        applyOpToBoard(boardHooks, opVoltages, voltageRange)
 
-      // Push onto the 3D board: floating voltage labels + copper voltage tint.
-      applyOpToBoard(boardHooks, opVoltages, voltageRange)
-
-      // Re-run the critic with the fresh op result so the sim-dependent checks
-      // (ampacity / thermal) now run with real node voltages + currents (Spec §7).
-      get().runCriticAudit()
-      return opVoltages
+        // Re-run the critic with the fresh op result so the sim-dependent checks
+        // (ampacity / thermal) now run with real node voltages + currents (Spec §7).
+        get().runCriticAudit()
+        return opVoltages
+      } finally {
+        // Release ingestEvent to commit ordinary (run/replay) ops again.
+        powerOnOpInFlight = false
+      }
     },
 
     async energize() {
@@ -1545,7 +1577,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     },
 
     markDeckDirty() {
-      set({ deckDirty: true })
+      // Any deck-dirtying edit (setGround, setPinMap, override changes, …) can
+      // shift the reference frame or topology the sensed rails were measured in,
+      // so the op-measured rail cache + gated-off notes must not survive it.
+      set({ deckDirty: true, measuredRails: null, railNotes: [] })
     },
 
     // ── crash recovery (Spec §6.1) ─────────────────────────────────────────────
@@ -1682,6 +1717,9 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           }))
           break
         case 'opResult': {
+          // powerOn is the sole committer for its own ops — skip the interim
+          // pass-1 (family-default) result it is about to correct in pass 2 (FIX 2).
+          if (powerOnOpInFlight) break
           const { circuit, resolutions, instruments, groundNetId } = get()
           if (!circuit) break
           const opVoltages = mapOpResultToNetVoltages(event.values, circuit)
