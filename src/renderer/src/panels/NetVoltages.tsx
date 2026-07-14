@@ -14,7 +14,7 @@
 
 import React, { useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
-import { opCaveatMessage } from '../store/appStore'
+import { opCaveatMessage, type AppStore } from '../store/appStore'
 import { formatVolts } from '../viewport/markers'
 import type { CircuitNet } from '../../../core/netlist/extract'
 
@@ -48,6 +48,90 @@ export function buildNetVoltageRows(
     a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }),
   )
   return rows
+}
+
+/**
+ * Apply a manual rail-voltage override for a net (tier 2) then re-solve. Exported
+ * for unit tests — the SSR test env can't fire DOM events, so the action wiring
+ * is verified against the store directly (the `_revealDoctorCard` pattern).
+ * No-ops on a non-finite / non-positive value.
+ */
+export function _applyRailOverride(
+  store: AppStore,
+  kicadName: string,
+  value: string | number,
+): void {
+  const volts = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(volts) || volts <= 0) return
+  store.getState().setRailOverride(kicadName, volts)
+  void store.getState().powerOn()
+}
+
+/** Clear a net's manual rail-voltage override then re-solve. */
+export function _clearRailOverride(store: AppStore, kicadName: string): void {
+  store.getState().clearRailOverride(kicadName)
+  void store.getState().powerOn()
+}
+
+/**
+ * Per-net rail-voltage override control, shown under the selected net row. A
+ * numeric entry bound to the current override, an Apply that pins the rail and
+ * re-solves, and (when an override is active) its value + a Clear. Lets the user
+ * tell the sim what a switched/derived rail actually sits at when the operating
+ * point can't sense it (op-informed rail sensing, tier 2).
+ */
+function NetRailOverride({
+  netName,
+  store,
+}: {
+  netName: string
+  store: AppStore
+}): React.ReactElement {
+  const active = useApp(s => s.railOverrides.get(netName))
+  const [value, setValue] = useState(active !== undefined ? String(active) : '')
+  return (
+    <div
+      style={railOverrideStyle}
+      data-testid="net-rail-override"
+      data-net-name={netName}
+    >
+      <label style={railLabelStyle}>
+        Rail voltage
+        <input
+          type="number"
+          step="0.1"
+          min="0"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          placeholder="volts"
+          aria-label={`Rail voltage for ${netName}`}
+          data-testid="net-rail-input"
+          style={railInputStyle}
+        />
+      </label>
+      <button
+        style={railBtnStyle}
+        data-testid="net-rail-apply"
+        onClick={() => _applyRailOverride(store, netName, value)}
+      >
+        Apply
+      </button>
+      {active !== undefined && (
+        <>
+          <span style={railActiveStyle} data-testid="net-rail-active">
+            Override: {active} V
+          </span>
+          <button
+            style={railBtnStyle}
+            data-testid="net-rail-clear"
+            onClick={() => _clearRailOverride(store, netName)}
+          >
+            Clear
+          </button>
+        </>
+      )}
+    </div>
+  )
 }
 
 export default function NetVoltages(): React.ReactElement {
@@ -104,27 +188,29 @@ export default function NetVoltages(): React.ReactElement {
           rows.map(r => {
             const isSelected = r.netId === selectedNetId
             return (
-              <div
-                key={r.netId}
-                role="button"
-                tabIndex={0}
-                data-testid="net-voltage-row"
-                data-net-id={r.netId}
-                data-net-name={r.name}
-                style={{
-                  ...(isSelected ? { ...rowStyle, ...rowSelectedStyle } : rowStyle),
-                  // Dim outdated values while the new solve runs.
-                  ...(stale ? { opacity: 0.55 } : {}),
-                }}
-                onClick={() => store.getState().selectNet(r.netId)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' || e.key === ' ') store.getState().selectNet(r.netId)
-                }}
-                title={`Select ${r.name} on the board`}
-              >
-                <span style={nameStyle}>{r.name}</span>
-                <span style={voltsStyle}>{formatVolts(r.volts)}</span>
-              </div>
+              <React.Fragment key={r.netId}>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  data-testid="net-voltage-row"
+                  data-net-id={r.netId}
+                  data-net-name={r.name}
+                  style={{
+                    ...(isSelected ? { ...rowStyle, ...rowSelectedStyle } : rowStyle),
+                    // Dim outdated values while the new solve runs.
+                    ...(stale ? { opacity: 0.55 } : {}),
+                  }}
+                  onClick={() => store.getState().selectNet(r.netId)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ' ') store.getState().selectNet(r.netId)
+                  }}
+                  title={`Select ${r.name} on the board`}
+                >
+                  <span style={nameStyle}>{r.name}</span>
+                  <span style={voltsStyle}>{formatVolts(r.volts)}</span>
+                </div>
+                {isSelected && <NetRailOverride netName={r.name} store={store} />}
+              </React.Fragment>
             )
           })
         )}
@@ -222,4 +308,43 @@ const voltsStyle: React.CSSProperties = {
   fontFamily: 'monospace',
   color: '#e8c07d',
   flexShrink: 0,
+}
+// Rail-override control under the selected net row.
+const railOverrideStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: 6,
+  padding: '4px 8px',
+  background: '#141b2c',
+  borderBottom: '1px solid #161b22',
+  fontSize: 11,
+}
+const railLabelStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+  color: '#9ab',
+}
+const railInputStyle: React.CSSProperties = {
+  width: 60,
+  background: '#1e1e2c',
+  border: '1px solid #33334a',
+  borderRadius: 3,
+  color: '#dde',
+  fontSize: 11,
+  padding: '2px 6px',
+}
+const railBtnStyle: React.CSSProperties = {
+  background: '#26314a',
+  color: '#cde',
+  border: '1px solid #35426a',
+  borderRadius: 3,
+  padding: '2px 8px',
+  fontSize: 11,
+  cursor: 'pointer',
+}
+const railActiveStyle: React.CSSProperties = {
+  color: '#e8c07d',
+  fontFamily: 'monospace',
 }

@@ -9,11 +9,15 @@
  */
 
 import React from 'react'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { renderToStaticMarkup } from 'react-dom/server'
-import NetVoltages, { buildNetVoltageRows } from '../NetVoltages'
+import NetVoltages, {
+  buildNetVoltageRows,
+  _applyRailOverride,
+  _clearRailOverride,
+} from '../NetVoltages'
 import { AppStoreProvider } from '../../store/storeContext'
 import { createAppStore, type AppState } from '../../store/appStore'
 import { createMockSimClient } from '../../ipc/simClient'
@@ -162,5 +166,84 @@ describe('NetVoltages panel — caveat / staleness / degenerate op (M7 review)',
     const html = render(store)
     expect(html).toMatch(/returned no net voltages/i)
     expect(html).not.toMatch(/No operating point yet/i)
+  })
+})
+
+// ─── Per-net rail-voltage override control (Task 7) ────────────────────────────
+
+describe('NetVoltages panel — per-net rail override (Task 7)', () => {
+  function renderSelected(opts: { override?: number } = {}): string {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+    const nets = store.getState().circuit!.nets
+    const vin = nets.find(n => n.kicadName === 'VIN')!.id
+    const out = nets.find(n => n.kicadName === 'OUT')!.id
+    store.setState({ opVoltages: new Map([[vin, 5], [out, 0]]), selectedNetId: vin })
+    if (opts.override !== undefined) {
+      store.setState({ railOverrides: new Map([['VIN', opts.override]]) })
+    }
+    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+      store.getState()
+    return renderToStaticMarkup(
+      <AppStoreProvider store={store}>
+        <NetVoltages />
+      </AppStoreProvider>,
+    )
+  }
+
+  it('shows a rail-voltage override control on the selected net', () => {
+    const html = renderSelected()
+    expect(html).toContain('data-testid="net-rail-override"')
+    expect(html).toMatch(/rail voltage/i)
+    expect(html).toContain('data-testid="net-rail-input"')
+    expect(html).toContain('data-testid="net-rail-apply"')
+    // Not active → no Clear control yet.
+    expect(html).not.toContain('data-testid="net-rail-clear"')
+  })
+
+  it('an active override shows its value and a Clear control', () => {
+    const html = renderSelected({ override: 3.3 })
+    expect(html).toContain('value="3.3"')
+    expect(html).toContain('data-testid="net-rail-clear"')
+    expect(html).toMatch(/Override: 3\.3 V/)
+  })
+
+  it('no net selected → no rail override control', () => {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+    const vin = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
+    store.setState({ opVoltages: new Map([[vin, 5]]), selectedNetId: null })
+    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+      store.getState()
+    const html = renderToStaticMarkup(
+      <AppStoreProvider store={store}>
+        <NetVoltages />
+      </AppStoreProvider>,
+    )
+    expect(html).not.toContain('data-testid="net-rail-override"')
+  })
+
+  it('_applyRailOverride sets the override then re-runs; _clearRailOverride clears then re-runs', () => {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    const setRailOverride = vi.fn()
+    const clearRailOverride = vi.fn()
+    const powerOn = vi.fn()
+    store.setState({ setRailOverride, clearRailOverride, powerOn } as unknown as Partial<AppState>)
+    _applyRailOverride(store, 'VIN', '3.3')
+    expect(setRailOverride).toHaveBeenCalledWith('VIN', 3.3)
+    expect(powerOn).toHaveBeenCalledTimes(1)
+    _clearRailOverride(store, 'VIN')
+    expect(clearRailOverride).toHaveBeenCalledWith('VIN')
+    expect(powerOn).toHaveBeenCalledTimes(2)
+  })
+
+  it('_applyRailOverride ignores a non-positive value (no re-run)', () => {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    const setRailOverride = vi.fn()
+    const powerOn = vi.fn()
+    store.setState({ setRailOverride, powerOn } as unknown as Partial<AppState>)
+    _applyRailOverride(store, 'VIN', '-1')
+    expect(setRailOverride).not.toHaveBeenCalled()
+    expect(powerOn).not.toHaveBeenCalled()
   })
 })
