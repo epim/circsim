@@ -10,9 +10,9 @@
  */
 
 import React from 'react'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import WarningsBar from '../WarningsBar'
+import WarningsBar, { _applyRailOverride } from '../WarningsBar'
 import { AppStoreProvider } from '../../store/storeContext'
 import { createAppStore, type AppState } from '../../store/appStore'
 import { createMockSimClient } from '../../ipc/simClient'
@@ -113,5 +113,66 @@ describe('M9 — documented opens in the fidelity banner', () => {
     // …and the count separates the two populations.
     expect(html).toContain('4 parts unresolved · 2 open by design')
     expect(html).not.toContain('6 parts unresolved')
+  })
+})
+
+// ─── Op-informed rail sensing: gated-off warning + override action (Task 6) ────
+
+describe('WarningsBar — gated-off rail note (Task 6)', () => {
+  function renderWithRailNotes(): string {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    store.setState({ railNotes: [{ ref: 'U7', kicadName: '/VGATED' }] })
+    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+      store.getState()
+    return renderToStaticMarkup(
+      <AppStoreProvider store={store}>
+        <WarningsBar />
+      </AppStoreProvider>,
+    )
+  }
+
+  it('renders a gated-off note naming the net with a set-rail-voltage action', () => {
+    const html = renderWithRailNotes()
+    expect(html).toContain('data-testid="rail-note"')
+    // Names the offending net and the ~0 V op measurement.
+    expect(html).toMatch(/VGATED.*0 V at the operating point/i)
+    expect(html).toMatch(/logic thresholds may be inaccurate/i)
+    // A working "set rail voltage" affordance (input + button).
+    expect(html).toContain('data-testid="rail-note-input"')
+    expect(html).toContain('data-testid="rail-note-apply"')
+    expect(html).toMatch(/Set rail voltage/i)
+  })
+
+  it('no rail notes → no rail-note surface', () => {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+      store.getState()
+    const html = renderToStaticMarkup(
+      <AppStoreProvider store={store}>
+        <WarningsBar />
+      </AppStoreProvider>,
+    )
+    expect(html).not.toContain('data-testid="rail-note"')
+  })
+
+  it('_applyRailOverride sets the override by kicadName and re-runs powerOn', () => {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    const setRailOverride = vi.fn()
+    const powerOn = vi.fn()
+    store.setState({ setRailOverride, powerOn } as unknown as Partial<AppState>)
+    _applyRailOverride(store, '/VGATED', '3.3')
+    expect(setRailOverride).toHaveBeenCalledWith('/VGATED', 3.3)
+    expect(powerOn).toHaveBeenCalledTimes(1)
+  })
+
+  it('_applyRailOverride ignores a non-positive / non-finite value (no re-run)', () => {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    const setRailOverride = vi.fn()
+    const powerOn = vi.fn()
+    store.setState({ setRailOverride, powerOn } as unknown as Partial<AppState>)
+    _applyRailOverride(store, '/VGATED', '0')
+    _applyRailOverride(store, '/VGATED', 'abc')
+    expect(setRailOverride).not.toHaveBeenCalled()
+    expect(powerOn).not.toHaveBeenCalled()
   })
 })

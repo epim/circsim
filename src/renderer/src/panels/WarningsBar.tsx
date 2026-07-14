@@ -21,7 +21,31 @@
 
 import React, { useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
-import { fidelityBannerItems, collapsedFidelitySummary, opCaveatMessage } from '../store/appStore'
+import {
+  fidelityBannerItems,
+  collapsedFidelitySummary,
+  opCaveatMessage,
+  type AppStore,
+  type RailNote,
+} from '../store/appStore'
+
+/**
+ * Apply a manual rail-voltage override (from the gated-off note's inline entry)
+ * and re-solve. Exported for unit tests (the SSR test env can't fire DOM events,
+ * so the action wiring is verified against the store directly — the
+ * `_revealDoctorCard` pattern). No-ops on a non-finite / non-positive value so a
+ * blank/garbage entry never clears the family default with a bad rail.
+ */
+export function _applyRailOverride(
+  store: AppStore,
+  kicadName: string,
+  value: string | number,
+): void {
+  const volts = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(volts) || volts <= 0) return
+  store.getState().setRailOverride(kicadName, volts)
+  void store.getState().powerOn()
+}
 
 export default function WarningsBar(): React.ReactElement | null {
   const store = useAppStoreApi()
@@ -30,6 +54,7 @@ export default function WarningsBar(): React.ReactElement | null {
   const benchToast = useApp(s => s.benchRestartToast)
   const crashNotice = useApp(s => s.crashNotice)
   const opCaveat = useApp(s => s.opCaveat)
+  const railNotes = useApp(s => s.railNotes)
 
   const fidelity = fidelityBannerItems(resolutions)
   // M7 F9: >3 problem parts → one-line count instead of a wall of refs.
@@ -49,7 +74,12 @@ export default function WarningsBar(): React.ReactElement | null {
   }
 
   const anything =
-    fidelity.length > 0 || convergenceCard || benchToast || crashNotice || opCaveat
+    fidelity.length > 0 ||
+    convergenceCard ||
+    benchToast ||
+    crashNotice ||
+    opCaveat ||
+    railNotes.length > 0
   if (!anything) return null
 
   return (
@@ -185,6 +215,57 @@ export default function WarningsBar(): React.ReactElement | null {
           </span>
         </div>
       )}
+
+      {/* ── Gated-off rail notes (op-informed rail sensing, tier 4 fallback) ── */}
+      {railNotes.map(note => (
+        <RailNoteRow key={`${note.ref}:${note.kicadName}`} note={note} store={store} />
+      ))}
+    </div>
+  )
+}
+
+/**
+ * One gated-off rail caveat: the chip's VDD measured ~0 V at the operating point,
+ * so the family-default swing is in use. Offers a one-click manual rail override
+ * (collect a voltage → setRailOverride → re-solve). Own local input state so each
+ * note edits independently.
+ */
+function RailNoteRow({
+  note,
+  store,
+}: {
+  note: RailNote
+  store: AppStore
+}): React.ReactElement {
+  const [value, setValue] = useState('')
+  return (
+    <div style={railNoteStyle} data-testid="rail-note" data-net={note.kicadName}>
+      <div>
+        <strong>Check this rail.</strong> VDD (
+        <span style={refStyle}>{note.kicadName}</span>) is ~0 V at the operating
+        point — using the default swing. If this rail is powered during a
+        transient, logic thresholds may be inaccurate.
+      </div>
+      <div style={railActionRowStyle}>
+        <input
+          type="number"
+          step="0.1"
+          min="0"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          placeholder="volts"
+          aria-label={`Rail voltage for ${note.kicadName}`}
+          data-testid="rail-note-input"
+          style={railInputStyle}
+        />
+        <button
+          style={railBtnStyle}
+          data-testid="rail-note-apply"
+          onClick={() => _applyRailOverride(store, note.kicadName, value)}
+        >
+          Set rail voltage
+        </button>
+      </div>
     </div>
   )
 }
@@ -218,6 +299,40 @@ const opCaveatStyle: React.CSSProperties = {
   background: '#3a2a10',
   color: '#ffd9a0',
   borderTop: '1px solid #5a4418',
+}
+// Gated-off rail note: same amber caveat tone as the op fallback, with an inline
+// action row for the manual override.
+const railNoteStyle: React.CSSProperties = {
+  ...baseRow,
+  background: '#3a2a10',
+  color: '#ffd9a0',
+  borderTop: '1px solid #5a4418',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+}
+const railActionRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+}
+const railInputStyle: React.CSSProperties = {
+  width: 72,
+  background: '#1e1e2c',
+  border: '1px solid #33334a',
+  borderRadius: 3,
+  color: '#dde',
+  fontSize: 12,
+  padding: '2px 6px',
+}
+const railBtnStyle: React.CSSProperties = {
+  background: '#3a2f4a',
+  color: '#eee',
+  border: '1px solid #4a3a5a',
+  borderRadius: 4,
+  padding: '4px 8px',
+  fontSize: 12,
+  cursor: 'pointer',
 }
 const convergeStyle: React.CSSProperties = {
   ...baseRow,
