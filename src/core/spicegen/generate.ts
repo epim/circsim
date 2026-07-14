@@ -895,6 +895,71 @@ function deriveSupplyVHigh(
   return volts
 }
 
+/** Op-measured rail floor: below this, VDD is treated as gated-off (no rail). */
+export const RAIL_FLOOR_V = 2
+/** Op-measured rail sanity cap: above this the measurement is discarded. */
+export const RAIL_SANITY_MAX_V = 30
+
+/**
+ * Tier-3 rail sensing: from a first-pass operating-point solve, derive the DC
+ * voltage on each digital chip's VDD net when NO direct bench supply and NO
+ * manual override already own it (tiers 1/2). A rail measuring below
+ * RAIL_FLOOR_V is reported as gated-off (kept out of `rails`, surfaced in
+ * `gatedOff`); one above RAIL_SANITY_MAX_V is discarded silently.
+ *
+ * Reuses digitalVddNet + deriveSupplyVHigh (tier-1 skip) and the same
+ * makeModelTextIndex/findDigitalTemplateFile/parseLogic74 path generateDeck
+ * uses, so a chip's VDD resolution is identical to deck generation.
+ */
+export function deriveMeasuredRailVHigh(opts: {
+  opValues: Record<string, number>
+  circuit: Circuit
+  resolutions: Resolution[]
+  instruments: Instrument[]
+  groundNetId: number
+  railOverrides?: Map<number, number>
+  modelTexts?: Record<string, string>
+}): { rails: Map<number, number>; gatedOff: Array<{ ref: string; netId: number; kicadName: string }> } {
+  const { opValues, circuit, resolutions, instruments, railOverrides, modelTexts } = opts
+  const rails = new Map<number, number>()
+  const gatedOff: Array<{ ref: string; netId: number; kicadName: string }> = []
+  const haveModelTexts = modelTexts !== undefined && Object.keys(modelTexts).length > 0
+  if (!haveModelTexts) return { rails, gatedOff }
+  const idx = makeModelTextIndex(modelTexts) // same index builder generateDeck uses
+
+  // netId → spiceNode (mirror generateDeck's map)
+  const netIdToNode = new Map<number, string>()
+  for (const net of circuit.nets) netIdToNode.set(net.id, net.spiceNode)
+  const netById = new Map(circuit.nets.map((n) => [n.id, n]))
+  const partByRef = new Map(circuit.parts.map((p) => [p.ref, p]))
+
+  for (const res of resolutions) {
+    const model = res.model
+    if (!model || model.kind !== 'xspice-digital') continue
+    const part = partByRef.get(res.ref)
+    if (!part) continue
+    const templateFile = findDigitalTemplateFile(idx, model.templateId)
+    const logic = templateFile ? parseLogic74(idx, templateFile) : null
+    const tpl = logic?.templates?.[model.templateId]
+    if (!logic || !tpl) continue
+
+    const { vddNetId, vssGrounded } = digitalVddNet(tpl, model.pinMap, part, netIdToNode)
+    if (vddNetId === undefined || !vssGrounded) continue
+    // tier 1 / tier 2 own this chip → don't sense.
+    if (deriveSupplyVHigh(tpl, model.pinMap, part, netIdToNode, instruments) !== undefined) continue
+    if (railOverrides?.get(vddNetId) !== undefined) continue
+
+    const node = netIdToNode.get(vddNetId)
+    const v = node !== undefined ? opValues[node] : undefined
+    if (v === undefined || !Number.isFinite(v)) continue
+    const kicadName = netById.get(vddNetId)?.kicadName ?? String(vddNetId)
+    if (v < RAIL_FLOOR_V) { gatedOff.push({ ref: res.ref, netId: vddNetId, kicadName }); continue }
+    if (v > RAIL_SANITY_MAX_V) continue
+    rails.set(vddNetId, v)
+  }
+  return { rails, gatedOff }
+}
+
 /**
  * Expand an xspice-digital resolution into deck lines (Spec §8.8 pattern:
  * adc_bridge → ngspice digital primitive(s) → dac_bridge).
