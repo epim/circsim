@@ -17,7 +17,7 @@
  *    frames (Spec §7.4 gotcha 2).
  */
 
-import koffi from 'koffi'
+import koffi, { type LibraryHandle } from 'koffi'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -178,7 +178,7 @@ function registerTypes(): void {
     v_compdata: 'void*',
     v_length: 'int'
   })
-  koffi.pointer('pvector_info', koffi.resolve('vector_info'))
+  koffi.pointer('pvector_info', koffi.type('vector_info'))
 
   // sharedspice.h transient-streaming structs (verified field layout against
   // ngspice 46 via live FFI probe — see scripts/probe-senddata.mjs):
@@ -195,13 +195,13 @@ function registerTypes(): void {
     is_scale: 'bool',
     is_complex: 'bool'
   })
-  koffi.pointer('pvecvalues', koffi.resolve('vecvalues'))
+  koffi.pointer('pvecvalues', koffi.type('vecvalues'))
   koffi.struct('vecvaluesall', {
     veccount: 'int',
     vecindex: 'int',
     vecsa: 'pvecvalues*'
   })
-  koffi.pointer('pvecvaluesall', koffi.resolve('vecvaluesall'))
+  koffi.pointer('pvecvaluesall', koffi.type('vecvaluesall'))
 
   //   typedef struct vecinfo {
   //     int number; char* vecname; bool is_real; void* pdvec; void* pdvecscale;
@@ -216,7 +216,7 @@ function registerTypes(): void {
     pdvec: 'void*',
     pdvecscale: 'void*'
   })
-  koffi.pointer('pvecinfo', koffi.resolve('vecinfo'))
+  koffi.pointer('pvecinfo', koffi.type('vecinfo'))
   koffi.struct('vecinfoall', {
     name: 'char*',
     title: 'char*',
@@ -225,7 +225,7 @@ function registerTypes(): void {
     veccount: 'int',
     vecs: 'pvecinfo*'
   })
-  koffi.pointer('pvecinfoall', koffi.resolve('vecinfoall'))
+  koffi.pointer('pvecinfoall', koffi.type('vecinfoall'))
 
   // Callback prototypes (sharedspice.h). SendData/SendInitData carry the structs
   // above; the FFI callbacks decode them into plain JS rows / name lists for the
@@ -331,7 +331,7 @@ export interface NgspiceFfiOptions {
 }
 
 export class NgspiceFfiEngine implements SpiceEngine {
-  private lib: koffi.IKoffiLib | null = null
+  private lib: LibraryHandle | null = null
   private listeners: EngineEventListener[] = []
   private initialized = false
   private _version = ''
@@ -343,7 +343,9 @@ export class NgspiceFfiEngine implements SpiceEngine {
   private fn: Record<string, any> = {}
 
   // Keep registered callbacks alive for the life of the engine (GC anchors).
-  private registeredCallbacks: koffi.IKoffiRegisteredCallback[] = []
+  // koffi 3.x: koffi.register() returns a bigint pointer (was IKoffiRegisteredCallback
+  // in 2.x); koffi.unregister() takes that bigint.
+  private registeredCallbacks: bigint[] = []
 
   // Strict-order queue for ngSpice_Command calls (see createCallSerializer).
   private serialize = createCallSerializer()
