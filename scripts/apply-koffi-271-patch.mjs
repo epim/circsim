@@ -4,9 +4,9 @@
  *
  * ┌───────────────────────────────────────────────────────────────────────┐
  * │ TEMPORARY. Remove this script, the package.json `postinstall` hook,    │
- * │ and resources/vendor/koffi/ once a koffi release (> 2.16.2) ships the  │
- * │ #271 fix upstream, then bump the `koffi` dependency to that version.   │
- * │ Tracking: https://github.com/Koromix/koffi/issues/271                  │
+ * │ and resources/vendor/koffi/ once a koffi release ships the #271 fix    │
+ * │ upstream (the maintainer is submitting a PR), then just use the stock  │
+ * │ registry koffi. Tracking: https://github.com/Koromix/koffi/issues/271  │
  * └───────────────────────────────────────────────────────────────────────┘
  *
  * Issue #271: on process exit, koffi's cross-thread callback broker fires one
@@ -14,14 +14,23 @@
  * calls napi_throw → fatal SIGABRT (exit 134). circsim hits this because
  * libngspice's background thread keeps invoking registered callbacks during
  * teardown (see src/simhost/ngspiceFfi.ts). Verified on Windows x64 / Node 24:
- * stock 2.16.2 aborts 134 deterministically; the patched binary exits cleanly.
+ * stock 3.1.1 aborts 134; the patched binary exits cleanly (0/10 even on a
+ * pathological no-sleep callback loop — 3.x's teardown handling is fully
+ * robust, unlike the 2.16.2 patch which had a small residual race).
  *
- * The fix is NATIVE ONLY — a patched koffi.node, same version (2.16.2), no JS
+ * The fix is NATIVE ONLY — a patched koffi.node, same version (3.1.1), no JS
  * or API change. The vendored prebuilt is win32_x64 ONLY, so this script is a
- * no-op on every other OS/arch (they keep the stock registry koffi). That is
- * why the fix is applied as a Windows-only binary swap rather than by pointing
- * the `koffi` dependency at the tarball: a `file:` dep would force mac/linux to
- * build koffi from source and break those CI legs.
+ * no-op on every other OS/arch (they keep the stock registry koffi 3.1.1,
+ * unpatched, relying on the dispose() thread-join + unregister workaround in
+ * ngspiceFfi.ts). That is why the fix is applied as a Windows-only binary swap
+ * rather than by pointing the `koffi` dependency at the tarball: a `file:` dep
+ * would force mac/linux to build koffi from source and break those CI legs.
+ *
+ * koffi 3.x delivers its native binary through a per-platform optional
+ * dependency (`@koromix/koffi-<platform>`), NOT `koffi/build/...` like 2.x.
+ * On win32_x64 the loader (koffi/src/koffi/src/static.js) does
+ * `require('@koromix/koffi-win32-x64')`, whose index.js requires
+ * `./win32_x64/koffi.node` — that is the file we swap.
  *
  * Idempotent: if koffi is already the patched binary, it does nothing. If the
  * installed koffi is not the version this binary was built for, it warns and
@@ -36,16 +45,16 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '..')
 
-const EXPECTED_KOFFI_VERSION = '2.16.2'
+const EXPECTED_KOFFI_VERSION = '3.1.1'
 // sha256 of the patched win32_x64 koffi.node (HANDOFF-verified).
-const PATCHED_SHA256 = '44BC8D016166D26D436F4C82884B89F5BE34A384AAB26FDF1E026E217B0A5D52'
+const PATCHED_SHA256 = '594350D4F597D99093BF92EE6C83B5BB037958352B70D328060B1730BADFAD0D'
 
 const VENDOR_BINARY = path.join(
   PROJECT_ROOT,
   'resources',
   'vendor',
   'koffi',
-  'koffi-2.16.2-271-win32x64.node'
+  'koffi-3.1.1-271-win32x64.node'
 )
 
 const TAG = '[koffi-271]'
@@ -91,12 +100,13 @@ function main() {
     process.exit(1)
   }
 
+  // koffi 3.x loads win32_x64 from the @koromix/koffi-win32-x64 optional dep,
+  // whose index.js requires ./win32_x64/koffi.node.
   const target = path.join(
     PROJECT_ROOT,
     'node_modules',
-    'koffi',
-    'build',
-    'koffi',
+    '@koromix',
+    'koffi-win32-x64',
     'win32_x64',
     'koffi.node'
   )
