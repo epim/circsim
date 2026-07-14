@@ -1125,6 +1125,18 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
     // Manual override 3.3 V beats the measured 5 V.
     expect(generateDeck({ ...base, measuredRailVHigh: new Map([[4, 5]]), railOverrides: new Map([[4, 3.3]]) }).join('\n'))
       .toContain('1.6500 ? 1.9800 : 1.3200)) ? 0 : 3.3000')
+    // Tier 1: a direct dc-supply (9 V) on the VDD net beats BOTH an override and a
+    // measured rail on the same net → mid 4.5, V_T+ 5.4, V_T- 3.6, rail 9.
+    const withSupply = generateDeck({
+      ...base,
+      instruments: [{ kind: 'dc-supply', id: 'psu1', netId: 4, volts: 9, seriesOhms: 0.1 } as any, { kind: 'ground-ref', netId: 5 } as any],
+      measuredRailVHigh: new Map([[4, 5]]),
+      railOverrides: new Map([[4, 3.3]]),
+    }).join('\n')
+    expect(withSupply).toContain('4.5000 ? 5.4000 : 3.6000)) ? 0 : 9.0000')
+    expect(withSupply).toContain('(dc-supply on VDD net;')
+    expect(withSupply).not.toContain('3.3000')
+    expect(withSupply).not.toContain('? 0 : 5.0000')
   })
 
   test('M10: CD40106 Schmitt thresholds scale too (40 %/60 % of a 5 V supply)', () => {

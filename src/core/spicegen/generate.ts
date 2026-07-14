@@ -901,6 +901,17 @@ export const RAIL_FLOOR_V = 2
 export const RAIL_SANITY_MAX_V = 30
 
 /**
+ * A rail voltage counts as "present" for tier selection only if it is finite and
+ * positive. SINGLE definition of "this tier owns the chip", shared by the deck
+ * generator's tier chain and the op-sensing tier-1/tier-2 skip — so an invalid
+ * override (0 / NaN / negative from a caller) can never make sensing skip a net
+ * while the deck generator falls through to the family default.
+ */
+function saneRailVolts(v: number | undefined): number | undefined {
+  return v !== undefined && Number.isFinite(v) && v > 0 ? v : undefined
+}
+
+/**
  * Tier-3 rail sensing: from a first-pass operating-point solve, derive the DC
  * voltage on each digital chip's VDD net when NO direct bench supply and NO
  * manual override already own it (tiers 1/2). A rail measuring below
@@ -927,9 +938,7 @@ export function deriveMeasuredRailVHigh(opts: {
   if (!haveModelTexts) return { rails, gatedOff }
   const idx = makeModelTextIndex(modelTexts) // same index builder generateDeck uses
 
-  // netId → spiceNode (mirror generateDeck's map)
-  const netIdToNode = new Map<number, string>()
-  for (const net of circuit.nets) netIdToNode.set(net.id, net.spiceNode)
+  const netIdToNode = buildNetIdToNode(circuit)
   const netById = new Map(circuit.nets.map((n) => [n.id, n]))
   const partByRef = new Map(circuit.parts.map((p) => [p.ref, p]))
 
@@ -945,9 +954,11 @@ export function deriveMeasuredRailVHigh(opts: {
 
     const { vddNetId, vssGrounded } = digitalVddNet(tpl, model.pinMap, part, netIdToNode)
     if (vddNetId === undefined || !vssGrounded) continue
-    // tier 1 / tier 2 own this chip → don't sense.
+    // tier 1 / tier 2 own this chip → don't sense. Use the SAME saneRailVolts
+    // gate the deck generator uses, so an invalid override never makes sensing
+    // skip a net that the generator would then drop to the family default.
     if (deriveSupplyVHigh(tpl, model.pinMap, part, netIdToNode, instruments) !== undefined) continue
-    if (railOverrides?.get(vddNetId) !== undefined) continue
+    if (saneRailVolts(railOverrides?.get(vddNetId)) !== undefined) continue
 
     const node = netIdToNode.get(vddNetId)
     const v = node !== undefined ? opValues[node] : undefined
@@ -1019,14 +1030,13 @@ function expandXspiceDigital(
   const directVHigh = deriveSupplyVHigh(tpl, model.pinMap, part, netIdToNode, instruments) // tier 1
   const overrideVHigh = vddNetId !== undefined ? railOverrides?.get(vddNetId) : undefined   // tier 2
   const measuredVHigh = vddNetId !== undefined ? measuredRailVHigh?.get(vddNetId) : undefined // tier 3
-  const sane = (v: number | undefined): number | undefined =>
-    v !== undefined && Number.isFinite(v) && v > 0 ? v : undefined
   const railSource =
-    sane(directVHigh) !== undefined ? 'dc-supply on VDD net'
-    : sane(overrideVHigh) !== undefined ? 'user rail override'
-    : sane(measuredVHigh) !== undefined ? 'op-measured rail'
+    saneRailVolts(directVHigh) !== undefined ? 'dc-supply on VDD net'
+    : saneRailVolts(overrideVHigh) !== undefined ? 'user rail override'
+    : saneRailVolts(measuredVHigh) !== undefined ? 'op-measured rail'
     : null
-  const vHigh = sane(directVHigh) ?? sane(overrideVHigh) ?? sane(measuredVHigh) ?? logic.family.vHighDefault
+  const vHigh =
+    saneRailVolts(directVHigh) ?? saneRailVolts(overrideVHigh) ?? saneRailVolts(measuredVHigh) ?? logic.family.vHighDefault
   const refLc = ref.toLowerCase()
 
   // Map each chip SIGNAL name (e.g. "1A", "VCC") → the analog node it lives on.
