@@ -275,6 +275,16 @@ export interface ParseErrorInfo {
   fileName?: string
 }
 
+/**
+ * A gated-off rail warning: a digital chip whose VDD net measured below the rail
+ * floor (~0 V) at the operating point, so the family-default swing was used. The
+ * readout offers a one-click manual rail override (Spec: op-informed rail sensing).
+ */
+export interface RailNote {
+  ref: string
+  kicadName: string
+}
+
 export interface AppState {
   // ── project / source files ─────────────────────────────────────────────────
   project: {
@@ -301,6 +311,13 @@ export interface AppState {
   // ── user overrides (kept so re-resolve is deterministic + crash-safe) ─────────
   stubOverrides: Map<string, UserStubOverride>
   pinMapOverrides: Map<string, PinMap>
+  /**
+   * Manual per-net rail-voltage overrides, keyed by net kicadName (e.g. `/VGATED`).
+   * Tier 2 of the digital rail precedence — bridged to the netId→volts map
+   * generateDeck consumes via `railOverrideNetMap()`. Set/cleared by the user
+   * from a gated-off warning or the net context (Spec: op-informed rail sensing).
+   */
+  railOverrides: Map<string, number>
 
   // ── bench state (survives SimHost crash → replayed) ──────────────────────────
   instruments: Instrument[]
@@ -348,6 +365,20 @@ export interface AppState {
    * non-blocking panel (CoachNotes.tsx, data-testid="coach-note").
    */
   coachNotes: DarkLedNote[]
+  /**
+   * Op-measured switched/derived rail voltages from the latest powerOn solve,
+   * keyed by netId. Cached so a subsequent transient/energize deck reuses the
+   * sensed rails (tier 3) without re-sensing, and so powerOn's two-pass guard can
+   * tell whether a fresh op changed any chip's vHigh. null before the first solve.
+   */
+  measuredRails: Map<number, number> | null
+  /**
+   * Gated-off rail warnings from the latest powerOn solve: a digital chip whose
+   * VDD net measured below the rail floor (~0 V) at the operating point. The
+   * default swing was used; the readout surfaces a note offering a manual
+   * override (Task 6). Empty when no rail is gated off.
+   */
+  railNotes: RailNote[]
   ngspiceVersion: string | null
   /** Real-time pacing factor (0.1× / 1× / 'max'). */
   paceFactor: number | 'max'
@@ -474,6 +505,14 @@ export interface AppState {
   stubPart(ref: string, mode: 'open' | 'short' | 'interactive-pins'): void
   clearPartOverride(ref: string): void
   setPinMap(ref: string, pinMap: PinMap): void
+
+  // Rail-voltage overrides (Spec: op-informed rail sensing, tier 2)
+  /** Set a manual rail-voltage override for a net (by kicadName). Ignored if volts ≤ 0 / non-finite. */
+  setRailOverride(kicadName: string, volts: number): void
+  /** Clear a net's manual rail-voltage override. */
+  clearRailOverride(kicadName: string): void
+  /** Resolve the kicadName-keyed railOverrides to the netId→volts map generateDeck consumes. */
+  railOverrideNetMap(): Map<number, number>
 
   // selection
   selectComponent(ref: string | null): void
@@ -739,6 +778,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     resolutions: [],
     stubOverrides: new Map(),
     pinMapOverrides: new Map(),
+    railOverrides: new Map(),
     instruments: [],
     groundNetId: null,
     suggestedSupplyNetIds: [],
@@ -751,6 +791,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     voltageRange: null,
     currentsByRef: new Map(),
     coachNotes: [],
+    measuredRails: null,
+    railNotes: [],
     ngspiceVersion: null,
     paceFactor: 1,
     achievedRealtimeFactor: null,
@@ -783,11 +825,14 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         voltageRange: null,
         currentsByRef: new Map(),
         coachNotes: [],
+        measuredRails: null,
+        railNotes: [],
         instruments: [],
         selectedInstrumentId: null,
         autoAttachedSupplyId: null,
         stubOverrides: new Map(),
         pinMapOverrides: new Map(),
+        railOverrides: new Map(),
         simState: 'idle',
         deckDirty: false,
         selectedRef: null,
@@ -1040,6 +1085,33 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       get().markDeckDirty()
     },
 
+    // ── rail-voltage overrides (op-informed rail sensing, tier 2) ────────────────
+    setRailOverride(kicadName, volts) {
+      if (!Number.isFinite(volts) || volts <= 0) return
+      const next = new Map(get().railOverrides)
+      next.set(kicadName, volts)
+      set({ railOverrides: next })
+      get().markDeckDirty()
+    },
+
+    clearRailOverride(kicadName) {
+      const next = new Map(get().railOverrides)
+      next.delete(kicadName)
+      set({ railOverrides: next })
+      get().markDeckDirty()
+    },
+
+    railOverrideNetMap() {
+      const { circuit, railOverrides } = get()
+      const map = new Map<number, number>()
+      if (!circuit) return map
+      for (const net of circuit.nets) {
+        const v = railOverrides.get(net.kicadName)
+        if (v !== undefined) map.set(net.id, v)
+      }
+      return map
+    },
+
     // ── selection ──────────────────────────────────────────────────────────
     selectComponent(ref) {
       set({ selectedRef: ref })
@@ -1247,6 +1319,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         groundNetId,
         title: get().project.boardFileName ?? undefined,
         modelTexts: buildDeckModelTexts(get()),
+        railOverrides: get().railOverrideNetMap(),
       })
 
       // Retained voltages from a previous run are STALE until the new solve
@@ -1372,6 +1445,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         groundNetId,
         title: get().project.boardFileName ?? undefined,
         modelTexts: buildDeckModelTexts(get()),
+        railOverrides: get().railOverrideNetMap(),
+        measuredRailVHigh: get().measuredRails ?? undefined,
       })
       resetRingBuffers(instruments)
 
@@ -1436,6 +1511,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         groundNetId,
         title: get().project.boardFileName ?? undefined,
         modelTexts: buildDeckModelTexts(get()),
+        railOverrides: get().railOverrideNetMap(),
+        measuredRailVHigh: get().measuredRails ?? undefined,
       })
       simClient.send({ type: 'loadCircuit', deckLines })
 
