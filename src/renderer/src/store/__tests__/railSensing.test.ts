@@ -7,10 +7,44 @@
  *   Task 5 — powerOn's conditional two-pass op orchestration (added below).
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createAppStore, type AppStore } from '../appStore'
-import { createMockSimClient } from '../../ipc/simClient'
+import { createMockSimClient, type MockSimClient } from '../../ipc/simClient'
 import type { Circuit } from '../../../../core/netlist/extract'
+import type { Resolution } from '../../../../core/models/types'
+
+// Same CD40106 (schmitt, family default 12 V) fixture the core sensing tests use.
+const LOGIC4000_JSON = JSON.stringify({
+  family: {
+    vHighDefault: 12.0,
+    adc: { inLowFrac: 0.3, inHighFrac: 0.7 },
+    schmittAdc: { inLowFrac: 0.4, inHighFrac: 0.6 },
+  },
+  templates: {
+    CD40106: {
+      schmitt: true,
+      gates: [{ prim: 'd_inverter', in: ['1A'], out: '1Y' }],
+      inputs: ['1A'],
+      outputs: ['1Y'],
+      power: { vcc: 'VCC', gnd: 'GND' },
+      delaysNs: 80,
+    },
+  },
+})
+
+const RES: Resolution[] = [
+  {
+    ref: 'U1',
+    status: 'ok',
+    tier: 3,
+    warnings: [],
+    model: {
+      kind: 'xspice-digital',
+      templateId: 'CD40106',
+      pinMap: { '1': '1A', '2': '1Y', '14': 'VCC', '7': 'GND' },
+    },
+  } as unknown as Resolution,
+]
 
 /**
  * A CD40106 whose VDD net `/VGATED` (id 4, node `vgated`) has NO directly
@@ -93,5 +127,126 @@ describe('railOverrides state (Task 4)', () => {
     const map = store.getState().railOverrideNetMap()
     expect(map.get(4)).toBe(3.3)
     expect(map.size).toBe(1)
+  })
+})
+
+// ─── Task 5: two-pass op orchestration in powerOn ──────────────────────────────
+
+/** Seed a switched-rail board straight into store state (no fixture parse). */
+function seedSwitchedRailBoard(store: AppStore): void {
+  store.setState({
+    circuit: switchedRailCircuit(),
+    resolutions: RES,
+    modelTexts: { 'logic4000.json': LOGIC4000_JSON },
+    groundNetId: 5,
+    // A supply on IN (net 1) satisfies powerOn's hasSource guard; it is NOT on
+    // the VDD net, so /VGATED is an unresolved (tier-3) rail at deck-gen.
+    instruments: [{ kind: 'dc-supply', id: 'psu1', netId: 1, volts: 5, seriesOhms: 0.1 }],
+  })
+}
+
+/**
+ * Auto-respond to every `runOp` with a scripted opResult. `values(pass)` receives
+ * the 1-based pass number so a test can vary the reply per pass, or return null to
+ * withhold the reply (simulating a pass-2 timeout). Each `loadCircuit` deck is
+ * recorded in `decks`; `opRunCount()` returns how many `runOp` commands were sent.
+ *
+ * The reply is emitted on a microtask so powerOn's `waitFor('opResult')` (called
+ * synchronously right after `send({runOp})`) has registered its listener first.
+ */
+function autoRespond(
+  mock: MockSimClient,
+  values: (pass: number) => Record<string, number> | null,
+): { decks: string[][]; opRunCount: () => number } {
+  const decks: string[][] = []
+  let pass = 0
+  const rawSend = mock.send.bind(mock)
+  mock.send = (command): void => {
+    rawSend(command)
+    if (command.type === 'loadCircuit') decks.push(command.deckLines)
+    if (command.type === 'runOp') {
+      pass += 1
+      const thisPass = pass
+      queueMicrotask(() => {
+        const v = values(thisPass)
+        if (v !== null) mock.emit({ type: 'opResult', values: v })
+      })
+    }
+  }
+  return { decks, opRunCount: () => pass }
+}
+
+describe('powerOn two-pass rail sensing (Task 5)', () => {
+  it('runs a second op pass when a measured rail changes vHigh', async () => {
+    const mock = createMockSimClient()
+    const store = createAppStore({ simClient: mock })
+    seedSwitchedRailBoard(store)
+    // /VGATED measures 12.6 V (upstream FET on) in both passes.
+    const { decks, opRunCount } = autoRespond(mock, () => ({ vgated: 12.6, a: 5, b: 0 }))
+
+    await store.getState().powerOn()
+
+    expect(opRunCount()).toBe(2) // pass 1 + one conditional re-run
+    // Pass-1 deck used the 12 V family default; pass-2 deck uses the measured swing.
+    expect(decks[0].join('\n')).toContain('12.0000')
+    expect(decks[1].join('\n')).toContain('12.6000')
+    // The sensed rail is cached for transient reuse.
+    expect(store.getState().measuredRails?.get(4)).toBeCloseTo(12.6)
+    expect(store.getState().railNotes).toEqual([])
+  })
+
+  it('does NOT re-run when the measured rail equals the family default', async () => {
+    const mock = createMockSimClient()
+    const store = createAppStore({ simClient: mock })
+    seedSwitchedRailBoard(store)
+    const { opRunCount } = autoRespond(mock, () => ({ vgated: 12.0, a: 5, b: 0 }))
+
+    await store.getState().powerOn()
+
+    // 12.0 == family default → deck unchanged (ignoring the provenance comment) → no pass 2.
+    expect(opRunCount()).toBe(1)
+    expect(store.getState().measuredRails?.get(4)).toBeCloseTo(12.0)
+  })
+
+  it('surfaces a gated-off warning and keeps the family default (no re-run)', async () => {
+    const mock = createMockSimClient()
+    const store = createAppStore({ simClient: mock })
+    seedSwitchedRailBoard(store)
+    // /VGATED ~0 V: FET off → gated-off, below the rail floor.
+    const { opRunCount } = autoRespond(mock, () => ({ vgated: 0.0, a: 5, b: 0 }))
+
+    await store.getState().powerOn()
+
+    expect(opRunCount()).toBe(1) // gated-off rail is not in `rails` → no re-run
+    expect(store.getState().railNotes.map(n => n.kicadName)).toContain('/VGATED')
+    expect(store.getState().railNotes[0].ref).toBe('U1')
+    expect(store.getState().measuredRails?.has(4)).toBe(false)
+  })
+
+  it('falls back to the pass-1 voltages when the second op pass fails', async () => {
+    vi.useFakeTimers()
+    try {
+      const mock = createMockSimClient()
+      const store = createAppStore({ simClient: mock })
+      seedSwitchedRailBoard(store)
+      // Pass 1 measures 12.6 (triggers a re-run); pass 2 withholds its reply so
+      // the 30 s waitFor rejects — powerOn must keep the pass-1 result.
+      const { opRunCount } = autoRespond(mock, pass =>
+        pass === 1 ? { vgated: 12.6, a: 5, b: 2.5 } : null,
+      )
+
+      const p = store.getState().powerOn()
+      // Drain pass-1's microtask reply, then fire the pass-2 waitFor timeout.
+      await vi.advanceTimersByTimeAsync(30_000)
+      const opVoltages = await p
+
+      expect(opRunCount()).toBe(2) // the re-run WAS attempted
+      // Pass-2 never replied, so the committed voltages are the pass-1 result.
+      const outNet = 2
+      expect(opVoltages?.get(outNet)).toBeCloseTo(2.5)
+      expect(store.getState().simState).toBe('idle')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

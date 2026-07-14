@@ -34,7 +34,14 @@ import {
   type BomData,
 } from '../../../core/models/resolve'
 import type { LibraryEntry, PinMap, Resolution } from '../../../core/models/types'
-import { generateDeck, alterPlan, buildLedSpiceNames, isLedPart, ledSenseName } from '../../../core/spicegen/generate'
+import {
+  generateDeck,
+  alterPlan,
+  buildLedSpiceNames,
+  isLedPart,
+  ledSenseName,
+  deriveMeasuredRailVHigh,
+} from '../../../core/spicegen/generate'
 import type { Instrument } from '../../../core/spicegen/instruments'
 import {
   diagnoseDarkLeds,
@@ -1344,6 +1351,54 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         return null
       }
 
+      // ── Op-informed rail sensing (tier 3): sense switched rails, re-solve once ──
+      // Pass 1's deck knew only tiers 1/2/4 (family default for any switched or
+      // derived rail with no attached supply). Sense those rails from the op
+      // result; if a measured rail would actually change a chip's vHigh, rebuild
+      // the deck with the measured rails and re-solve EXACTLY once. `deckLines` is
+      // the family-default baseline (powerOn never seeds measuredRailVHigh into
+      // its own first pass), so comparing the regenerated deck to it — ignoring
+      // provenance comment lines — is precisely "did the measured rail change the
+      // circuit vs the family default?" A measured rail equal to the family
+      // default leaves the deck identical → no wasted second solve.
+      const railOverrides = get().railOverrideNetMap()
+      const { rails, gatedOff } = deriveMeasuredRailVHigh({
+        opValues: result.values,
+        circuit,
+        resolutions,
+        instruments,
+        groundNetId,
+        railOverrides,
+        modelTexts: buildDeckModelTexts(get()),
+      })
+      if (rails.size > 0) {
+        const deck2 = generateDeck({
+          circuit,
+          resolutions,
+          instruments,
+          groundNetId,
+          title: get().project.boardFileName ?? undefined,
+          modelTexts: buildDeckModelTexts(get()),
+          railOverrides,
+          measuredRailVHigh: rails,
+        })
+        // Compare only the circuit lines (drop `*` comments — the measured-rail
+        // provenance note differs even when the numeric rail matches the default).
+        const circuitLines = (deck: string[]): string =>
+          deck.filter(line => !line.trimStart().startsWith('*')).join('\n')
+        if (circuitLines(deck2) !== circuitLines(deckLines)) {
+          simClient.send({ type: 'loadCircuit', deckLines: deck2 })
+          simClient.send({ type: 'runOp' })
+          try {
+            result = await simClient.waitFor('opResult', 30_000) // pass 2 (single re-run)
+          } catch {
+            // Pass-2 failure/timeout: keep the pass-1 `result` already in hand.
+          }
+        }
+      }
+      set({ measuredRails: rails })
+      const railNotes: RailNote[] = gatedOff.map(g => ({ ref: g.ref, kicadName: g.kicadName }))
+
       // Map opResult.values (bare lowercase node names) → netId voltages.
       const opVoltages = mapOpResultToNetVoltages(result.values, circuit)
       const voltageRange = computeVoltageRange(opVoltages)
@@ -1366,6 +1421,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         voltageRange,
         currentsByRef,
         coachNotes,
+        railNotes,
         deckDirty: false,
         simState: 'idle',
       })
