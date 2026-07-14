@@ -22,7 +22,7 @@
 import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { describe, test, expect } from 'vitest'
-import { generateDeck, formatSpiceValue, alterPlan, instrumentSpiceName, buildLedSpiceNames, isLedPart, subcktTerminalConductivity } from '../generate'
+import { generateDeck, formatSpiceValue, alterPlan, instrumentSpiceName, buildLedSpiceNames, isLedPart, subcktTerminalConductivity, digitalVddNet } from '../generate'
 import type { Circuit, CircuitNet, Part } from '../../netlist/extract'
 import type { Resolution } from '../../models/types'
 import type { Instrument } from '../instruments'
@@ -815,6 +815,26 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
       warnings: [],
     }
   }
+
+  test('digitalVddNet resolves the VDD net and VSS-grounded flag', () => {
+    const tpl = { power: { vcc: 'VCC', gnd: 'GND' } } as any
+    const pinMap = { '14': 'VCC', '7': 'GND', '1': '1A' }
+    const part = { padNet: new Map([['14', 4], ['7', 5], ['1', 1]]) }
+    const netIdToNode = new Map([[4, 'vcc'], [5, '0'], [1, 'a']])
+    const r = digitalVddNet(tpl, pinMap, part, netIdToNode)
+    expect(r.vddNetId).toBe(4)
+    expect(r.vssGrounded).toBe(true)
+  })
+
+  test('digitalVddNet reports vssGrounded=false when VSS pad is not on node 0', () => {
+    const tpl = { power: { vcc: 'VCC', gnd: 'GND' } } as any
+    const pinMap = { '14': 'VCC', '7': 'GND' }
+    const part = { padNet: new Map([['14', 4], ['7', 6]]) }
+    const netIdToNode = new Map([[4, 'vcc'], [6, 'notground']])
+    const r = digitalVddNet(tpl, pinMap, part, netIdToNode)
+    expect(r.vddNetId).toBe(4)
+    expect(r.vssGrounded).toBe(false)
+  })
 
   test('emits adc_bridge → d_nand → dac_bridge wired to the board nets', () => {
     const circuit = makeDigitalCircuit()

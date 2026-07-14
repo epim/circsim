@@ -833,6 +833,41 @@ function parseLogic74(idx: ModelTextIndex, file: string): Logic74File | null {
  * load while the dac_bridge still drives the full setpoint. Accepted as bench
  * semantics (the nominal rail) — strictly better than the family constant.
  */
+/**
+ * Resolve a digital chip's VDD board net and whether its VSS pad is grounded.
+ * Steps 1–2 of the M10 supply rule, shared by deriveSupplyVHigh and
+ * deriveMeasuredRailVHigh. Returns vddNetId=undefined if the VDD pads don't all
+ * land on one net (or there's no VDD/VSS signal in the template power block).
+ */
+export function digitalVddNet(
+  tpl: Logic74Template,
+  pinMap: Record<string, string>,
+  part: { padNet: Map<string, number> },
+  netIdToNode: Map<number, string>,
+): { vddNetId?: number; vssGrounded: boolean } {
+  const vccSig = tpl.power?.vcc?.toUpperCase()
+  const gndSig = tpl.power?.gnd?.toUpperCase()
+  if (!vccSig || !gndSig) return { vddNetId: undefined, vssGrounded: false }
+
+  let vddNetId: number | undefined
+  for (const [pad, sig] of Object.entries(pinMap)) {
+    if (sig.toUpperCase() !== vccSig) continue
+    const netId = part.padNet.get(pad)
+    if (netId === undefined) continue
+    if (vddNetId !== undefined && vddNetId !== netId) return { vddNetId: undefined, vssGrounded: false }
+    vddNetId = netId
+  }
+
+  let vssGrounded = false
+  for (const [pad, sig] of Object.entries(pinMap)) {
+    if (sig.toUpperCase() !== gndSig) continue
+    const netId = part.padNet.get(pad)
+    if (netId === undefined) continue
+    if (netIdToNode.get(netId) === '0') vssGrounded = true
+  }
+  return { vddNetId, vssGrounded }
+}
+
 function deriveSupplyVHigh(
   tpl: Logic74Template,
   pinMap: Record<string, string>,
@@ -840,32 +875,8 @@ function deriveSupplyVHigh(
   netIdToNode: Map<number, string>,
   instruments: Instrument[],
 ): number | undefined {
-  const vccSig = tpl.power?.vcc?.toUpperCase()
-  const gndSig = tpl.power?.gnd?.toUpperCase()
-  if (!vccSig || !gndSig) return undefined
-
-  // (1) The VDD pad net: every pad the pinMap assigns to the VDD signal must
-  // land on one and the same board net.
-  let vddNetId: number | undefined
-  for (const [pad, sig] of Object.entries(pinMap)) {
-    if (sig.toUpperCase() !== vccSig) continue
-    const netId = part.padNet.get(pad)
-    if (netId === undefined) continue
-    if (vddNetId !== undefined && vddNetId !== netId) return undefined
-    vddNetId = netId
-  }
-  if (vddNetId === undefined) return undefined
-
-  // (2) The VSS pad must be wired to the ground net.
-  let vssGrounded = false
-  for (const [pad, sig] of Object.entries(pinMap)) {
-    if (sig.toUpperCase() !== gndSig) continue
-    const netId = part.padNet.get(pad)
-    if (netId === undefined) continue
-    if (netIdToNode.get(netId) !== '0') return undefined
-    vssGrounded = true
-  }
-  if (!vssGrounded) return undefined
+  const { vddNetId, vssGrounded } = digitalVddNet(tpl, pinMap, part, netIdToNode)
+  if (vddNetId === undefined || !vssGrounded) return undefined
 
   // (3) Exactly one dc-supply directly on the VDD net.
   const supplies = instruments.filter(
