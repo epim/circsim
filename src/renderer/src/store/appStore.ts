@@ -184,6 +184,30 @@ export function collapsedFidelitySummary(items: FidelityBannerItem[]): string | 
 }
 
 /**
+ * Stable identity of the current fidelity problem set (Gemini finding 4).
+ * Order-independent so a resolution re-order never spuriously re-expands the
+ * minimized banner.
+ */
+export function fidelitySignature(items: FidelityBannerItem[]): string {
+  return items
+    .map(it => `${it.ref}:${it.mode}`)
+    .sort()
+    .join('|')
+}
+
+/**
+ * Minimized iff the user minimized THIS exact problem set. Any change — new
+ * part, mode change, item resolved — changes the signature → auto re-expand.
+ * Honesty (Spec §8.6): the banner minimizes to a visible badge, never away.
+ */
+export function isFidelityMinimized(
+  items: FidelityBannerItem[],
+  minimizedSig: string | null,
+): boolean {
+  return minimizedSig !== null && fidelitySignature(items) === minimizedSig
+}
+
+/**
  * Stable id of the DC supply auto-attached on open (Spec §4 "see it work in 60
  * seconds"). Stable so the InstrumentRack can auto-select it (revealing its
  * voltage input) and so tests can assert on it.
@@ -478,6 +502,13 @@ export interface AppState {
    */
   opCaveat: { method: Exclude<OpSolveMethod, 'direct'>; at: number } | null
 
+  /**
+   * Fidelity-banner minimize (Gemini finding 4): when non-null, the banner is
+   * minimized to the header badge for AS LONG AS the live fidelity signature
+   * still matches. Per-board, per-session, in-memory.
+   */
+  fidelityMinimizedSig: string | null
+
   // ── actions ────────────────────────────────────────────────────────────────
   /** Parse + extract + resolve a board from raw .kicad_pcb text. */
   openBoardFromText(boardText: string, fileName: string, opts?: OpenOpts): void
@@ -620,6 +651,9 @@ export interface AppState {
 
   /** Dismiss the convergence-failure card. */
   dismissConvergenceCard(): void
+
+  /** Minimize the fidelity banner to the header badge (Gemini finding 4). */
+  minimizeFidelityBanner(): void
 
   /** Mark deck dirty (any deck-affecting change). */
   markDeckDirty(): void
@@ -828,6 +862,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     benchRestartToast: null,
     convergenceCard: null,
     opCaveat: null,
+    fidelityMinimizedSig: null,
 
     // ── open flow ────────────────────────────────────────────────────────────
     openBoardFromText(boardText, fileName, opts) {
@@ -860,6 +895,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         benchRestartToast: null,
         convergenceCard: null,
         opCaveat: null,
+        fidelityMinimizedSig: null,
         vectorNames: [],
         simTimeSeconds: 0,
         achievedRealtimeFactor: null,
@@ -1574,6 +1610,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     dismissConvergenceCard() {
       set({ convergenceCard: null })
+    },
+
+    minimizeFidelityBanner() {
+      set({ fidelityMinimizedSig: fidelitySignature(fidelityBannerItems(get().resolutions)) })
     },
 
     markDeckDirty() {
