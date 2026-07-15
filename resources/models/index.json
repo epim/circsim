@@ -1,5 +1,5 @@
 {
-  "$comment": "Provenance: bundled SPICE model library index for circsim, MIT. Every model file referenced here carries its own 'Provenance:' header and was written in-house from datasheet parameters (no vendor model text). PinMap node positions are 1-based and refer to the device's terminal order: diode/LED = 'anode cathode' (1=anode, 2=cathode); BJT = 'collector base emitter' (1=C, 2=B, 3=E); VDMOS = 'drain gate source' (1=D, 2=G, 3=S). Pad numbers come from the KiCad footprint. Diode footprints follow the KiCad convention pad-1 = cathode.",
+  "$comment": "Provenance: bundled SPICE model library index for circsim, MIT. Every model file referenced here carries its own 'Provenance:' header and was written in-house from datasheet parameters (no vendor model text). PinMap node positions are 1-based and refer to the device's terminal order: diode/LED = 'anode cathode' (1=anode, 2=cathode); BJT = 'collector base emitter' (1=C, 2=B, 3=E); VDMOS = 'drain gate source' (1=D, 2=G, 3=S). Pad numbers come from the KiCad footprint. KiCad-official diode footprints (D_*) put pad-1 = cathode; JLC/EasyEDA-origin diode footprints (JLC lib prefix or bare dimension-pattern names like SMC_L7.1-W6.2) put pad-1 = ANODE, hence the anode-first '^JLC|_L…-W…' key ordered first on every two-terminal diode entry (first pinMaps key match wins; verified on the led_lantern rev B design files, D7).",
   "entries": [
     {
       "id": "diode-1n4148",
@@ -10,6 +10,7 @@
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "D1N4148" },
       "pinMaps": {
+        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(SOD|SMA|SMB|0805|MELF|DO-35|DO-204|DO-41).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
@@ -24,6 +25,7 @@
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "D1N4001" },
       "pinMaps": {
+        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(DO-41|SMA|SMB|DO-214|DO-201).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
@@ -38,6 +40,7 @@
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "D1N5819" },
       "pinMaps": {
+        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(DO-41|SMA|SMB|DO-214|SOD).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
@@ -49,8 +52,9 @@
         "mpn": ["SS54", "SS52", "SS56", "SB540"]
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "DSS54" },
-      "$comment": "5A/40V-class Schottky (DO-214AB/SMC). MPN/value matching only — a D + SMA/SMB/SMC fallback would collide with the 1N4001/1N5819 fallback rules. pinMaps keys are for pin mapping, not matching; the (D_)? prefix covers bare routed-board footprint names like SMC_L7.1-….",
+      "$comment": "5A/40V-class Schottky (DO-214AB/SMC). MPN/value matching only — a D + SMA/SMB/SMC fallback would collide with the 1N4001/1N5819 fallback rules. pinMaps keys are for pin mapping, not matching; the (D_)? prefix covers bare routed-board footprint names like SMC_L7.1-…. The anode-first JLC/EasyEDA key MUST stay ordered before the generic key: the generic pattern also matches JLC names (SMC anywhere in the string) and would silently reverse the diode (led_lantern rev B D7, JLC-MCP:SMC_L7.1-W6.2-LS8.1-R-RD, pad 1 = anode = /VBUS_C).",
       "pinMaps": {
+        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "(D_)?(SMC|SMB|SMA|DO-214|DO-201).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
@@ -65,6 +69,7 @@
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "DZ5V1" },
       "pinMaps": {
+        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(SOD|MiniMELF|DO-35|MELF).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
@@ -81,6 +86,7 @@
       "model": { "type": "model-card", "file": "diodes.lib", "name": "DZ3V0" },
       "$comment": "valueRegex matches part VALUES only, and only the explicit '3.0V' (bare '3V' is ambiguous with battery values — refdes BT); a supply net named 3V0 never reaches the matcher.",
       "pinMaps": {
+        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(SOD|MiniMELF|DO-35|MELF).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
@@ -94,6 +100,7 @@
       "model": { "type": "model-card", "file": "diodes.lib", "name": "DSMAJ24A" },
       "$comment": "Unidirectional 24V TVS (SMA). MPN/value matching only — the D + SMA refdes/footprint fallback tier gave a live 3-way false ambiguity on a real board (D3). pinMaps keys are for pin mapping, not matching.",
       "pinMaps": {
+        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "(D_)?(SMA|SMB|SMC|DO-214).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },

@@ -18,6 +18,7 @@ import { join } from 'node:path'
 
 import { describe, it, expect } from 'vitest'
 
+import { selectPinMap } from '../libraryMatch'
 import type { LibraryEntry } from '../types'
 
 const MODELS_DIR = join(process.cwd(), 'resources', 'models')
@@ -432,12 +433,21 @@ describe('bundled model library — Milestone 2 power-path discretes', () => {
     for (const m of ['SS54', 'SS52', 'SS56', 'SB540']) {
       expect(e!.match.mpn, `mpn list must include ${m}`).toContain(m)
     }
-    // pad 1 = cathode (existing Schottky convention: pinMap {1:"2",2:"1"}).
+    // defaultPinMap keeps the KiCad convention (pad 1 = cathode) — it only
+    // applies to unmatched footprints, WITH a pinmap-unverified warning.
     expect(e!.defaultPinMap).toEqual({ '1': '2', '2': '1' })
-    // Pin-map key covers the bare SMC footprint name routed boards use.
-    const key = Object.keys(e!.pinMaps)[0]
-    expect(new RegExp(key, 'i').test('SMC_L7.1-W6.2-LS8.1-R-RD')).toBe(true)
-    expect(new RegExp(key, 'i').test('Diode_SMD:D_SMC_Handsoldering')).toBe(true)
+    // Both footprint shapes get a pinMap — with the right polarity EACH:
+    // the bare EasyEDA dimension-pattern name (how routed boards present JLC
+    // footprints) is pad-1 = anode; KiCad's D_SMC is pad-1 = cathode. See the
+    // 'JLC/EasyEDA diode polarity' block for the D7 story.
+    expect(selectPinMap(e!, 'SMC_L7.1-W6.2-LS8.1-R-RD')).toEqual({
+      pinMap: { '1': '1', '2': '2' },
+      warnings: [],
+    })
+    expect(selectPinMap(e!, 'Diode_SMD:D_SMC_Handsoldering')).toEqual({
+      pinMap: { '1': '2', '2': '1' },
+      warnings: [],
+    })
   })
 
   it('DSS54 card: Schottky parameters (bv=40, eg=0.69, xti=2, cjo=300p)', () => {
@@ -957,5 +967,54 @@ describe('logic4000.json — CD4000 XSPICE family (Spec §8.5)', () => {
       }
     }
     expect(seen.size).toBeGreaterThan(0)
+  })
+})
+
+// ─── JLC/EasyEDA diode polarity — pad 1 = ANODE ──────────────────────────────
+//
+// KiCad's Diode_SMD convention is pad 1 = cathode, and every two-terminal
+// diode entry's generic pinMap encodes it ({"1":"2","2":"1"}). JLC/EasyEDA
+// libraries use the OPPOSITE convention: symbol pin 1 = A (anode), so pad 1 =
+// anode. Confirmed by the led_lantern rev B designer on the design files
+// (D7 SS54, footprint JLC-MCP:SMC_L7.1-W6.2-LS8.1-R-RD: pad 1 = /VBUS_C =
+// anode; same for every JLC-MCP diode, e.g. the SS14s). Before the fix the
+// generic (D_)?SMC regex matched the JLC name, so circsim modeled the diode
+// REVERSED with no warning — the op solve showed the charge path dead.
+// EasyEDA-origin footprints are recognizable by the JLC lib prefix or by the
+// bare dimension-pattern name (…_L7.1-W6.2…); KiCad-official names never use
+// that shape (their dimension tokens carry an 'mm' suffix, e.g. L6.3mm_D2.5mm).
+
+describe('JLC/EasyEDA diode polarity — pad 1 = anode, matched BEFORE the KiCad-convention key', () => {
+  const index = readIndex()
+  const byId = new Map(index.entries.map((e) => [e.id, e]))
+
+  const JLC_ANODE_FIRST = { '1': '1', '2': '2' }
+  const KICAD_CATHODE_FIRST = { '1': '2', '2': '1' }
+
+  // [entry id, representative JLC/EasyEDA libId (prefixed and bare forms mixed),
+  //  representative KiCad-convention libId]
+  const CASES: Array<[string, string, string]> = [
+    ['schottky-ss54', 'JLC-MCP:SMC_L7.1-W6.2-LS8.1-R-RD', 'Diode_SMD:D_SMC'], // lantern D7
+    ['diode-1n5819', 'JLC-MCP:SMA_L4.4-W2.8-LS5.4-R-RD', 'Diode_SMD:D_SMA'], // lantern D8/D9 (SS14)
+    ['diode-1n4148', 'JLC-MCP:SOD-323_L1.8-W1.3-LS2.5-RD', 'Diode_SMD:D_SOD-323'],
+    ['diode-1n4001', 'SMA_L4.4-W2.8-LS5.4-R-RD', 'Diode_SMD:D_SMA'],
+    ['zener-5v1', 'JLC-MCP:SOD-123_L2.8-W1.8-LS3.7-RD', 'Diode_SMD:D_SOD-123'],
+    ['zener-3v0', 'SOD-123_L2.8-W1.8-LS3.7-RD', 'Diode_SMD:D_SOD-123'],
+    ['tvs-smaj24a', 'JLC-MCP:SMA_L4.4-W2.8-LS5.4-R-RD', 'Diode_SMD:D_SMA'],
+  ]
+
+  it.each(CASES)('%s: JLC/EasyEDA footprint %s → anode-first pinMap, NO warning', (id, jlcLibId) => {
+    const e = byId.get(id)
+    expect(e, `${id} entry must exist`).toBeDefined()
+    const { pinMap, warnings } = selectPinMap(e!, jlcLibId)
+    expect(pinMap).toEqual(JLC_ANODE_FIRST)
+    expect(warnings).toHaveLength(0)
+  })
+
+  it.each(CASES)('%s: KiCad-convention footprint (arg 2) still cathode-first', (id, _jlc, kicadLibId) => {
+    const e = byId.get(id)!
+    const { pinMap, warnings } = selectPinMap(e, kicadLibId)
+    expect(pinMap).toEqual(KICAD_CATHODE_FIRST)
+    expect(warnings).toHaveLength(0)
   })
 })

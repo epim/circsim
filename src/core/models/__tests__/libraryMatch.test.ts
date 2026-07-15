@@ -707,7 +707,7 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
     }
   })
 
-  it('D7 value "SS54" on SMC → schottky-ss54 (pad 1 = cathode)', async () => {
+  it('D7 value "SS54" on SMC → schottky-ss54 (pad 1 = ANODE — EasyEDA/JLC footprint)', async () => {
     const part = makePart('D7', 'SS54', 'SMC_L7.1-W6.2-LS8.1-R-RD')
     const circuit = makeCircuit([part])
     const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
@@ -715,7 +715,12 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
     expect(res.status).toBe('ok')
     if (res.model?.kind === 'subckt') {
       expect(res.model.subcktName).toBe('DSS54')
-      expect(res.model.pinMap).toEqual({ '1': '2', '2': '1' })
+      // The dimension-pattern (EasyEDA-origin) footprint name puts pad 1 =
+      // anode — the opposite of KiCad's D_* convention. Confirmed by the
+      // led_lantern rev B designer on the design files: D7 pad 1 = /VBUS_C =
+      // anode (series back-feed-block, forward VBUS_C → VIN_CHG). The old
+      // cathode-first expectation here modeled D7 reversed (dead charge path).
+      expect(res.model.pinMap).toEqual({ '1': '1', '2': '2' })
     }
     // The bare SMC footprint (no D_ prefix, as routed boards name it) matches a
     // pinMaps key directly — no pinmap-unverified fallback warning.
