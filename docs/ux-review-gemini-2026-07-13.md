@@ -10,7 +10,7 @@ Status legend: ☐ open · ◐ in progress · ☑ done
 
 ## High severity
 
-### ☐ 1. Model Doctor action overload
+### ☑ 1. Model Doctor action overload
 The Model Doctor cards display up to 6–7 action buttons simultaneously (Stub open,
 Stub short, Interactive pins, Import .lib…, Ask your LLM, Pin map, Reset). This
 creates a wall of buttons → choice paralysis and visual clutter.
@@ -21,7 +21,7 @@ creates a wall of buttons → choice paralysis and visual clutter.
 
 ## Medium severity
 
-### ☐ 2. Empty-state button hierarchy
+### ☑ 2. Empty-state button hierarchy
 First-run empty state shows three prominent buttons ("Open…", "Open First Light
 demo", "Open sample project"), all toolbar-styled but with heavy distinct custom
 backgrounds (brown, dark green). Muddy visual weight fails to guide the first click.
@@ -29,7 +29,7 @@ backgrounds (brown, dark green). Muddy visual weight fails to guide the first cl
 **Suggestion:** Establish primary / secondary / tertiary button styles. Make
 "Open…" (or sample project) the primary solid CTA; style the others as ghost/outline.
 
-### ☐ 3. "Probe this net" button contrast
+### ☑ 3. "Probe this net" button contrast
 The click-to-probe button uses dark green bg (`#1e2e1e`) with green text (`#6f6`)
 and a thin green border. Thematic with the V-Probe chip, but low contrast against
 the dark `#15151f` rack bg makes it look disabled / easily missed.
@@ -39,7 +39,7 @@ to signal it is actionable rather than a status label.
 
 ## Low severity / polish
 
-### ☐ 4. Banner blindness for "Results approximate"
+### ☑ 4. Banner blindness for "Results approximate"
 Persistent amber fidelity banner is useful, but ever-present on boards with known
 unresolved stubs → banner blindness. (The M9 grey "open by design" informational
 banner is called out as excellent.)
@@ -48,7 +48,7 @@ banner is called out as excellent.)
 in the toolbar after acknowledgement — frees vertical space, preserves urgency for
 new issues.
 
-### ☐ 5. Net Voltages tab discoverability
+### ☑ 5. Net Voltages tab discoverability
 The "Net Voltages" readout tab shares the bottom dock with "Sim log". New users may
 not realize a tabular voltage list exists if focused on the 3D board annotations.
 

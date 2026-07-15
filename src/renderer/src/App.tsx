@@ -30,6 +30,7 @@ import { openProjectFromPath, classifyFile } from './ipc/fileOpen'
 import type { PickEvent } from './viewport/picking'
 import type { SceneManager } from './viewport/scene'
 import type { OverlayMode } from './viewport/overlay'
+import { showNetsTabCue } from './ui/tabCues'
 
 export default function App({ store }: { store: AppStore }): React.ReactElement {
   return (
@@ -60,6 +61,7 @@ function Shell(): React.ReactElement {
 
   // Bottom-dock right pane: Sim log ↔ Net voltages readout (M7 F8).
   const [bottomTab, setBottomTab] = useState<'log' | 'nets'>('log')
+  const [netsTabSeen, setNetsTabSeen] = useState(false)
 
   // When an op result first arrives, snap the overlay to voltage (Spec §4 step 4).
   // Intentionally keyed only on opVoltages so manual overlay changes stick after.
@@ -352,10 +354,18 @@ function Shell(): React.ReactElement {
                   </button>
                   <button
                     style={bottomTab === 'nets' ? bottomTabActive : bottomTabBtn}
-                    onClick={() => setBottomTab('nets')}
+                    onClick={() => {
+                      setBottomTab('nets')
+                      setNetsTabSeen(true)
+                    }}
                     data-testid="bottom-tab-nets"
                   >
                     Net voltages
+                    {showNetsTabCue(opVoltages != null, netsTabSeen, bottomTab) && (
+                      <span data-testid="nets-tab-cue" style={{ color: '#f1c40f', marginLeft: 4 }}>
+                        ●
+                      </span>
+                    )}
                   </button>
                 </div>
                 <div style={{ flex: 1, minHeight: 0 }}>
