@@ -180,6 +180,30 @@ function NetDropTarget({ netId, netName, onDrop }: NetDropTargetProps): React.Re
   )
 }
 
+// ── Probe this net button ────────────────────────────────────────────────────
+
+/**
+ * "⌖ Probe this net" (Gemini finding 3): the old dark-green-on-dark styling
+ * read as disabled. Solid V-Probe-green resting state + JS hover brighten
+ * (the NetDropTarget pattern — there is no stylesheet).
+ */
+function ProbeNetButton({ netId, netName }: { netId: number; netName: string }): React.ReactElement {
+  const store = useAppStoreApi()
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      data-testid="probe-net-btn"
+      style={hover ? { ...probeNetBtnStyle, background: '#35854a', borderColor: '#55bf75' } : probeNetBtnStyle}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={() => store.getState().attachProbeToNet(netId)}
+      title={`Attach a V-Probe to ${netName}`}
+    >
+      ⌖ Probe this net
+    </button>
+  )
+}
+
 // ── Attached instrument row ───────────────────────────────────────────────────
 
 interface AttachedRowProps {
@@ -323,14 +347,7 @@ export default function InstrumentRack(): React.ReactElement {
           <span style={probeNetNameStyle} title={selectedNet.kicadName}>
             {selectedNet.kicadName}
           </span>
-          <button
-            data-testid="probe-net-btn"
-            style={probeNetBtnStyle}
-            onClick={() => store.getState().attachProbeToNet(selectedNet.id)}
-            title={`Attach a V-Probe to ${selectedNet.kicadName}`}
-          >
-            Probe this net
-          </button>
+          <ProbeNetButton netId={selectedNet.id} netName={selectedNet.kicadName} />
         </div>
       )}
 
@@ -464,12 +481,13 @@ const probeNetNameStyle: React.CSSProperties = {
 }
 
 const probeNetBtnStyle: React.CSSProperties = {
-  background: '#1e2e1e',
-  border: '1px solid #3a6a3a',
+  background: '#2a6b3a',
+  border: '1px solid #3f9f5f',
   borderRadius: 3,
-  color: '#6f6',
+  color: '#e6ffe9',
   fontSize: 11,
-  padding: '2px 8px',
+  fontWeight: 600,
+  padding: '3px 10px',
   cursor: 'pointer',
   flexShrink: 0,
 }

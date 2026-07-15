@@ -105,3 +105,20 @@ describe('M7 F7.2 — auto-attached supply announcement', () => {
     expect(html).not.toContain('data-testid="auto-supply-note"')
   })
 })
+
+// ─── Gemini finding 3: the probe button must read as actionable ───────────────
+
+describe('Probe-this-net contrast (Gemini finding 3)', () => {
+  it('is a solid high-contrast button with a probe-tip glyph', () => {
+    const store = openedStore()
+    const outId = store.getState().circuit!.nets.find(n => n.kicadName === 'OUT')!.id
+    store.getState().selectNet(outId)
+    const html = renderRack(store)
+    expect(html).toContain('data-testid="probe-net-btn"')
+    // probe-tip glyph signals actionability
+    expect(html).toContain('⌖')
+    // solid resting background — no longer the near-invisible #1e2e1e
+    expect(html).toContain('background:#2a6b3a')
+    expect(html).not.toContain('background:#1e2e1e')
+  })
+})
