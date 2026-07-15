@@ -18,6 +18,7 @@
  */
 
 import React from 'react'
+import { btnPrimary, btnSecondary } from '../ui/buttonStyles'
 
 // ─── Parse-error card ─────────────────────────────────────────────────────────
 
@@ -139,6 +140,54 @@ export function NoSourceState(): React.ReactElement {
   )
 }
 
+// ─── No-board first-run state ─────────────────────────────────────────────────
+
+export interface NoBoardStateProps {
+  /** Open the file picker. */
+  onOpen: () => void
+  /** Open the bundled 555-blinker sample project (primary CTA). */
+  onOpenSample: () => void
+  /** Open the one-LED First Light demo. */
+  onOpenFirstLight: () => void
+}
+
+/**
+ * First-run card (moved here from App.tsx — this file is the home for guided
+ * empty states). One solid primary CTA (sample project) + two quiet outline
+ * buttons (Gemini UX finding 2: three equally-heavy custom-colored buttons
+ * failed to guide the first click).
+ */
+export function NoBoardState({
+  onOpen,
+  onOpenSample,
+  onOpenFirstLight,
+}: NoBoardStateProps): React.ReactElement {
+  return (
+    <div style={noBoardStyle}>
+      <div style={{ fontSize: 18, marginBottom: 8 }}>No board loaded</div>
+      <div style={{ color: '#888', marginBottom: 16 }}>
+        Open a <code>.kicad_pcb</code> file, or drag one onto the window.
+      </div>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <button style={btnPrimary} onClick={onOpenSample} data-testid="open-sample-btn">
+          Open sample project
+        </button>
+        <button style={btnSecondary} onClick={onOpenFirstLight} data-testid="open-first-light-btn">
+          Open First Light demo
+        </button>
+        <button style={btnSecondary} onClick={onOpen} data-testid="open-board-btn">
+          Open…
+        </button>
+      </div>
+      <div style={{ color: '#555', marginTop: 10, fontSize: 12 }}>
+        The sample project is a 555 blinker — the full simulation flow in one
+        click. First Light is a one-LED dimmer if you want the smallest possible
+        start.
+      </div>
+    </div>
+  )
+}
+
 // ─── styles ───────────────────────────────────────────────────────────────────
 
 const parseErrStyle: React.CSSProperties = {
@@ -220,4 +269,13 @@ const guidedBody: React.CSSProperties = {
 const netName: React.CSSProperties = {
   fontFamily: 'monospace',
   color: '#6df',
+}
+const noBoardStyle: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  color: '#ddd',
 }

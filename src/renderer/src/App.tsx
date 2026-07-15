@@ -22,6 +22,7 @@ import NetVoltages from './panels/NetVoltages'
 import Scope from './panels/Scope'
 import CriticPanel from './panels/CriticPanel'
 import About from './panels/About'
+import { NoBoardState } from './panels/EmptyStates'
 import { AppStoreProvider, useApp, useAppStoreApi } from './store/storeContext'
 import type { AppStore } from './store/appStore'
 import { resolutionSummary } from './store/appStore'
@@ -319,7 +320,7 @@ function Shell(): React.ReactElement {
                 overlay={overlay}
               />
             ) : (
-              <EmptyState
+              <NoBoardState
                 onOpen={handleOpen}
                 onOpenSample={handleOpenSample}
                 onOpenFirstLight={handleOpenFirstLight}
@@ -370,52 +371,6 @@ function Shell(): React.ReactElement {
           {board && <CriticPanel />}
         </aside>
       </main>
-    </div>
-  )
-}
-
-function EmptyState({
-  onOpen,
-  onOpenSample,
-  onOpenFirstLight,
-}: {
-  onOpen: () => void
-  onOpenSample: () => void
-  onOpenFirstLight: () => void
-}): React.ReactElement {
-  return (
-    <div style={emptyStateStyle}>
-      <div style={{ fontSize: 18, marginBottom: 8 }}>No board loaded</div>
-      <div style={{ color: '#888', marginBottom: 16 }}>
-        Open a <code>.kicad_pcb</code> file, or drag one onto the window.
-      </div>
-      <div style={{ display: 'flex', gap: 10 }}>
-        <button
-          style={{ ...toolbarBtn, padding: '8px 16px' }}
-          onClick={onOpen}
-          data-testid="open-board-btn"
-        >
-          Open…
-        </button>
-        <button
-          style={{ ...toolbarBtn, padding: '8px 16px', background: '#3a2e12', borderColor: '#5a4a22' }}
-          onClick={onOpenFirstLight}
-          data-testid="open-first-light-btn"
-        >
-          Open First Light demo
-        </button>
-        <button
-          style={{ ...toolbarBtn, padding: '8px 16px', background: '#1e3a2e', borderColor: '#2a5a3a' }}
-          onClick={onOpenSample}
-          data-testid="open-sample-btn"
-        >
-          Open sample project
-        </button>
-      </div>
-      <div style={{ color: '#555', marginTop: 10, fontSize: 12 }}>
-        First Light is a one-LED dimmer — press Energize to watch it glow. Or try the
-        555 blinker for the full simulation flow.
-      </div>
     </div>
   )
 }
@@ -524,13 +479,4 @@ const selectionBadge: React.CSSProperties = {
   borderRadius: 4,
   padding: '4px 10px',
   fontSize: 12,
-}
-const emptyStateStyle: React.CSSProperties = {
-  position: 'absolute',
-  inset: 0,
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  color: '#ddd',
 }
