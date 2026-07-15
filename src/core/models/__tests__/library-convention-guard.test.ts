@@ -145,7 +145,8 @@ describe('guard self-test — must actually detect the D7 failure shapes', () =>
     model: { type: 'model-card', file: 'diodes.lib', name: 'DSS54' },
     pinMaps: { '(D_)?(SMC|SMB|SMA|DO-214|DO-201).*': CATHODE_FIRST },
     defaultPinMap: CATHODE_FIRST,
-  } as LibraryEntry
+    provenance: 'guard self-test fixture — reconstruction of the pre-f6680b6 entry shape',
+  }
 
   it('flags the pre-fix over-broad key (would have caught D7)', () => {
     const v = violations(preFixSs54)
