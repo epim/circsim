@@ -77,6 +77,96 @@ export default function ModelDoctor(props: ModelDoctorHandlers): React.ReactElem
   )
 }
 
+export interface DoctorMenuItem {
+  label: string
+  onSelect: () => void
+}
+
+/**
+ * ⋮ overflow menu for secondary Doctor actions (Gemini finding 1: 6–7 inline
+ * buttons per card → choice paralysis). Controlled — the parent owns `open`,
+ * so tests render either state directly. Closes on item select, outside
+ * mousedown, and Escape. SSR-safe (listeners only attach when document exists).
+ */
+export function DoctorMoreMenu({
+  items,
+  open,
+  onToggle,
+  onClose,
+}: {
+  items: DoctorMenuItem[]
+  open: boolean
+  onToggle: () => void
+  onClose: () => void
+}): React.ReactElement {
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!open || typeof document === 'undefined') return
+    const onDown = (e: MouseEvent): void => {
+      if (wrapRef.current && e.target instanceof Node && !wrapRef.current.contains(e.target)) {
+        onClose()
+      }
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open, onClose])
+
+  return (
+    <div ref={wrapRef} style={moreWrapStyle}>
+      <button
+        style={btnStyle}
+        data-testid="doctor-more"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="More actions"
+        onClick={onToggle}
+      >
+        ⋮
+      </button>
+      {open && (
+        <div role="menu" data-testid="doctor-more-menu" style={moreMenuStyle}>
+          {items.map(item => (
+            <MenuItemButton key={item.label} item={item} onClose={onClose} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** One menu row; JS hover highlight (no stylesheet in the renderer). */
+function MenuItemButton({
+  item,
+  onClose,
+}: {
+  item: DoctorMenuItem
+  onClose: () => void
+}): React.ReactElement {
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      role="menuitem"
+      style={hover ? { ...menuItemStyle, background: '#3a2f4a' } : menuItemStyle}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={() => {
+        item.onSelect()
+        onClose()
+      }}
+    >
+      {item.label}
+    </button>
+  )
+}
+
 function DoctorRow({
   res,
   part,
@@ -90,6 +180,7 @@ function DoctorRow({
   const [showLlmAssist, setShowLlmAssist] = useState(false)
   const [showLibImport, setShowLibImport] = useState(false)
   const [forcePinMapOpen, setForcePinMapOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
 
   const isStubbed = res.status === 'stubbed'
   // M9: documented open — the library knows this part and intentionally doesn't
@@ -241,23 +332,8 @@ function DoctorRow({
       )}
 
       <div style={actionsStyle}>
-        <button style={btnStyle} onClick={() => store.getState().stubPart(res.ref, 'open')}>
-          Stub open
-        </button>
-        <button style={btnStyle} onClick={() => store.getState().stubPart(res.ref, 'short')}>
-          Stub short
-        </button>
-        <button
-          style={btnStyle}
-          onClick={() => store.getState().stubPart(res.ref, 'interactive-pins')}
-        >
-          Interactive pins
-        </button>
         <button style={btnStyle} onClick={handleImportLib}>
           Import .lib…
-        </button>
-        <button style={btnStyle} onClick={handleAskLlm}>
-          Ask your LLM
         </button>
         <button
           style={{ ...btnStyle, background: (pinEditorOpen || forcePinMapOpen) ? '#2c4a2c' : undefined }}
@@ -265,6 +341,19 @@ function DoctorRow({
         >
           {pinEditorOpen ? 'Hide pin map' : 'Pin map'}
         </button>
+        <button style={btnStyle} onClick={() => store.getState().stubPart(res.ref, 'open')}>
+          Stub open
+        </button>
+        <DoctorMoreMenu
+          open={moreOpen}
+          onToggle={() => setMoreOpen(o => !o)}
+          onClose={() => setMoreOpen(false)}
+          items={[
+            { label: 'Stub short', onSelect: () => store.getState().stubPart(res.ref, 'short') },
+            { label: 'Interactive pins', onSelect: () => store.getState().stubPart(res.ref, 'interactive-pins') },
+            { label: 'Ask your LLM', onSelect: handleAskLlm },
+          ]}
+        />
         {(isStubbed || res.tier === 6 || hasOverride) && (
           <button style={btnGhostStyle} onClick={() => store.getState().clearPartOverride(res.ref)}>
             Reset
@@ -522,4 +611,33 @@ const pinInputStyle: React.CSSProperties = {
   color: '#ddd',
   fontSize: 12,
   padding: '2px 4px',
+}
+const moreWrapStyle: React.CSSProperties = {
+  position: 'relative',
+  display: 'inline-block',
+}
+const moreMenuStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '100%',
+  right: 0,
+  marginTop: 2,
+  minWidth: 150,
+  background: '#2a2038',
+  border: '1px solid #4a3a5a',
+  borderRadius: 4,
+  boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+  zIndex: 10,
+  display: 'flex',
+  flexDirection: 'column',
+  padding: 2,
+}
+const menuItemStyle: React.CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  color: '#eee',
+  fontSize: 12,
+  padding: '6px 12px',
+  textAlign: 'left',
+  cursor: 'pointer',
+  borderRadius: 3,
 }

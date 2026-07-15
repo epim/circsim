@@ -15,7 +15,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
-import ModelDoctor, { _revealDoctorCard } from '../ModelDoctor'
+import ModelDoctor, { _revealDoctorCard, DoctorMoreMenu } from '../ModelDoctor'
 import { AppStoreProvider } from '../../store/storeContext'
 import { createAppStore } from '../../store/appStore'
 import { createMockSimClient } from '../../ipc/simClient'
@@ -125,10 +125,19 @@ describe('ModelDoctor — documented-open cards (M9)', () => {
   })
 
   it('still offers every override action (stub / interactive / import / pin map)', () => {
+    // Gemini finding 1 (Task 2) moved Stub short / Interactive pins / Ask your
+    // LLM into the ⋮ overflow menu (DoctorMoreMenu), closed by default — see
+    // "Doctor card action hierarchy" below, which asserts those three render
+    // as menuitems when the menu is open. Here we only assert the card still
+    // surfaces every override path: the 3 primary actions directly, plus the
+    // overflow trigger for the rest.
     const html = renderDoctorWith([openRes], [part('U1', 'CH224K')])
-    for (const label of ['Stub open', 'Stub short', 'Interactive pins', 'Import .lib…', 'Pin map']) {
+    for (const label of ['Stub open', 'Import .lib…', 'Pin map']) {
       expect(html, `action "${label}" must stay available`).toContain(label)
     }
+    expect(html, 'overflow menu trigger must stay available').toContain(
+      'data-testid="doctor-more"',
+    )
   })
 
   it('an unresolved card keeps the red "no model" pill and shows no note block', () => {
@@ -172,6 +181,54 @@ describe('ModelDoctor — documented-open cards (M9)', () => {
     store.getState().clearPartOverride('U1')
     expect(store.getState().pinMapOverrides.has('U1')).toBe(false)
     expect(render()).not.toContain('>Reset<')
+  })
+})
+
+// ─── Gemini finding 1: action hierarchy — 3 primary + ⋮ overflow menu ─────────
+
+describe('Doctor card action hierarchy (Gemini finding 1)', () => {
+  it('card shows exactly the 3 primary actions + the ⋮ trigger; menu closed', () => {
+    const html = renderDoctor(null)
+    expect(html).toContain('Import .lib')
+    expect(html).toContain('Pin map')
+    expect(html).toContain('Stub open')
+    expect(html).toContain('data-testid="doctor-more"')
+    // secondary actions are NOT in the closed-state DOM
+    expect(html).not.toContain('Stub short')
+    expect(html).not.toContain('Interactive pins')
+    expect(html).not.toContain('Ask your LLM')
+    expect(html).not.toContain('data-testid="doctor-more-menu"')
+  })
+
+  it('DoctorMoreMenu open renders the three secondary actions as menuitems', () => {
+    const items = [
+      { label: 'Stub short', onSelect: () => {} },
+      { label: 'Interactive pins', onSelect: () => {} },
+      { label: 'Ask your LLM', onSelect: () => {} },
+    ]
+    const html = renderToStaticMarkup(
+      <DoctorMoreMenu items={items} open={true} onToggle={() => {}} onClose={() => {}} />,
+    )
+    expect(html).toContain('data-testid="doctor-more-menu"')
+    expect(html).toContain('role="menu"')
+    expect((html.match(/role="menuitem"/g) ?? []).length).toBe(3)
+    for (const it_ of items) expect(html).toContain(it_.label)
+    expect(html).toContain('aria-expanded="true"')
+  })
+
+  it('DoctorMoreMenu closed renders only the trigger', () => {
+    const html = renderToStaticMarkup(
+      <DoctorMoreMenu
+        items={[{ label: 'Stub short', onSelect: () => {} }]}
+        open={false}
+        onToggle={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    expect(html).toContain('data-testid="doctor-more"')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).not.toContain('data-testid="doctor-more-menu"')
+    expect(html).not.toContain('Stub short')
   })
 })
 
