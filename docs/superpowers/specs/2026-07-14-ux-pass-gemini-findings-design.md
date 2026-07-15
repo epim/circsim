@@ -146,7 +146,13 @@ removed from the direct action row (their handlers stay).
 
 ## 2. Empty-state button hierarchy (MED)
 
-**File:** `src/renderer/src/App.tsx` (`EmptyState` component, ~lines 377–421)
+**Files:** `src/renderer/src/panels/EmptyStates.tsx` + `src/renderer/src/App.tsx`
+
+The first-run card **moves out of App.tsx** into `panels/EmptyStates.tsx` as an
+exported `NoBoardState` (pure props: `onOpen`, `onOpenSample`, `onOpenFirstLight`)
+— that file is the documented home for guided empty states, and the move is what
+makes the card testable under the SSR panel-test idiom (App.tsx imports the GL
+Viewport and can't be imported by node tests). App.tsx renders `<NoBoardState …>`.
 
 - **Open sample project** → `btnPrimary`. Moves to **first** position.
 - **Open First Light demo** → `btnSecondary`.
@@ -277,12 +283,13 @@ When minimized, the header row (after the parts summary) shows:
 
 ## 5. Net Voltages tab cue (polish)
 
-**File:** `src/renderer/src/App.tsx`
+**Files:** `src/renderer/src/ui/tabCues.ts` (new) + `src/renderer/src/App.tsx`
 
-- New pure helper, exported for tests:
+- New pure helper in `ui/tabCues.ts` (not App.tsx — App imports the GL Viewport
+  and can't be imported by node tests):
 
 ```ts
-export function _showNetsTabCue(
+export function showNetsTabCue(
   hasOpVoltages: boolean,
   netsTabSeen: boolean,
   bottomTab: 'log' | 'nets',
@@ -293,7 +300,7 @@ export function _showNetsTabCue(
 
 - App-local state: `const [netsTabSeen, setNetsTabSeen] = useState(false)`; the
   Net voltages tab's `onClick` also calls `setNetsTabSeen(true)`.
-- When `_showNetsTabCue(opVoltages != null, netsTabSeen, bottomTab)` is true, the
+- When `showNetsTabCue(opVoltages != null, netsTabSeen, bottomTab)` is true, the
   tab label renders as `Net voltages ●` — the dot is a `<span data-testid="nets-tab-cue">`
   with `color: '#f1c40f', marginLeft: 4`.
 - Static dot only — there is no stylesheet in the renderer, and Gemini's
@@ -317,9 +324,9 @@ tests of exported helpers/components. This pass follows that exactly:
    - `DoctorMoreMenu` rendered directly with `open: true` contains all three
      items with `role="menuitem"`; with `open: false` renders no menu;
    - existing selection-sync tests unchanged.
-3. **EmptyState** (new coverage in an `App`-adjacent test or inline SSR test):
-   sample-project button carries the solid primary background; the other two do
-   not; all three testids present.
+3. **EmptyStates** (`panels/__tests__/EmptyStates.test.tsx`, new): `NoBoardState`
+   SSR — sample-project button carries the solid primary background exactly once;
+   the other two are transparent outlines; all three testids present; DOM order.
 4. **InstrumentRack** (`InstrumentRack.test.tsx`): existing "Probe this net"
    tests updated for the `⌖` prefix; button still `data-testid="probe-net-btn"`.
 5. **Store** (`store/__tests__/…`): `fidelitySignature` stability (order-independent,
@@ -329,9 +336,10 @@ tests of exported helpers/components. This pass follows that exactly:
 6. **WarningsBar** (`WarningsBar.test.tsx`): banner present + minimize control
    rendered when expanded; banner absent when store's `fidelityMinimizedSig`
    matches; banner re-present when resolutions change under a stale sig.
-7. **App badge / tab cue**: `_showNetsTabCue` truth table (4 cases); SSR render
-   of App is impractical (Viewport/GL) — badge render logic is covered through
-   WarningsBar-style store assertions plus the E2E smoke run.
+7. **App badge / tab cue**: `showNetsTabCue` truth table (4 cases, in
+   `ui/__tests__/tabCues.test.ts`); SSR render of App is impractical
+   (Viewport/GL) — the badge is an exported `FidelityBadge` component in
+   WarningsBar.tsx, SSR-tested there; App wiring is covered by the E2E smoke run.
 8. **E2E**: no selector churn — `open-sample-btn`, `open-first-light-btn`,
    `probe-net-btn`, `bottom-tab-nets` all keep their testids; no E2E currently
    clicks any action that moved into the ⋮ menu (verified by grep). Full suite
