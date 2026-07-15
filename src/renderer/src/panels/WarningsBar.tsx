@@ -25,6 +25,7 @@ import {
   fidelityBannerItems,
   collapsedFidelitySummary,
   opCaveatMessage,
+  isFidelityMinimized,
   type AppStore,
   type RailNote,
 } from '../store/appStore'
@@ -55,8 +56,10 @@ export default function WarningsBar(): React.ReactElement | null {
   const crashNotice = useApp(s => s.crashNotice)
   const opCaveat = useApp(s => s.opCaveat)
   const railNotes = useApp(s => s.railNotes)
+  const fidelityMinimizedSig = useApp(s => s.fidelityMinimizedSig)
 
   const fidelity = fidelityBannerItems(resolutions)
+  const fidelityMinimized = isFidelityMinimized(fidelity, fidelityMinimizedSig)
   // M7 F9: >3 problem parts → one-line count instead of a wall of refs.
   const fidelityCollapsed = collapsedFidelitySummary(fidelity)
   // M9: when the only remaining items are documented opens ("open by design"),
@@ -74,7 +77,7 @@ export default function WarningsBar(): React.ReactElement | null {
   }
 
   const anything =
-    fidelity.length > 0 ||
+    (fidelity.length > 0 && !fidelityMinimized) ||
     convergenceCard ||
     benchToast ||
     crashNotice ||
@@ -156,11 +159,19 @@ export default function WarningsBar(): React.ReactElement | null {
       )}
 
       {/* ── Fidelity banner (persistent, non-dismissable) ─────────────────── */}
-      {fidelity.length > 0 && (
+      {fidelity.length > 0 && !fidelityMinimized && (
         <div
           style={onlyOpenByDesign ? fidelityInfoStyle : fidelityStyle}
           data-testid={onlyOpenByDesign ? 'fidelity-info' : undefined}
         >
+          <button
+            style={dismissBtn}
+            title="Minimize to a toolbar badge"
+            data-testid="fidelity-minimize"
+            onClick={() => store.getState().minimizeFidelityBanner()}
+          >
+            »
+          </button>
           <strong>{onlyOpenByDesign ? 'Open by design:' : 'Results approximate:'}</strong>{' '}
           {onlyOpenByDesign && fidelityCollapsed
             ? `${fidelity.length} parts`
@@ -267,6 +278,38 @@ function RailNoteRow({
         </button>
       </div>
     </div>
+  )
+}
+
+/**
+ * Compact header badge shown while the fidelity banner is minimized (Gemini
+ * finding 4). Exactly one of {banner, badge} is visible whenever problems
+ * exist — there is NO state with zero indication (Spec §8.6 honesty).
+ * Click / Enter / Space re-expands.
+ */
+export function FidelityBadge(): React.ReactElement | null {
+  const store = useAppStoreApi()
+  const resolutions = useApp(s => s.resolutions)
+  const minimizedSig = useApp(s => s.fidelityMinimizedSig)
+  const fidelity = fidelityBannerItems(resolutions)
+  if (fidelity.length === 0 || !isFidelityMinimized(fidelity, minimizedSig)) return null
+
+  const onlyOpenByDesign = fidelity.every(it => it.mode === 'open by design')
+  const expand = (): void => store.setState({ fidelityMinimizedSig: null })
+  return (
+    <span
+      style={onlyOpenByDesign ? badgeInfoStyle : badgeWarnStyle}
+      data-testid="fidelity-badge"
+      role="button"
+      tabIndex={0}
+      title={`${fidelity.map(it => it.ref).join(', ')} — click to expand`}
+      onClick={expand}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') expand()
+      }}
+    >
+      {onlyOpenByDesign ? `ⓘ ${fidelity.length} open by design` : `⚠ ${fidelity.length} approximate`}
+    </span>
   )
 }
 
@@ -398,4 +441,24 @@ const rawLogStyle: React.CSSProperties = {
   whiteSpace: 'pre-wrap',
   maxHeight: 160,
   overflowY: 'auto',
+}
+const badgeBase: React.CSSProperties = {
+  borderRadius: 4,
+  padding: '2px 8px',
+  fontSize: 11,
+  cursor: 'pointer',
+  userSelect: 'none',
+  whiteSpace: 'nowrap',
+}
+const badgeWarnStyle: React.CSSProperties = {
+  ...badgeBase,
+  background: '#3a2e12',
+  color: '#fde9b0',
+  border: '1px solid #5a4a22',
+}
+const badgeInfoStyle: React.CSSProperties = {
+  ...badgeBase,
+  background: '#1c2733',
+  color: '#bcd3e8',
+  border: '1px solid #2c4152',
 }

@@ -15,7 +15,7 @@ import ModelDoctor from './panels/ModelDoctor'
 import GroundSetup from './panels/GroundSetup'
 import InstrumentRack from './panels/InstrumentRack'
 import Toolbar from './panels/Toolbar'
-import WarningsBar from './panels/WarningsBar'
+import WarningsBar, { FidelityBadge } from './panels/WarningsBar'
 import CoachNotes from './panels/CoachNotes'
 import SimLog from './panels/SimLog'
 import NetVoltages from './panels/NetVoltages'
@@ -264,6 +264,7 @@ function Shell(): React.ReactElement {
             {summary.unresolved > 0 && ` · ${summary.unresolved} unresolved`}
           </span>
         )}
+        <FidelityBadge />
         {viewerOnly && (
           <span style={viewerBadge} title="Simulation can't proceed; board shown read-only">
             viewer-only

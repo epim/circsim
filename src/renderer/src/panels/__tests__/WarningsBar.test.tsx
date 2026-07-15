@@ -12,7 +12,7 @@
 import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import WarningsBar, { _applyRailOverride } from '../WarningsBar'
+import WarningsBar, { _applyRailOverride, FidelityBadge } from '../WarningsBar'
 import { AppStoreProvider } from '../../store/storeContext'
 import { createAppStore, type AppState } from '../../store/appStore'
 import { createMockSimClient } from '../../ipc/simClient'
@@ -174,5 +174,69 @@ describe('WarningsBar — gated-off rail note (Task 6)', () => {
     _applyRailOverride(store, '/VGATED', 'abc')
     expect(setRailOverride).not.toHaveBeenCalled()
     expect(powerOn).not.toHaveBeenCalled()
+  })
+})
+
+// ─── Gemini finding 4: minimizable fidelity banner + header badge ─────────────
+
+/** renderBar variant that also seeds fidelityMinimizedSig and renders the badge too. */
+function renderBarAndBadge(resolutions: Resolution[], minimize: boolean): string {
+  const store = createAppStore({ simClient: createMockSimClient() })
+  store.setState({ resolutions })
+  if (minimize) store.getState().minimizeFidelityBanner()
+  ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+    store.getState()
+  return renderToStaticMarkup(
+    <AppStoreProvider store={store}>
+      <WarningsBar />
+      <FidelityBadge />
+    </AppStoreProvider>,
+  )
+}
+
+describe('Gemini finding 4 — minimizable fidelity banner', () => {
+  it('expanded: banner shows the minimize control, badge absent', () => {
+    const html = renderBarAndBadge([unresolved('U1')], false)
+    expect(html).toContain('Results approximate')
+    expect(html).toContain('data-testid="fidelity-minimize"')
+    expect(html).not.toContain('data-testid="fidelity-badge"')
+  })
+
+  it('minimized: banner hidden, amber badge with count shown', () => {
+    const html = renderBarAndBadge([unresolved('U1'), unresolved('Q7')], true)
+    expect(html).not.toContain('Results approximate')
+    expect(html).toContain('data-testid="fidelity-badge"')
+    expect(html).toContain('⚠ 2 approximate')
+    expect(html).toContain('role="button"')
+  })
+
+  it('minimized + problem set changes → banner re-expands, badge gone', () => {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    store.setState({ resolutions: [unresolved('U1')] })
+    store.getState().minimizeFidelityBanner()
+    // a NEW problem appears after the user minimized
+    store.setState({ resolutions: [unresolved('U1'), unresolved('Q7')] })
+    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+      store.getState()
+    const html = renderToStaticMarkup(
+      <AppStoreProvider store={store}>
+        <WarningsBar />
+        <FidelityBadge />
+      </AppStoreProvider>,
+    )
+    expect(html).toContain('Results approximate')
+    expect(html).not.toContain('data-testid="fidelity-badge"')
+  })
+
+  it('only documented opens minimized → grey-blue info badge wording', () => {
+    const html = renderBarAndBadge([documentedOpen('J1'), documentedOpen('J2')], true)
+    expect(html).toContain('data-testid="fidelity-badge"')
+    expect(html).toContain('ⓘ 2 open by design')
+    expect(html).not.toContain('⚠')
+  })
+
+  it('badge title lists the refs so hover reveals detail without expanding', () => {
+    const html = renderBarAndBadge([unresolved('U1'), unresolved('Q7')], true)
+    expect(html).toMatch(/title="[^"]*U1[^"]*Q7[^"]*"/)
   })
 })
