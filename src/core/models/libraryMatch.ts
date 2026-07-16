@@ -327,3 +327,84 @@ export function selectPinMap(entry: LibraryEntry, libId: string): PinMapResult {
   )
   return { pinMap: {}, warnings }
 }
+
+// ─── Schematic-authoritative pin maps (diodes/LEDs) ──────────────────────────
+//
+// Spec: docs/superpowers/specs/2026-07-15-schematic-authoritative-pinmaps-design.md
+// Footprint-name regexes encode BELIEFS about pad-numbering conventions; an
+// attached schematic's symbol pin names (A/K) are the design files' own
+// statement of what the pads mean. When available and unambiguous, they win
+// over the regex tier (and lose to the user's Model Doctor override, which
+// the store applies post-resolution).
+
+/** Symbol pin as parsed from lib_symbols (kicad/schematic.ts SymbolSimInfo.pins). */
+export interface SchematicPin {
+  number: string
+  name: string
+  type: string
+}
+
+/**
+ * Warning pushed onto a Resolution when the schematic-derived map CONTRADICTS
+ * a confident footprint-regex map (a "D7"). The `schematic-pinmap:` prefix is
+ * the machine handle WarningsBar filters on. Agreement and gap-filling are
+ * silent — there is no contradicted belief to report.
+ */
+export const SCHEMATIC_PINMAP_NOTE =
+  'schematic-pinmap: pin map taken from the schematic (pin 1 = A) — the footprint convention would have reversed this part; override in Model Doctor if the schematic is stale'
+
+function isPolarityPermutation(map: PinMap | undefined): boolean {
+  if (!map) return false
+  const keys = Object.keys(map).sort()
+  const values = Object.values(map).sort()
+  return keys.join(',') === '1,2' && values.join(',') === '1,2'
+}
+
+/**
+ * True iff EVERY map on the entry (pinMaps values + defaultPinMap when
+ * present) is a permutation of {'1','2'} — the diode/LED model-card shape.
+ * Restricts the schematic tier to parts where "A/K" fully determines wiring.
+ */
+export function isTwoTerminalPolarizedEntry(entry: LibraryEntry): boolean {
+  const maps = Object.values(entry.pinMaps ?? {})
+  if (entry.defaultPinMap) maps.push(entry.defaultPinMap)
+  return maps.length > 0 && maps.every(isPolarityPermutation)
+}
+
+/**
+ * Derive a diode/LED pin map from schematic symbol pin names.
+ *
+ * Returns { anodePad: '1', cathodePad: '2' } (SPICE diode terminal order:
+ * 1 = anode, 2 = cathode) when ALL guard rails hold, else null — null means
+ * "fall through to footprint-regex selection", never an error:
+ *   - entry is a model-card whose maps all permute {'1','2'};
+ *   - pins dedupe (by number) to exactly two, named A and K
+ *     (case-insensitive, trimmed);
+ *   - both pin numbers exist in the routed part's pads (stale-schematic fuse).
+ */
+export function pinMapFromSchematicPins(
+  entry: LibraryEntry,
+  pins: SchematicPin[] | undefined,
+  padNumbers: ReadonlySet<string>,
+): PinMap | null {
+  if (!pins || pins.length === 0) return null
+  if (entry.model.type !== 'model-card' || !isTwoTerminalPolarizedEntry(entry)) return null
+
+  const byNumber = new Map<string, string>()
+  for (const p of pins) {
+    if (!byNumber.has(p.number)) byNumber.set(p.number, p.name.trim().toUpperCase())
+  }
+  if (byNumber.size !== 2) return null
+
+  let anodePad: string | undefined
+  let cathodePad: string | undefined
+  for (const [number, name] of byNumber) {
+    if (name === 'A') anodePad = number
+    else if (name === 'K') cathodePad = number
+    else return null
+  }
+  if (anodePad === undefined || cathodePad === undefined) return null
+  if (!padNumbers.has(anodePad) || !padNumbers.has(cathodePad)) return null
+
+  return { [anodePad]: '1', [cathodePad]: '2' }
+}
