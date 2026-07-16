@@ -10,6 +10,8 @@ import { describe, it, expect } from 'vitest'
 import type { Circuit, Part } from '../../netlist/extract'
 import type { SchematicSimData, SymbolSimInfo } from '../../kicad/schematic'
 import { resolveAll } from '../resolve'
+import { SCHEMATIC_PINMAP_NOTE } from '../libraryMatch'
+import type { LibraryEntry } from '../types'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -576,5 +578,103 @@ describe('numeric value emission (no letter suffixes in card)', () => {
       expect(r.model.card).not.toMatch(/100n/i)
       expect(r.model.card).toContain('1e-7')
     }
+  })
+})
+
+// ─── Schematic-authoritative diode pin maps (spec 2026-07-15) ────────────────
+
+describe('tier 3 — schematic A/K pins override footprint-convention pin maps', () => {
+  /** Pre-f6680b6 SS54 entry shape: KiCad-convention key that ALSO matches the
+   *  bare EasyEDA dimension-pattern name — the exact D7 bug. */
+  const KICAD_ONLY_SS54: LibraryEntry = {
+    id: 'test-ss54-kicad-only',
+    match: { mpn: ['SS54'] },
+    model: { type: 'model-card', file: 'diodes.lib', name: 'DSS54' },
+    pinMaps: { '(D_)?(SMC|SMB|SMA|DO-214|DO-201).*': { '1': '2', '2': '1' } },
+    defaultPinMap: { '1': '2', '2': '1' },
+    provenance: 'test fixture — pre-fix entry shape',
+  }
+
+  function d7SchData(pinNames: [string, string]): SchematicSimData {
+    const info: SymbolSimInfo = {
+      value: 'SS54',
+      sim: {},
+      pins: [
+        { number: '1', name: pinNames[0], type: 'passive' },
+        { number: '2', name: pinNames[1], type: 'passive' },
+      ],
+      noConnects: [],
+    }
+    return new Map([['D7', info]])
+  }
+
+  it('D7 replay: schematic (1=A,2=K) beats a wrong-confident regex map + note pushed', () => {
+    const circuit = makeCircuit([makePart('D7', 'SS54', 'SMC_L7.1-W6.2-LS8.1-R-RD')])
+    const [r] = resolveAll(circuit, d7SchData(['A', 'K']), undefined, [KICAD_ONLY_SS54])
+    expect(r.status).toBe('ok')
+    expect(r.tier).toBe(3)
+    if (r.model && 'pinMap' in r.model) {
+      expect(r.model.pinMap).toEqual({ '1': '1', '2': '2' })
+    } else {
+      expect.fail('expected a model with a pinMap')
+    }
+    expect(r.warnings).toContain(SCHEMATIC_PINMAP_NOTE)
+  })
+
+  it('agreement: schematic matches the regex map → same map, NO note', () => {
+    // KiCad-convention symbol (1=K, 2=A) agrees with the entry's cathode-first map.
+    const circuit = makeCircuit([makePart('D7', 'SS54', 'Diode_SMD:D_SMC')])
+    const [r] = resolveAll(circuit, d7SchData(['K', 'A']), undefined, [KICAD_ONLY_SS54])
+    if (r.model && 'pinMap' in r.model) {
+      expect(r.model.pinMap).toEqual({ '1': '2', '2': '1' })
+    }
+    expect(r.warnings.some(w => w.startsWith('schematic-pinmap:'))).toBe(false)
+  })
+
+  it('agreement against the REAL index (JLC keys present): anode-first, NO note', async () => {
+    // Post-f6680b6 the real ss54 entry maps the bare EasyEDA name anode-first,
+    // agreeing with the schematic — the correction note must NOT appear.
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const entries = (
+      JSON.parse(
+        readFileSync(join(process.cwd(), 'resources/models/index.json'), 'utf8'),
+      ) as { entries: LibraryEntry[] }
+    ).entries
+    const circuit = makeCircuit([makePart('D7', 'SS54', 'SMC_L7.1-W6.2-LS8.1-R-RD')])
+    const [r] = resolveAll(circuit, d7SchData(['A', 'K']), undefined, entries)
+    expect(r.status).toBe('ok')
+    if (r.model && 'pinMap' in r.model) {
+      expect(r.model.pinMap).toEqual({ '1': '1', '2': '2' })
+    }
+    expect(r.warnings.some(w => w.startsWith('schematic-pinmap:'))).toBe(false)
+  })
+
+  it('gap-fill: no regex match → schematic map applied, pinmap-unverified DROPPED', () => {
+    const circuit = makeCircuit([makePart('D7', 'SS54', 'WeirdLib:NoMatchName')])
+    const [r] = resolveAll(circuit, d7SchData(['A', 'K']), undefined, [KICAD_ONLY_SS54])
+    if (r.model && 'pinMap' in r.model) {
+      expect(r.model.pinMap).toEqual({ '1': '1', '2': '2' })
+    }
+    expect(r.warnings.some(w => w.includes('pinmap-unverified'))).toBe(false)
+    expect(r.warnings.some(w => w.startsWith('schematic-pinmap:'))).toBe(false)
+  })
+
+  it('no schematic → regex tier behavior unchanged (regression pin)', () => {
+    const circuit = makeCircuit([makePart('D7', 'SS54', 'SMC_L7.1-W6.2-LS8.1-R-RD')])
+    const [r] = resolveAll(circuit, undefined, undefined, [KICAD_ONLY_SS54])
+    if (r.model && 'pinMap' in r.model) {
+      expect(r.model.pinMap).toEqual({ '1': '2', '2': '1' }) // the (wrong) regex belief — fixture is pre-fix
+    }
+    expect(r.warnings.some(w => w.startsWith('schematic-pinmap:'))).toBe(false)
+  })
+
+  it('guard-rail fall-through: non-A/K pin names → regex tier, no note', () => {
+    const circuit = makeCircuit([makePart('D7', 'SS54', 'Diode_SMD:D_SMC')])
+    const [r] = resolveAll(circuit, d7SchData(['1', '2']), undefined, [KICAD_ONLY_SS54])
+    if (r.model && 'pinMap' in r.model) {
+      expect(r.model.pinMap).toEqual({ '1': '2', '2': '1' })
+    }
+    expect(r.warnings.some(w => w.startsWith('schematic-pinmap:'))).toBe(false)
   })
 })

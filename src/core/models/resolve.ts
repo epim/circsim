@@ -26,7 +26,13 @@ import type { Circuit, Part } from '../netlist/extract'
 import type { SchematicSimData } from '../kicad/schematic'
 import type { LibraryEntry, PinMap, ResolvedModel, Resolution } from './types'
 import { parseValue } from '../values/parseValue'
-import { matchLibraryEntry, selectPinMap } from './libraryMatch'
+import {
+  matchLibraryEntry,
+  selectPinMap,
+  pinMapFromSchematicPins,
+  SCHEMATIC_PINMAP_NOTE,
+  type SchematicPin,
+} from './libraryMatch'
 import type { PartDescriptor } from './libraryMatch'
 
 // ─── BOM type seam ───────────────────────────────────────────────────────────
@@ -460,6 +466,12 @@ function makeTier6(
 
 // ─── Tier 3: Bundled library match ───────────────────────────────────────────
 
+/** Key/value equality for pin maps (2-entry objects — order-insensitive). */
+function pinMapsEqual(a: PinMap, b: PinMap): boolean {
+  const ka = Object.keys(a)
+  return ka.length === Object.keys(b).length && ka.every(k => a[k] === b[k])
+}
+
 /**
  * Attempt tier-3 resolution by matching the part against the bundled library.
  *
@@ -474,6 +486,7 @@ function makeTier6(
 function tryTier3(
   part: Part,
   library: LibraryEntry[],
+  schematicPins?: SchematicPin[],
 ): Resolution | null {
   // Build a PartDescriptor for the matcher
   // MPN can come from part.properties['mpn'] or 'MPN' (case variants)
@@ -532,9 +545,32 @@ function tryTier3(
 
   const warnings: string[] = []
 
-  // Select pin map
-  const { pinMap, warnings: pinWarnings } = selectPinMap(entry, part.libId)
-  warnings.push(...pinWarnings)
+  // Select pin map. Footprint-name regexes encode BELIEFS about pad-numbering
+  // conventions; attached-schematic pin names (A/K) are the design files' own
+  // statement of pad semantics and win when unambiguous (spec 2026-07-15).
+  // The user's Model Doctor override still beats both — the store applies it
+  // post-resolution.
+  const regexResult = selectPinMap(entry, part.libId)
+  const schematicMap = pinMapFromSchematicPins(
+    entry,
+    schematicPins,
+    new Set(part.padNet.keys()),
+  )
+
+  let pinMap: PinMap
+  if (schematicMap) {
+    pinMap = schematicMap
+    const regexConfident = regexResult.warnings.length === 0
+    if (regexConfident && !pinMapsEqual(schematicMap, regexResult.pinMap)) {
+      // A "D7": the regex matched confidently but had the polarity reversed.
+      warnings.push(SCHEMATIC_PINMAP_NOTE)
+    }
+    // Regex fallback warnings (pinmap-unverified) intentionally dropped:
+    // the schematic just verified the map.
+  } else {
+    pinMap = regexResult.pinMap
+    warnings.push(...regexResult.warnings)
+  }
 
   // Build the resolved model
   let model: ResolvedModel
@@ -628,7 +664,7 @@ function resolvePart(
 
   // ── Tier 3: Bundled library match ─────────────────────────────────────────
   if (_library && _library.length > 0) {
-    const tier3 = tryTier3(part, _library)
+    const tier3 = tryTier3(part, _library, schematicSimData?.get(part.ref)?.pins)
     if (tier3) return tier3
   }
 
