@@ -240,3 +240,56 @@ describe('Gemini finding 4 — minimizable fidelity banner', () => {
     expect(html).toMatch(/title="[^"]*U1[^"]*Q7[^"]*"/)
   })
 })
+
+// ─── Schematic pin-map correction notes (spec 2026-07-15) ────────────────────
+
+const SCHEM_NOTE =
+  'schematic-pinmap: pin map taken from the schematic (pin 1 = A) — the footprint convention would have reversed this part; override in Model Doctor if the schematic is stale'
+
+function schematicCorrected(ref: string): Resolution {
+  return {
+    ref,
+    status: 'ok',
+    tier: 3,
+    warnings: [SCHEM_NOTE],
+    model: { kind: 'subckt', libFile: 'diodes.lib', subcktName: 'DSS54', pinMap: { '1': '1', '2': '2' } },
+  }
+}
+
+describe('schematic pin-map notes — informational row per corrected ref', () => {
+  it('a resolution carrying the schematic-pinmap warning → note row with ref + copy', () => {
+    const html = renderBar([schematicCorrected('D7')])
+    expect(html).toContain('data-testid="schematic-pinmap-note"')
+    expect(html).toContain('data-ref="D7"')
+    expect(html).toContain('D7')
+    expect(html).toContain('pin map corrected from schematic (A/K)')
+    expect(html).toContain('footprint convention was reversed')
+    expect(html).toContain('Override in Model Doctor if the schematic is stale')
+  })
+
+  it('two corrected refs → two rows', () => {
+    const html = renderBar([schematicCorrected('D7'), schematicCorrected('D8')])
+    expect(html.match(/data-testid="schematic-pinmap-note"/g)).toHaveLength(2)
+    expect(html).toContain('data-ref="D7"')
+    expect(html).toContain('data-ref="D8"')
+  })
+
+  it('no schematic-pinmap warnings → no rows (and bar stays hidden when nothing else)', () => {
+    const ok: Resolution = {
+      ref: 'D1',
+      status: 'ok',
+      tier: 3,
+      warnings: [],
+      model: { kind: 'subckt', libFile: 'diodes.lib', subcktName: 'DSS54', pinMap: { '1': '2', '2': '1' } },
+    }
+    const html = renderBar([ok])
+    expect(html).not.toContain('schematic-pinmap-note')
+    expect(html).toBe('') // nothing else to show → component returns null
+  })
+
+  it('note is NOT counted by the fidelity banner/badge (accuracy upgrade, not approximation)', () => {
+    const html = renderBar([schematicCorrected('D7')])
+    expect(html).not.toContain('Results approximate')
+    expect(html).not.toContain('approximate')
+  })
+})

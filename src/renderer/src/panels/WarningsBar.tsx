@@ -66,6 +66,15 @@ export default function WarningsBar(): React.ReactElement | null {
   // the banner is informational — a deliberate library decision, not a problem.
   const onlyOpenByDesign =
     fidelity.length > 0 && fidelity.every(it => it.mode === 'open by design')
+
+  // Schematic pin-map corrections (spec 2026-07-15): the attached schematic's
+  // A/K pin names contradicted a confident footprint-convention map and won.
+  // Informational (grey-blue) — the model got MORE accurate, so this is
+  // deliberately NOT part of the fidelity banner/badge counts.
+  const schematicPinNotes = resolutions.filter(r =>
+    r.warnings.some(w => w.startsWith('schematic-pinmap:')),
+  )
+
   const [rawOpen, setRawOpen] = useState(false)
 
   // "open Model Doctor": the Doctor drawer (left dock) is already visible
@@ -82,7 +91,8 @@ export default function WarningsBar(): React.ReactElement | null {
     benchToast ||
     crashNotice ||
     opCaveat ||
-    railNotes.length > 0
+    railNotes.length > 0 ||
+    schematicPinNotes.length > 0
   if (!anything) return null
 
   return (
@@ -231,6 +241,20 @@ export default function WarningsBar(): React.ReactElement | null {
       {railNotes.map(note => (
         <RailNoteRow key={`${note.ref}:${note.kicadName}`} note={note} store={store} />
       ))}
+
+      {/* ── Schematic pin-map corrections (informational, spec 2026-07-15) ── */}
+      {schematicPinNotes.map(r => (
+        <div
+          key={r.ref}
+          style={schematicPinNoteStyle}
+          data-testid="schematic-pinmap-note"
+          data-ref={r.ref}
+        >
+          ⓘ <span style={refStyle}>{r.ref}</span>: pin map corrected from schematic
+          (A/K) — footprint convention was reversed. Override in Model Doctor if the
+          schematic is stale.
+        </div>
+      ))}
     </div>
   )
 }
@@ -376,6 +400,12 @@ const railBtnStyle: React.CSSProperties = {
   padding: '4px 8px',
   fontSize: 12,
   cursor: 'pointer',
+}
+const schematicPinNoteStyle: React.CSSProperties = {
+  ...baseRow,
+  background: '#1c2733',
+  color: '#bcd3e8',
+  borderTop: '1px solid #2c4152',
 }
 const convergeStyle: React.CSSProperties = {
   ...baseRow,
