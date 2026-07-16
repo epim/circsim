@@ -20,6 +20,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { createAppStore, resolutionSummary, parseAlterCommand, AUTO_SUPPLY_ID } from '../appStore'
 import { createMockSimClient } from '../../ipc/simClient'
+import type { SymbolSimInfo } from '../../../../core/kicad/schematic'
 
 const fixturesDir = join(__dirname, '../../../../../fixtures')
 
@@ -330,6 +331,35 @@ describe('appStore — pin-map override reaches the resolved model (M4)', () => 
     expect(d1PinMap(store)).toEqual({ '1': '1', '2': '2' })
     store.getState().clearPartOverride('D1')
     expect(d1PinMap(store)).toEqual(original)
+  })
+
+  it('precedence: Model Doctor override > schematic A/K map > footprint regex', () => {
+    const store = storeWithLibrary()
+    const original = d1PinMap(store)
+    expect(original).toEqual({ '1': '2', '2': '1' }) // KiCad-convention LED default
+
+    // Attach schematic data for D1 with pin 1 = A (contradicts the regex map)
+    // via direct state injection (house store-test idiom), then re-resolve.
+    const info: SymbolSimInfo = {
+      value: 'LED',
+      sim: {},
+      pins: [
+        { number: '1', name: 'A', type: 'passive' },
+        { number: '2', name: 'K', type: 'passive' },
+      ],
+      noConnects: [],
+    }
+    store.setState({ schematicSimData: new Map([['D1', info]]) })
+    store.getState().reResolve()
+    expect(d1PinMap(store)).toEqual({ '1': '1', '2': '2' }) // schematic tier won
+
+    // The schematic-vs-regex contradiction is reported on the resolution.
+    const d1 = store.getState().resolutions.find(r => r.ref === 'D1')
+    expect(d1?.warnings.some(w => w.startsWith('schematic-pinmap:'))).toBe(true)
+
+    // Now the user's Model Doctor override — highest precedence — wins.
+    store.getState().setPinMap('D1', { '1': '2', '2': '1' })
+    expect(d1PinMap(store)).toEqual({ '1': '2', '2': '1' })
   })
 })
 

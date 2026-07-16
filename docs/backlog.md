@@ -2,7 +2,16 @@
 
 ## Critic check: schematic polarity audit for diodes/LEDs
 
-**What:** when a schematic is attached (the picker flow), audit every
+**Status: SUPERSEDED (2026-07-15)** by
+`docs/superpowers/specs/2026-07-15-schematic-authoritative-pinmaps-design.md` —
+implemented as an auto-correcting pin-map precedence tier (schematic A/K pin
+names above footprint regexes, below Model Doctor overrides) plus a
+WarningsBar note, NOT a Critic finding: a schematic-vs-footprint mismatch can
+only ever be circsim-side (the netlist links schematic and PCB), so a
+board-risk flag would be false by construction. The rationale below is kept
+for the trail.
+
+**What (original idea):** when a schematic is attached (the picker flow), audit every
 two-terminal polarized part: compare the applied SPICE pin map against the
 symbol's pin names (`A`/`K` for diodes/LEDs — ground truth in the design
 files) and flag any part where the model's anode/cathode assignment
