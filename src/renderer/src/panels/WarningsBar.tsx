@@ -29,6 +29,7 @@ import {
   type AppStore,
   type RailNote,
 } from '../store/appStore'
+import { SCHEMATIC_PINMAP_PREFIX } from '../../../core/models/libraryMatch'
 
 /**
  * Apply a manual rail-voltage override (from the gated-off note's inline entry)
@@ -72,7 +73,7 @@ export default function WarningsBar(): React.ReactElement | null {
   // Informational (grey-blue) — the model got MORE accurate, so this is
   // deliberately NOT part of the fidelity banner/badge counts.
   const schematicPinNotes = resolutions.filter(r =>
-    r.warnings.some(w => w.startsWith('schematic-pinmap:')),
+    r.warnings.some(w => w.startsWith(SCHEMATIC_PINMAP_PREFIX)),
   )
 
   const [rawOpen, setRawOpen] = useState(false)

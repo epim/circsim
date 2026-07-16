@@ -350,8 +350,11 @@ export interface SchematicPin {
  * the machine handle WarningsBar filters on. Agreement and gap-filling are
  * silent — there is no contradicted belief to report.
  */
+/** Machine prefix of SCHEMATIC_PINMAP_NOTE — the handle WarningsBar filters on. */
+export const SCHEMATIC_PINMAP_PREFIX = 'schematic-pinmap:'
+
 export const SCHEMATIC_PINMAP_NOTE =
-  'schematic-pinmap: pin map taken from the schematic (pin 1 = A) — the footprint convention would have reversed this part; override in Model Doctor if the schematic is stale'
+  `${SCHEMATIC_PINMAP_PREFIX} pin map taken from the schematic (pin 1 = A) — the footprint convention would have reversed this part; override in Model Doctor if the schematic is stale`
 
 function isPolarityPermutation(map: PinMap | undefined): boolean {
   if (!map) return false

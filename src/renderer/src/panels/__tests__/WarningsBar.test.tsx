@@ -17,6 +17,7 @@ import { AppStoreProvider } from '../../store/storeContext'
 import { createAppStore, type AppState } from '../../store/appStore'
 import { createMockSimClient } from '../../ipc/simClient'
 import type { Resolution } from '../../../../core/models/types'
+import { SCHEMATIC_PINMAP_NOTE } from '../../../../core/models/libraryMatch'
 
 function unresolved(ref: string): Resolution {
   return { ref, status: 'unresolved', tier: 6, warnings: [] }
@@ -243,15 +244,12 @@ describe('Gemini finding 4 — minimizable fidelity banner', () => {
 
 // ─── Schematic pin-map correction notes (spec 2026-07-15) ────────────────────
 
-const SCHEM_NOTE =
-  'schematic-pinmap: pin map taken from the schematic (pin 1 = A) — the footprint convention would have reversed this part; override in Model Doctor if the schematic is stale'
-
 function schematicCorrected(ref: string): Resolution {
   return {
     ref,
     status: 'ok',
     tier: 3,
-    warnings: [SCHEM_NOTE],
+    warnings: [SCHEMATIC_PINMAP_NOTE],
     model: { kind: 'subckt', libFile: 'diodes.lib', subcktName: 'DSS54', pinMap: { '1': '1', '2': '2' } },
   }
 }
