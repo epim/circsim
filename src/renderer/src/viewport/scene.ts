@@ -170,12 +170,18 @@ export interface SceneManager {
   pickNetAt(xPx: number, yPx: number, width: number, height: number): number | null
 
   /**
-   * Bench leads: generalized pixel-space hit-test. Copper hit → { netId },
-   * component box hit → { ref }, miss → null. pickNetAt remains for callers
-   * that only accept nets.
+   * Bench leads: generalized pixel-space hit-test. Scans ALL hits along the
+   * ray (nearest → farthest) via the picker's raycastTargets — not just the
+   * single nearest hit — so a net-accepting jack (e.g. a voltage probe) can
+   * still find copper that is occluded by a nearer component placeholder box
+   * (the common case: a pad sitting directly under its own component body).
+   * Carries whichever of netId/ref were found — BOTH keys when both a net and
+   * a component are along the ray; resolveDrop (bench/leads.ts) then picks
+   * whichever key matches the dragged jack's `accepts`. Miss → null.
+   * pickNetAt remains for callers that only accept nets.
    */
   pickAttachTargetAt(xPx: number, yPx: number, width: number, height: number):
-    { netId: number } | { ref: string } | null
+    { netId?: number; ref?: string } | null
 
   /**
    * Bench leads: project net + component anchor world positions to canvas px
@@ -776,11 +782,12 @@ export function createSceneManager(): SceneManager {
       const cam = getActiveCamera()
       const ndcX = (xPx / width) * 2 - 1
       const ndcY = (yPx / height) * -2 + 1
-      const hit = picker.raycastFirst({ x: ndcX, y: ndcY }, cam)
+      const hit = picker.raycastTargets({ x: ndcX, y: ndcY }, cam)
       if (!hit) return null
-      if (hit.netId !== undefined) return { netId: hit.netId }
-      if (hit.ref !== undefined) return { ref: hit.ref }
-      return null
+      const result: { netId?: number; ref?: string } = {}
+      if (hit.netId !== undefined) result.netId = hit.netId
+      if (hit.ref !== undefined) result.ref = hit.ref
+      return result
     },
 
     projectAnchors(netIds, refs) {

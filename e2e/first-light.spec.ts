@@ -17,15 +17,17 @@
  *      publishLedGlow on every op solve) until max > 0.05 — the LED is lit.
  *      Cross-check the <html data-led-glow-max> mirror attribute.
  *   5. Bench leads: assert the auto-attached supply + ground already render as
- *      drawn leads (lead-path SVG elements), then add an I-probe from the
+ *      drawn leads (lead-path SVG elements), then add a voltage-probe from the
  *      palette and drag its open jack onto the board — dropped on the first
  *      lead-clip's projected anchor (data-x/data-y). On this 2-part demo
  *      board VIN/GND are single-pad nets whose only pad sits directly under
- *      its component's 3D body, so a raycast there hits the *component*
- *      (ref: "D1"), not the net — a voltage-probe (accepts a net) can never
- *      land there, but a current-probe (accepts a component) does,
- *      deterministically. Assert the lead count grows by one and the probe's
- *      jack goes from data-wired="false" to wired.
+ *      its component's 3D body, so a naive nearest-hit raycast there would
+ *      resolve to the *component* (ref: "D1"), not the net. The hit-test
+ *      (scene.ts pickAttachTargetAt via picking.ts raycastTargets) scans the
+ *      full ray instead of just the nearest hit, so the net-accepting
+ *      voltage-probe jack still lands on the occluded copper — exactly the
+ *      gesture this test proves end-to-end. Assert the lead count grows by
+ *      one and the probe's jack goes from data-wired="false" to wired.
  *   6. Turn the supply knob DOWN (the tactile path, not the numeric field):
  *      a 20 px downward drag on supply-volts-knob (0-30 V range) clamps the
  *      5 V supply to 0 V (DragKnob math: (startY-clientY)/100 * (max-min) =
@@ -141,14 +143,14 @@ test.describe('First Light E2E', () => {
     const leadCountBefore = await leadPaths.count()
     expect(leadCountBefore).toBeGreaterThanOrEqual(2) // supply + ground
 
-    // 5. Run a lead: add an I-probe from the palette, drag its open jack onto
-    //    the board. Drop target: the first lead-clip's anchor (data-x/data-y
-    //    are container-relative px). That pixel is a component-covered pad
-    //    (see comment above), so the current-probe's component-accepting
-    //    jack attaches deterministically where a net-accepting jack could not.
+    // 5. Run a lead: add a voltage-probe from the palette, drag its open jack
+    //    onto the board. Drop target: the first lead-clip's anchor
+    //    (data-x/data-y are container-relative px). That pixel is a
+    //    component-covered pad (see comment above) — proving the net-accepting
+    //    jack attaches through the occluding component box.
     await page.locator('[data-testid="add-instrument-btn"]').click()
-    await page.locator('[data-testid="palette-current-probe"]').click()
-    const openJack = page.locator('[data-testid^="jack-current_probe"][data-wired="false"]')
+    await page.locator('[data-testid="palette-voltage-probe"]').click()
+    const openJack = page.locator('[data-testid^="jack-voltage_probe"][data-wired="false"]')
     await expect(openJack).toBeVisible()
     const clip = page.locator('[data-testid="lead-clip"]').first()
     const clipX = Number(await clip.getAttribute('data-x'))

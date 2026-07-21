@@ -124,6 +124,28 @@ export interface PickingController {
   ): { netId?: number; ref?: string; point: THREE.Vector3 } | null
 
   /**
+   * Scan the FULL sorted hit list (nearest → farthest, same list
+   * intersectObjects already returns) and return whichever of netId/ref
+   * resolve to a registered object — carrying BOTH keys when a net hit AND a
+   * component hit are both present along the ray. This matters because a
+   * component placeholder box commonly OCCLUDES its own pad's copper (the
+   * pad sits directly under the component body) — `raycastFirst` would only
+   * ever see the nearer component and never the net underneath it.
+   *
+   * `point` is always the NEAREST hit's world position, regardless of
+   * whether that nearest hit is the net or the component. Returns null only
+   * when the ray hits nothing that resolves to either a netId or a ref.
+   *
+   * Bench Leads' pickAttachTargetAt (scene.ts) uses this so a net-accepting
+   * jack (e.g. a voltage probe) can still attach to copper that a nearer
+   * component box would otherwise hide from raycastFirst.
+   */
+  raycastTargets(
+    ndc: { x: number; y: number },
+    camera: THREE.Camera
+  ): { netId?: number; ref?: string; point: THREE.Vector3 } | null
+
+  /**
    * Programmatically highlight a net + component refs via the SAME emissive boost
    * the hover path uses (read-only, no geometry change). Passing null/[] clears
    * the respective highlight. Used by the Board Critic to spotlight a finding's
@@ -300,6 +322,27 @@ export function createPicker(
         ref:   resolved.ref,
         point: hits[0].point,
       }
+    },
+
+    raycastTargets(ndc, camera) {
+      raycaster.setFromCamera(new THREE.Vector2(ndc.x, ndc.y), camera)
+      const hits = raycaster.intersectObjects(getCandidateObjects(), false)
+      if (hits.length === 0) return null
+
+      // hits is sorted nearest→farthest; capture the FIRST (nearest) resolved
+      // netId and the FIRST resolved ref independently, so a nearer component
+      // box doesn't hide a net hit farther along the same ray (and vice versa).
+      let netId: number | undefined
+      let ref: string | undefined
+      for (const hit of hits) {
+        const resolved = resolveIntersection(hit)
+        if (netId === undefined && resolved.netId !== undefined) netId = resolved.netId
+        if (ref === undefined && resolved.ref !== undefined) ref = resolved.ref
+        if (netId !== undefined && ref !== undefined) break
+      }
+
+      if (netId === undefined && ref === undefined) return null
+      return { netId, ref, point: hits[0].point }
     },
 
     setExternalHighlight(netId, refs) {

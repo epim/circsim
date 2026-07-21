@@ -631,3 +631,53 @@ describe('raycastFirst — component box path (bench lead clamp drops)', () => {
     expect(hit!.netId).toBeUndefined()
   })
 })
+
+// ─── raycastTargets — occlusion-aware hit-test (Bench Leads net-drop fix) ─────
+
+describe('raycastTargets — returns both net and component under the cursor', () => {
+  it('finds the net hit BEHIND a nearer component box, unlike raycastFirst', () => {
+    const picker = createPicker(() => {})
+
+    // Copper pad sitting at the board surface (z=0) — the common case: a
+    // pad directly under its own component's placeholder body.
+    const copper = makePlaneMesh(0, 0, 4, 4)
+    picker.registerCopperMesh(copper, 42)
+
+    // Component box directly above the pad, NEARER the camera, same XY.
+    const boxGeo = new THREE.BoxGeometry(4, 4, 2)
+    const box = new THREE.Mesh(boxGeo, new THREE.MeshStandardMaterial())
+    box.position.set(0, 0, 5) // spans z:[4,6] — above the copper at z=0
+    box.updateMatrixWorld(true)
+    picker.registerComponentBox(box, 'D1')
+
+    const cam = new THREE.OrthographicCamera(-50, 50, 50, -50, 0.1, 1000)
+    cam.position.set(0, 0, 200) // above both — sees the box first, then the pad
+    cam.lookAt(0, 0, 0)
+    cam.updateProjectionMatrix()
+    cam.updateMatrixWorld(true)
+
+    // Pin the contrast: raycastFirst only reports the NEAREST hit (the box).
+    const nearestOnly = picker.raycastFirst({ x: 0, y: 0 }, cam)
+    expect(nearestOnly).not.toBeNull()
+    expect(nearestOnly!.ref).toBe('D1')
+    expect(nearestOnly!.netId).toBeUndefined()
+
+    // raycastTargets scans the FULL hit list and returns BOTH — this is what
+    // lets a net-accepting jack (e.g. a voltage probe) still find the pad.
+    const both = picker.raycastTargets({ x: 0, y: 0 }, cam)
+    expect(both).not.toBeNull()
+    expect(both!.ref).toBe('D1')
+    expect(both!.netId).toBe(42)
+  })
+
+  it('returns null when the ray misses everything', () => {
+    const picker = createPicker(() => {})
+    const cam = makeTopDownCamera()
+
+    const mesh = makePlaneMesh(10, -10, 2, 2)
+    picker.registerCopperMesh(mesh, 1)
+
+    const ndc = worldToNDC(45, 45)
+    expect(picker.raycastTargets(ndc, cam)).toBeNull()
+  })
+})
