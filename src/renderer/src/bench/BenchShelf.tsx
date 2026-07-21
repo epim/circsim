@@ -164,7 +164,12 @@ const addBtnStyle: React.CSSProperties = {
   borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: 12,
 }
 const paletteStyle: React.CSSProperties = {
-  position: 'absolute', right: 0, bottom: '110%', zIndex: 30,
+  // Open DOWNWARD from the add button into the shelf body. Opening upward
+  // (bottom:110%) overflowed above the top of <main> (overflow:hidden) in
+  // short windows, where it was clipped and the click landed on the toolbar
+  // behind it — a real small-window bug that broke instrument-adding on
+  // constrained displays (e.g. CI). Downward growth stays inside main.
+  position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 30,
   flexDirection: 'column', gap: 2, padding: 6,
   background: '#1e1e2e', border: '1px solid #3a3a55', borderRadius: 6,
 }
