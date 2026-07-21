@@ -139,6 +139,23 @@ export function clearTerminal(inst: Instrument, terminal: Terminal): Instrument 
   return applyTerminal(inst, terminal, { kind: 'net', netId: UNWIRED })
 }
 
+/**
+ * Pot mode toggle (spec §5): the A/Hi and W wires survive the switch — A and
+ * Hi are the same physical jack (see jacksFor) — and only Lo is added
+ * (unwired) or discarded.
+ */
+export function potModeSwitch(
+  inst: Extract<Instrument, { kind: 'potentiometer' }>,
+): Instrument {
+  return inst.mode === 'rheostat'
+    ? { kind: 'potentiometer', mode: 'divider', id: inst.id,
+        netHi: inst.netA, netW: inst.netW, netLo: UNWIRED,
+        totalOhms: inst.totalOhms, wiperPct: inst.wiperPct }
+    : { kind: 'potentiometer', mode: 'rheostat', id: inst.id,
+        netA: inst.netHi, netW: inst.netW,
+        totalOhms: inst.totalOhms, wiperPct: inst.wiperPct }
+}
+
 /** Drop resolution: a raycast hit is valid only if the jack accepts its kind. */
 export function resolveDrop(
   hit: { netId?: number; ref?: string } | null,

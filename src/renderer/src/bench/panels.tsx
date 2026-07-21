@@ -14,7 +14,7 @@ import React from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
 import { DragKnob, NumericField } from './controls'
 import { JackView, type JackHandlers } from './JackView'
-import { jacksFor, GROUND_INST_ID } from './leads'
+import { jacksFor, GROUND_INST_ID, potModeSwitch } from './leads'
 import { UNWIRED } from '../../../core/spicegen/instruments'
 import type { Instrument } from '../../../core/spicegen/instruments'
 
@@ -152,19 +152,7 @@ export function PotPanel({ inst, handlers }: PanelProps<'potentiometer'>): React
   const store = useAppStoreApi()
   const update = (next: Instrument): void => store.getState().updateInstrument(inst.id, next)
   const switchMode = (): void => {
-    const next: Instrument =
-      inst.mode === 'rheostat'
-        ? {
-            kind: 'potentiometer', mode: 'divider', id: inst.id,
-            netHi: UNWIRED, netW: UNWIRED, netLo: UNWIRED,
-            totalOhms: inst.totalOhms, wiperPct: inst.wiperPct,
-          }
-        : {
-            kind: 'potentiometer', mode: 'rheostat', id: inst.id,
-            netA: UNWIRED, netW: UNWIRED,
-            totalOhms: inst.totalOhms, wiperPct: inst.wiperPct,
-          }
-    update(next)
+    update(potModeSwitch(inst))
   }
   return (
     <div style={faceStyle}>

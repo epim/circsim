@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { UNWIRED, type Instrument } from '../../../../core/spicegen/instruments'
 import {
-  jacksFor, defaultBenchInstrument, applyTerminal, clearTerminal, resolveDrop,
+  jacksFor, defaultBenchInstrument, applyTerminal, clearTerminal, potModeSwitch, resolveDrop,
   JACK_COLORS, GROUND_INST_ID, type JackDef,
 } from '../leads'
 
@@ -103,5 +103,16 @@ describe('resolveDrop', () => {
   })
   it('null hit → null', () => {
     expect(resolveDrop(null, netJack)).toBeNull()
+  })
+})
+
+describe('potModeSwitch (spec §5: A/W wires survive, only Lo changes)', () => {
+  it('rheostat→divider: A carries to Hi, W survives, Lo starts unwired', () => {
+    const inst: Instrument = { kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 3, netW: 4, totalOhms: 5000, wiperPct: 0.3 }
+    expect(potModeSwitch(inst)).toEqual({ kind: 'potentiometer', mode: 'divider', id: 'p1', netHi: 3, netW: 4, netLo: UNWIRED, totalOhms: 5000, wiperPct: 0.3 })
+  })
+  it('divider→rheostat: Hi carries to A, W survives, Lo discarded', () => {
+    const inst: Instrument = { kind: 'potentiometer', mode: 'divider', id: 'p1', netHi: 3, netW: 4, netLo: 9, totalOhms: 5000, wiperPct: 0.3 }
+    expect(potModeSwitch(inst)).toEqual({ kind: 'potentiometer', mode: 'rheostat', id: 'p1', netA: 3, netW: 4, totalOhms: 5000, wiperPct: 0.3 })
   })
 })
