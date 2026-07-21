@@ -4,6 +4,8 @@ The **bench shelf** sits under the 3D board. It holds your instruments as front 
 
 This is the heart of circsim. Everything here happens live: turn a knob and the simulation re-solves without a restart.
 
+![The bench shelf with a Ground panel and a PSU panel side by side. The PSU shows a Volts knob at 5 V, a Voltage field, a Series R field, and a red plus-jack with a lead running up to the board.](/img/bench-shelf.png)
+
 ## Add an instrument
 
 Click **`＋ Add instrument`** in the bench header and pick one:
@@ -83,7 +85,11 @@ Every control drives the running simulation immediately.
 
 Once the board is energized (an operating point is showing), editing any instrument triggers a live re-solve. Drag the supply down and an LED dims; sweep a pot wiper and a divider output moves; retune a function generator and the scope trace follows. No restart, no "run again."
 
-Under the hood, a value change becomes a SPICE `alter` (fast, in place); a *wiring* change — moving a lead to a different net — reloads the circuit, because the topology actually changed. circsim picks the right one for you.
+Under the hood, a value change becomes a SPICE `alter` (an in-place tweak to a value, no rebuild); a *wiring* change — moving a lead to a different net — reloads the circuit, because the topology actually changed. circsim picks the right one for you.
+
+::: info The bench is per-session
+Instruments and the leads you draw live for the current session. They're never written into your board file (circsim doesn't touch your design files) and don't yet persist across restarts — reopen a board and you'll rebuild the bench. It's quick, and it keeps your `.kicad_pcb` untouched.
+:::
 
 ## Next
 

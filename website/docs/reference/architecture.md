@@ -24,7 +24,7 @@ The SPICE deck is loaded into ngspice **from memory** — every model definition
 
 1. circsim generates a **SPICE deck** from the current circuit and your wired bench instruments.
 2. The deck is loaded into the isolated ngspice process.
-3. ngspice solves the **operating point** — a DC steady-state solve — with a convergence **retry ladder**: a plain solve first, then with gmin-stepping, then with source-stepping. Each step is a numerical aid for circuits that don't converge directly.
+3. ngspice solves the **operating point** — a DC steady-state solve — with a convergence **retry ladder**: a plain solve first, then with *gmin-stepping* (temporarily adding a tiny conductance across every node to give the solver a path, then removing it), then with *source-stepping* (ramping the supplies up from zero). Both are standard numerical aids for circuits that won't converge directly.
 4. The result comes back tagged with the **method** it succeeded by. A `direct` solve is trustworthy; a `gmin`, `source`, or transient fallback means the numbers may be unreliable, and circsim shows you a caveat rather than presenting shaky voltages as fact.
 5. Net voltages tint the copper, float as labels, and drive the LED glow; the operating-point currents feed the simulation-informed [Board Critic checks](./critic-checks).
 
@@ -42,7 +42,7 @@ When you turn a knob on the bench, circsim doesn't restart the simulation. A *va
 
 Digital logic needs to know its supply voltage to place its thresholds, but a chip's VDD rail is sometimes derived or switched rather than fed directly. So for boards with digital logic, circsim can solve in two passes: the first with the family-default rail, then — if the measured rail would actually change the result — a second pass using the rail voltage it read from the first solve. A rail sitting near 0 V is reported as "gated off" (with a coach note) rather than silently used. You can always override a rail manually.
 
-The precedence for a digital chip's high level: a DC supply directly on its VDD net wins; then your manual override; then the op-measured rail; then the family default (5 V for 74HC, 12 V for CD4000).
+This is resolved **per chip, from that chip's own VDD net** — so a board that mixes families (74HC parts at 5 V and CD4000 parts at 12 V, say) senses each one independently. The precedence for a chip's high level: a DC supply directly on its VDD net wins; then your manual override; then the op-measured rail; then the family default (5 V for 74HC, 12 V for CD4000).
 
 ## Offline & licensing
 

@@ -48,6 +48,13 @@ Before you energize, these appear in the panel as *"needs simulation"* so you kn
 The thermal check is a *relative* heat-spread proxy in arbitrary units — it tells you which parts sit at the hot end and which hot parts crowd each other, **never an absolute temperature in °C**. It doesn't model copper pour, layer stack, airflow, or thermal vias. In this version it also needs per-part power data that isn't fully wired up yet, so it's the quietest of the checks — treat the other six as the working set today. When it does fire, read it strictly as "these are relatively hotter," not "this reaches N degrees."
 :::
 
+Two limits are worth knowing before you lean on the copper-carrying checks:
+
+- **Copper weight is assumed to be 1 oz** everywhere — it's a fixed default, not read from your board. Ampacity and IR-drop are computed against that, so they're conservative on heavier copper and optimistic on lighter. 
+- **Loop area goes silent on a board with no ground copper** — it measures distance to a ground plane, so with no plane to measure against it produces nothing, which can look like "clean." If you have fast signals and no ground pour, read a silent result as "not assessed."
+
+The [checks reference](../reference/critic-checks) states every threshold and assumption in full.
+
 For the exact check thresholds, formulas, and the verbatim messages, see the [Board Critic checks reference](../reference/critic-checks).
 
 ## How to read the panel

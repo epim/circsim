@@ -18,6 +18,11 @@ Every finding is a **risk to check, not a verdict**, and every one carries an *"
 
 Before you energize, the three simulation-informed checks show as *"needs simulation"* in the panel.
 
+::: warning Two fixed assumptions worth knowing up front
+- **Copper weight is assumed to be 1 oz (35 µm) on every layer.** This is a fixed default — it is **not** read from your board's stackup and can't currently be changed. The ampacity and IR-drop numbers are computed against 1 oz. If your board is heavier (2 oz), those checks are conservative (they'll over-warn); if it's lighter (0.5 oz), they're optimistic — trust them less.
+- **Design-rule numbers are circsim's defaults, not your project's.** The clearance minimum (0.2 mm) is a generic default, not your KiCad net-class rules. Treat the Critic as a second opinion, not a substitute for your CAD tool's own DRC.
+:::
+
 ## Floating / dangling connectivity
 
 Surfaces connectivity gaps found while [rebuilding the circuit](../concepts/board-to-circuit).
@@ -30,7 +35,7 @@ KiCad's intentional `unconnected-(...)` nets are deliberately ignored — report
 
 ## Copper clearance
 
-Flags different-net tracks on the same layer that come too close, and tracks too near the board edge. Default minimum clearance **0.2 mm**. Capped at 50 findings (with an overflow note if there are more).
+Flags different-net tracks on the same layer that come too close, and tracks too near the board edge. Minimum clearance **0.2 mm** — a generic default, **not** read from your project's net-class or design rules. Capped at 50 findings (with an overflow note if there are more).
 
 - **Tracks touch or overlap** *(error)* — different-net tracks with essentially zero gap: a short or an etch risk.
 - **Tracks too close** *(warn)* — closer than the minimum clearance. *Suggestion: increase spacing or reroute one track.*
@@ -44,15 +49,19 @@ For each IC power pin, finds the nearest qualifying bypass cap (≤ 1 µF bridgi
 - **Cap too far, > 15 mm** *(error)* — beyond ~15 mm a bypass cap is largely ineffective at high frequency.
 - **Cap somewhat far, > 5 mm** *(warn)* — bypass caps work best within ~5 mm of the pin they serve.
 
-*Suggestion (all three): place a 0.1 µF cap within a few mm of the power pin.* **Assumes:** the bypass heuristic (C-ref, ≤ 1 µF), and that layer stack / via inductance aren't modeled.
+*Suggestion (all three): place a 0.1 µF cap within a few mm of the power pin.* **Assumes:** the bypass heuristic (a C-reference of ≤ 1 µF), and that layer stack / via inductance aren't modeled. The 5 mm / 15 mm distances are generic defaults — a fast switching regulator wants sub-2 mm decoupling, and some modern parts use 2.2–4.7 µF as primary bypass (above the 1 µF cutoff, so they won't be counted as the bypass cap here).
 
 ## Loop area
 
-A **coarse v1 heuristic** for high-speed nets (names matching clock/SPI/USB/oscillator patterns). Estimates the signal↔return loop area as the sum over each track segment of its length times its distance to the nearest ground copper (a ground pour under a segment counts as zero). Silent if the board has no ground copper. Thresholds: warn > 100 mm², error > 500 mm².
+A **coarse v1 heuristic** for high-speed nets (names matching clock/SPI/USB/oscillator patterns). Estimates the signal↔return loop area as the sum over each track segment of its length times its distance to the nearest ground copper (a ground pour under a segment counts as zero). Thresholds: warn > 100 mm², error > 500 mm².
 
 - **Large loop area** *(warn / error)* — big signal↔return loops radiate and pick up EMI in proportion to their area. *Suggestion: route a ground return alongside the signal or add a ground pour under it.*
 
 **Assumes:** it's a coarse first pass — it doesn't model the layer stack or actual return-current spread.
+
+::: danger This check goes silent with no ground copper
+The loop-area check measures distance *to ground copper*. If your board has **no ground plane or pour at all**, it has nothing to measure against and produces **zero findings** — which looks identical to "checked and clean." That's exactly the worst case (a high-speed net with no return plane anywhere), and it's the one condition under which this check can't warn you. If your board has fast signals and no ground pour, treat a silent loop-area result as *"not assessed,"* not *"fine."*
+:::
 
 ## Ampacity *(needs operating point)*
 
@@ -60,7 +69,7 @@ For each power/ground rail, estimates the rail current from the operating-point 
 
 - **Undersized trace** *(warn, or error if current exceeds ~1.5× the rated capacity)* — narrow copper carrying more than it's rated for runs hot and can fuse. *Suggestion: widen the trace or add copper.*
 
-**Assumes:** external copper, ΔT 10 °C (IPC-2221); rail current estimated as Σ|part currents| / 2.
+**Assumes:** 1 oz external copper, ΔT 10 °C, using the IPC-2221 charts method (the classic derating standard — coarser than the newer IPC-2152, and it doesn't distinguish inner from outer layers, so an inner-layer "pass" is optimistic). Rail current is estimated as **Σ|part currents| / 2** — the factor of ½ is because that sum counts each rail current twice, once leaving the source and once entering the load; this is a lumped estimate that won't hold for heavily branched or star topologies, and it compares that single current against the rail's *narrowest* track without distinguishing a series bottleneck from a parallel branch.
 
 ## IR-drop / rail sag *(needs operating point)*
 
@@ -68,7 +77,7 @@ Builds a resistive model of each power rail's copper (tracks as resistors, vias 
 
 - **Rail sags** *(warn / error)* — copper resistance drops voltage between the supply entry and the load; sagging rails brown-out ICs and shift analog references. *Suggestion: widen or shorten the supply trace, add a copper pour or second feed, or move the load closer to the supply entry.*
 
-**Assumes:** the board's copper weight; vias ≈ 0.5 mΩ each; the inferred supply entry; sink currents from the operating-point sim (parts without a solved current aren't counted).
+**Assumes:** 1 oz copper (a fixed default — not read from your stackup, see the callout above); vias ≈ 0.5 mΩ each; the inferred supply entry; sink currents from the operating-point sim (parts without a solved current aren't counted).
 
 ## Thermal *(needs operating point)*
 

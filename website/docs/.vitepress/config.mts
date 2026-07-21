@@ -70,6 +70,7 @@ export default defineConfig({
             { text: 'Energize & read the operating point', link: '/guides/energize' },
             { text: 'Use the bench & draw leads', link: '/guides/bench-and-leads' },
             { text: 'Probe nets & read the scope', link: '/guides/probe-and-scope' },
+            { text: 'Drive a microcontroller’s pins', link: '/guides/interactive-pins' },
             { text: 'Fix an unresolved part', link: '/guides/model-doctor' },
             { text: 'Run the Board Critic audit', link: '/guides/run-critic' },
             { text: 'Read the warnings & fidelity banner', link: '/guides/warnings' },

@@ -1,6 +1,8 @@
 # Fidelity: what circsim can and can't tell you
 
-circsim runs a real SPICE simulation of your circuit. SPICE is powerful, but it models an *idealized* version of your board. A validator you can't trust is worse than no validator at all — so this page is the honest account of what to believe and what to verify by other means.
+circsim runs a real **SPICE** simulation of your circuit — SPICE being the standard numerical method for solving a circuit's equations (circsim uses the open-source [ngspice](https://ngspice.sourceforge.io/) engine). SPICE is powerful, but it models an *idealized* version of your board. A validator you can't trust is worse than no validator at all — so this page is the honest account of what to believe and what to verify by other means.
+
+All of it runs at a fixed 27 °C, with no temperature sweep — so temperature-dependent behavior (drift, thermal runaway, a regulator's thermal shutdown) isn't simulated.
 
 This isn't fine print. It's the core of the product. circsim's job is to catch the mistakes it *can* catch and to be loud about the ones it can't.
 
@@ -14,7 +16,7 @@ This isn't fine print. It's the core of the product. circsim's job is to catch t
 
 **The NE555 timer.** The bundled 555 is a behavioral subcircuit from the datasheet block diagram. Oscillation frequency and duty cycle match the RC formula within a few percent.
 
-**Relative comparisons.** "If I drop R1 from 10 k to 4.7 k, does the output roughly double?" circsim answers that correctly, every time.
+**Relative comparisons.** "If I drop R1 from 10 k to 4.7 k, does the output roughly double?" For a circuit built entirely from resolved, well-modeled parts, circsim answers that reliably. (The reliability stops exactly where a stubbed part, a saturating behavioral model, or a convergence-fallback caveat enters the loop — see below.)
 
 ## What circsim CANNOT reliably tell you (and why)
 
@@ -24,7 +26,7 @@ Most ICs in circsim — op-amps, the 555, regulators — are **behavioral macrom
 
 - Op-amp slew rate and gain-bandwidth come from datasheet numbers, but high-frequency parasitic behavior is approximate.
 - Thermal effects on bias current and offset are not modeled.
-- PSRR, CMRR, and output impedance differ from the real part.
+- Power-supply and common-mode rejection (PSRR/CMRR — how well the part ignores noise on its supply and shifts in its input common level) and output impedance differ from the real part.
 
 A behavioral model is a good check. It is not the real chip.
 
@@ -41,7 +43,7 @@ It is *not* enough to check timing relationships between firmware-driven signals
 
 circsim does not model:
 
-- **Trace resistance and inductance** — a 5 cm, 0.25 mm trace on 1 oz copper is ~0.07 Ω, negligible at DC but real at RF. *(Note: the [Board Critic](./board-critic) does estimate copper resistance for its IR-drop check — but the SPICE simulation itself treats nets as ideal nodes.)*
+- **Trace resistance and inductance** — a 5 cm, 0.25 mm trace on 1 oz copper is about 0.1 Ω, negligible at DC but real at RF. *(Note: the [Board Critic](./board-critic) does estimate copper resistance for its IR-drop check — but the SPICE simulation itself treats nets as ideal nodes.)*
 - **Via inductance** — ~0.5–1 nH each, invisible to the simulation.
 - **Pad and lead-frame capacitance** — picofarads that matter for high-speed signals.
 - **Coupling between traces** — crosstalk, EMI pickup, differential-pair imbalance.
@@ -74,6 +76,7 @@ Assign ground to the right net, stub out unresolved parts, and check for floatin
 - Circuits with significant temperature effects
 - Anything where trace parasitics matter
 - Timing margins tighter than ~10× the simulation time-step
+- **Triangle-wave sources** — the function generator renders a triangle as a smoothed sine, so its slope linearity and harmonic content differ from a real triangle (relevant for ramp comparators, PWM, and slew tests)
 :::
 
 ## The fidelity banner

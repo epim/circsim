@@ -10,7 +10,13 @@ When circsim starts with nothing loaded, the viewport offers three ways in:
 - **Open First Light demo** — a one-LED dimmer, the smallest possible start. If you've only ever breadboarded, [start here](./first-light).
 - **Open…** — pick your own `.kicad_pcb`. You can also just **drag a board file onto the window**.
 
+![The circsim start screen with no board loaded, offering Open sample project, Open First Light demo, and Open.](/img/empty-state.png)
+
 Click **Open sample project**. The 3D board appears, the parts list on the left fills in, and circsim quietly rebuilds the circuit from the copper.
+
+::: tip One word you'll see everywhere: "net"
+A **net** is everything that's electrically connected together — think of it as one "wire" of your circuit, even when it's really a branching stretch of copper. "The ground net," "probe this net," "every net gets a voltage label" all use it this way. When circsim tints the copper and labels voltages, it's labeling nets. (The sample is a *555 blinker* — an **astable oscillator**, a circuit that flips its output on and off by itself with no input, blinking an LED.)
+:::
 
 ## The lay of the land
 
@@ -20,7 +26,7 @@ circsim is one screen, three columns, dark by design:
 - **Center** — the **3D board**, the **bench shelf** underneath it, and the **scope + logs** dock along the bottom.
 - **Right** — **Ground & Power** (where you designate the ground and supply nets) and the **Board Critic** (the read-only pre-fab audit).
 
-Across the top is the **simulation toolbar**: `⚡ Energize`, `Power On`, `Run`, a **Pace** control (`0.1×` / `1×` / `max`), and an **Overlay** switch (`Realistic` / `Voltage` / `Highlight`).
+Across the top is the **simulation toolbar**: `⚡ Energize`, `Power On`, `Run`, a **Pace** control (`0.1×` / `1×` / `max`), and an **Overlay** switch (`Realistic` / `Voltage` / `Highlight`). The **Overlay** changes how the copper is colored — `Realistic` shows the bare board (components render as simple placeholder shapes, not photo-real 3D models), `Voltage` tints by voltage, `Highlight` emphasizes your selection.
 
 ## Light it up
 
@@ -40,11 +46,11 @@ That "rail at 4.98 V, output at 2.49 V" readout is the reassurance moment: your 
 
 ## Make it move
 
-A DC operating point is a single frozen instant. To watch the 555 actually oscillate, press **`Run`**. circsim streams a live **transient** simulation. But you won't see a waveform until something is watching a net — so:
+A DC operating point is a single frozen instant. To watch the 555 actually oscillate, press **`Run`**. circsim streams a live **transient** simulation — "transient" just means it computes how the voltages change over *time*, instead of the single frozen snapshot the operating point gives you. But you won't see a waveform until something is watching a net — so:
 
 1. Click a net on the board (say, the 555's output), then click **`⌖ Probe this net`** in the bench header. A voltage probe clips on.
-2. The **scope** in the bottom dock starts drawing that net's waveform in real time.
-3. Adjust **Time/div** on the scope until the square wave is nicely framed.
+2. The **scope** (an oscilloscope — it draws voltage over time) in the bottom dock starts drawing that net's waveform in real time.
+3. Adjust **Time/div** on the scope until the square wave is nicely framed. (Time/div sets how much time each grid division represents — turn it down to zoom in on a fast signal, up to see slow ones.)
 
 Press **`Pause`** to freeze and scrub; **`Run`** again to resume.
 

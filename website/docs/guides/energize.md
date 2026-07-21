@@ -22,7 +22,7 @@ The classic reassurance is a rail reading close to what you set — "5 V rail at
 
 ## Read it honestly
 
-circsim tells you *how* it solved, because that governs how much to trust the numbers. If the solve needed a numerical fallback (gmin-stepping, source-stepping, or a transient assist), a **caveat** appears — *"Check these voltages"* — because a fallback op can report a misleading 0.000 V on nets it couldn't resolve. A clean direct solve carries no caveat.
+circsim tells you *how* it solved, because that governs how much to trust the numbers. If the solve needed a **numerical fallback** — *gmin-stepping* or *source-stepping*, two techniques the solver falls back on when a straight solve won't settle, or a transient assist — a **caveat** appears: *"Check these voltages."* A fallback op can report a misleading 0.000 V on nets it couldn't resolve, so treat those numbers as suspect. A clean direct solve carries no caveat. (You don't need to know how those techniques work — just that seeing the caveat means "double-check.")
 
 If the solve fails entirely, you get a plain-language card explaining the likely cause — a missing DC path to ground, a floating node, or an unstable feedback loop — not a raw ngspice error. See [reading the warnings](./warnings).
 

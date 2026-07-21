@@ -15,6 +15,10 @@ So the full flow is: open the board, glance at the static findings, then **Energ
 
 The **Board Critic** panel (right dock) shows a summary — `N error`, `N warn`, `N info` — then the findings grouped by severity. Before you energize, the current-dependent checks appear as *"needs simulation"* so you know what a solve would add.
 
+![The bundled 555 sample energized: the Board Critic panel on the right shows three clearance errors with detail and a suggestion, while the amber banner up top flags that the operating point needed a numerical fallback so the voltages should be double-checked.](/img/sample-energized.png)
+
+*(Above: the bundled 555 sample. The Critic caught three real clearance errors — "Tracks touch or overlap … a short or a fabrication/etch risk" — and the amber banner is circsim being honest that this solve needed a fallback. Both are the tool working as designed.)*
+
 Each finding gives you three things to weigh:
 
 - the **detail** — what it measured and why it matters;

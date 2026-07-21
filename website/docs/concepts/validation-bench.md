@@ -24,7 +24,7 @@ This is the "plug it in on a breadboard and see" experience — for a board you 
 
 ### 2. The read-only board critic — "will it survive fabrication and physics?"
 
-Before you send it off, the [Board Critic](./board-critic) audits the board circsim did **not** design. Are there floating nets? Is the decoupling cap too far from the pin? Is the power trace thin enough to sag or overheat under the load the simulation just measured? These are *physical* risks that a schematic-level simulation can't see, because they live in the layout.
+Before you send it off, the [Board Critic](./board-critic) audits the board circsim did **not** design. Are there floating nets? Is the decoupling capacitor — the small cap placed right next to a chip's power pin to steady its supply — too far from the pin to do its job? Is the power trace thin enough to sag or overheat under the load the simulation just measured? These are *physical* risks that a schematic-level simulation can't see, because they live in the layout.
 
 The Critic is strictly read-only. It reports risks to check — it never edits your files and never re-routes anything.
 

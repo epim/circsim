@@ -31,7 +31,7 @@ Not all models are equal, and circsim is explicit about which kind each part get
 
 ### Primitive-level models
 
-Diodes, LEDs, bipolar transistors, and discrete MOSFETs are modeled as **ngspice primitives** — real `.model` cards with device physics parameters (saturation current, forward voltage, Gummel-Poon betas, VDMOS thresholds) fitted from datasheets. These are as good as SPICE gets at the hobbyist level.
+Diodes, LEDs, bipolar transistors, and discrete MOSFETs are modeled as **ngspice primitives** — real `.model` cards whose parameters (saturation current, forward voltage, transistor gain, MOSFET turn-on thresholds) come straight from the part's datasheet using SPICE's standard device equations. These are as good as SPICE gets at the hobbyist level. (The exact equation sets have names — *Gummel-Poon* for bipolar transistors, *VDMOS* for power MOSFETs — which you'll see in the [model library reference](../reference/model-library); you don't need them to use the models.)
 
 ### Behavioral macromodels
 
@@ -41,7 +41,7 @@ Some behavioral models are deliberately *simplified operating-point stubs* — a
 
 ### Digital logic
 
-The 74HC and CD4000 logic families are **XSPICE behavioral digital** — the gate does the right truth table with datasheet-typical thresholds and delays, bridged into the analog simulation. Schmitt-trigger parts (the 74HC14, CD40106) carry true hysteresis, so an RC astable built around one actually oscillates.
+The 74HC and CD4000 logic families use **behavioral digital models** (built on ngspice's XSPICE extension, which lets a real logic gate live inside an analog simulation) — the gate does the right truth table with datasheet-typical thresholds and delays. Schmitt-trigger parts (the 74HC14, CD40106) carry true hysteresis, so an *RC astable* — an oscillator made from just a resistor, a capacitor, and one gate — built around one actually oscillates.
 
 ## Stubs and interactive pins {#stubs-and-interactive-pins}
 

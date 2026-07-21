@@ -17,7 +17,7 @@ You can **minimize** it (the **»** button) to a compact header badge — **⚠ 
 
 ## "Check these voltages" — the operating-point caveat
 
-*(persistent, appears after a fallback solve)* The [operating point](./energize) converged, but only through a numerical fallback (gmin-stepping, source-stepping, or a transient assist) rather than a clean direct solve. A fallback op can report a misleading `0.000 V` on nets it couldn't resolve, so treat the voltages as suspect and look for the underlying cause (a floating node, a missing ground path). A clean solve shows no caveat.
+*(persistent, appears after a fallback solve)* The [operating point](./energize) converged, but only through a **numerical fallback** — *gmin-stepping* or *source-stepping* (solver techniques that ease a stubborn circuit toward a solution when a direct solve won't settle), or a transient assist — rather than a clean direct solve. You don't need to understand those methods; the point is that a fallback op can report a misleading `0.000 V` on nets it couldn't resolve, so treat the voltages as suspect and look for the underlying cause (a floating node, a missing ground path). A clean solve shows no caveat.
 
 ## "The simulator couldn't find a stable solution"
 

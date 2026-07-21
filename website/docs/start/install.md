@@ -8,7 +8,7 @@ Grab the latest installer for your platform from the [releases page](https://git
 
 | Platform | File | Notes |
 | --- | --- | --- |
-| **Windows (x64)** | `circsim-<version>-x64-setup.exe` | NSIS installer |
+| **Windows (x64)** | `circsim-<version>-x64-setup.exe` | Standard Windows installer — run it and follow the prompts |
 | **macOS (Apple Silicon)** | `circsim-<version>-arm64.dmg` | M1/M2/M3/M4 Macs |
 | **macOS (Intel)** | `circsim-<version>-x64.dmg` | Intel Macs |
 | **Linux (AppImage)** | `circsim-<version>-x86_64.AppImage` | Portable, runs anywhere |
@@ -50,7 +50,7 @@ On some distros you may need FUSE (`sudo apt install libfuse2`).
 circsim opens a **routed KiCad board** — a `.kicad_pcb` file (KiCad 6 or newer). That's the one required input; the circuit is rebuilt straight from the copper. Two optional inputs make the simulation sharper:
 
 - the matching **`.kicad_sch` schematic** — the only source of KiCad `Sim.*` fields and of symbol pin names (which resolve diode/LED polarity from the design instead of a guess), and
-- a **BOM CSV** with a manufacturer part-number column, to pin down exact parts.
+- a **BOM** (bill of materials — a spreadsheet listing every part) as a CSV with a manufacturer part-number column, to pin down exact parts.
 
 Don't have a board handy? That's fine — circsim ships with two sample projects you can open from the start screen. Head to [your first five minutes](./first-run) next.
 

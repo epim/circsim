@@ -49,6 +49,10 @@ A BOM sharpens part *identification* — most usefully by supplying manufacturer
 
 Where a BOM row and the board disagree, the **BOM wins** — you curated it on purpose. A precise MPN is the single most useful thing for [matching a part to a model](../concepts/models).
 
+::: warning JLCPCB / LCSC part numbers won't resolve
+circsim matches on the **manufacturer** part number (`1N4148`, `2N3904`, `NE555`), not on **LCSC / "JLCPCB Part#" codes** (`C25804`-style). A BOM exported from JLCPCB's assembly tool or the EasyEDA/KiCad JLC plugin often carries *only* the LCSC code, in a column circsim doesn't recognize — so those parts will show up as **"no model"** for a completely mundane reason. Two fixes: add a manufacturer-MPN column to the BOM (most JLC BOM tools can include one), or set the MPN directly in the [Model Doctor](../guides/model-doctor). Good news: on JLC-fabbed boards the manufacturer part number is often already sitting in the footprint's **Value** field, which circsim *does* read.
+:::
+
 ## Not supported
 
 - **Altium, IPC-2581, Gerbers** — KiCad only, for now.

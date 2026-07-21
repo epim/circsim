@@ -43,8 +43,12 @@ Gummel-Poon models. Terminal order: collector = 1, base = 2, emitter = 3 (pin ma
 | 2N2222 | 2N2222(A), PN2222(A), MMBT2222(A) | NPN |
 | 2N3904 | 2N3904, MMBT3904, PZT3904 | NPN |
 | 2N3906 | 2N3906, MMBT3906, PZT3906 | PNP |
-| BC547 | BC547(A/B/C), BC847, MMBT5551 | NPN |
+| BC547 | BC547(A/B/C), BC847, MMBT5551 ⚠️ | NPN |
 | BC557 | BC557(A/B/C), BC857 | PNP |
+
+::: warning Approximate alias: MMBT5551
+The BC547 card is fitted to BC547B parameters; BC847 is genuinely the SMD BC547. **MMBT5551** (SMD 2N5551) is *not* an equivalent — it's a ~160 V high-voltage transistor with a different gain curve and fT, matched here only as a rough stand-in. If your circuit relies on the 2N5551's actual voltage headroom or gain, don't trust this model — [import the real one](../guides/model-doctor#import-a-lib).
+:::
 
 ## MOSFETs — primitive (VDMOS)
 
@@ -54,8 +58,12 @@ Terminal order: drain = 1, gate = 2, source = 3 (bulk tied to source).
 | --- | --- | --- |
 | 2N7002 | 2N7002(K/E), BSS138 | N |
 | AO3400 | AO3400(A), SI2302, DMN2075U | N (low Rds) |
-| PMOS generic | DMP2305U, SI2301, BSS84 | P |
+| PMOS generic | DMP2305U, SI2301, BSS84 ⚠️ | P |
 | AO3401 | AO3401(A) | P |
+
+::: warning "PMOS generic" is a wide bucket
+This one card covers a big range: DMP2305U and SI2301 are amp-class load switches, while **BSS84** is a ~130 mA small-signal part. The card's on-resistance is tuned toward the higher-current members, so treat BSS84's numbers (and any current-sensitive result) as rough. When Rds(on) or current capability actually matters, [import the specific part's model](../guides/model-doctor#import-a-lib). (AO3401 got its own dedicated card precisely because the generic bucket was too coarse for it.)
+:::
 | NCE4012S | NCE4012S | N (power) |
 | NCE6005AS | NCE6005AS | dual N (subckt) |
 

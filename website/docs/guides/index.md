@@ -13,6 +13,7 @@ Task-oriented walkthroughs for specific jobs. If you're new, do the [First Light
 
 - **[Use the bench & draw leads](./bench-and-leads)** — add instruments and wire them onto the board.
 - **[Probe nets & read the scope](./probe-and-scope)** — watch live waveforms, use cursors, read frequencies.
+- **[Drive a microcontroller's pins](./interactive-pins)** — check MCU hardware without running firmware.
 
 ## Fixing and checking
 
