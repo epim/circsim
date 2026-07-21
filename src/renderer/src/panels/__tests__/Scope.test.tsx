@@ -2,9 +2,9 @@
  * Scope.test.tsx — M7 (F6.2)
  *
  * The scope's no-probes empty state must teach BOTH probing paths: the
- * drag-a-VP path and the new click-to-probe path ("Probe this net" on a
- * selected net). Static render against a real store (canvas drawing lives in
- * effects, which don't run under renderToStaticMarkup).
+ * add-a-VP-from-the-bench path and the click-to-probe path ("Probe this net"
+ * on a selected net). Static render against a real store (canvas drawing lives
+ * in effects, which don't run under renderToStaticMarkup).
  */
 
 import React from 'react'
@@ -37,8 +37,8 @@ describe('M7 F6.2 — scope empty-state hint mentions both probing paths', () =>
     )
     // No probes on a fresh open → the empty overlay shows…
     expect(html).toContain('No voltage probes attached')
-    // …teaching both attach paths.
-    expect(html).toMatch(/Drag a V-Probe/i)
+    // …teaching both attach paths (from the bench, and click-to-probe).
+    expect(html).toMatch(/V-Probe from the bench/i)
     expect(html).toMatch(/Probe this net/i)
   })
 })

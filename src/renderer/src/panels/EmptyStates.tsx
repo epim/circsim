@@ -131,9 +131,9 @@ export function NoSourceState(): React.ReactElement {
       <div style={guidedIcon}>🔌</div>
       <div style={guidedTitle}>Attach a power supply or signal source</div>
       <div style={guidedBody}>
-        The circuit has no voltage source to simulate. Drag a{' '}
-        <strong>DC Supply</strong> from the instrument rack onto a power rail (like
-        VCC or +5V), or drag a <strong>Function Generator</strong> onto an input
+        The circuit has no voltage source to simulate. Add a{' '}
+        <strong>DC Supply</strong> from the bench and draw its lead to a power rail
+        (like VCC or +5V), or add a <strong>Function Generator</strong> onto an input
         net. Then press <strong>Power On</strong> or <strong>Run</strong>.
       </div>
     </div>

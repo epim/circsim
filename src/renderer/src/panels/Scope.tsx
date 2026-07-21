@@ -465,8 +465,8 @@ const Scope: React.FC = () => {
           <div style={styles.emptyOverlay}>
             <span>No voltage probes attached.</span>
             <span>
-              Drag a V-Probe from the instrument rack onto a net, or click a net
-              and press &ldquo;Probe this net&rdquo; in the rack.
+              Add a V-Probe from the bench and drop its lead on a net, or click a
+              net and press &ldquo;Probe this net&rdquo; in the bench.
             </span>
           </div>
         )}
