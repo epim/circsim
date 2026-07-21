@@ -1837,6 +1837,9 @@ function tierLabelFor(res: Resolution): string {
  *   Reload-required:
  *     - function-gen.wave type change    → reload
  *     - current-probe add/remove on subckt part → reload
+ *     - netId change on any instrument   → reload (rewiring changes deck
+ *                                          topology, not just a value; a live
+ *                                          alter cannot move a source's node)
  *
  * @param prevInstrument  The previous state of the instrument
  * @param nextInstrument  The new state of the instrument
@@ -1858,6 +1861,8 @@ export function alterPlan(
   if (kind === 'dc-supply') {
     const prev = prevInstrument as Extract<Instrument, { kind: 'dc-supply' }>
     const next = nextInstrument as Extract<Instrument, { kind: 'dc-supply' }>
+    // net change → reload (rewiring the source changes deck topology, not just its value).
+    if (prev.netId !== next.netId) return { kind: 'reload' }
     const name = instrumentSpiceName(prev)
     const v = formatSpiceValue(next.volts)
     return {
@@ -1870,6 +1875,8 @@ export function alterPlan(
   if (kind === 'logic-input') {
     const prev = prevInstrument as Extract<Instrument, { kind: 'logic-input' }>
     const next = nextInstrument as Extract<Instrument, { kind: 'logic-input' }>
+    // net change → reload (rewiring the source changes deck topology, not just its value).
+    if (prev.netId !== next.netId) return { kind: 'reload' }
     const name = instrumentSpiceName(prev)
     const v = formatSpiceValue(next.level === 1 ? next.vHigh : 0)
     return {
@@ -1882,6 +1889,9 @@ export function alterPlan(
   if (kind === 'function-gen') {
     const prev = prevInstrument as Extract<Instrument, { kind: 'function-gen' }>
     const next = nextInstrument as Extract<Instrument, { kind: 'function-gen' }>
+
+    // net change → reload (rewiring the source changes deck topology, not just its value).
+    if (prev.netId !== next.netId) return { kind: 'reload' }
 
     if (prev.wave !== next.wave) {
       return { kind: 'reload' }
@@ -1974,6 +1984,10 @@ export function alterPlan(
 
   // ── voltage-probe: no deck change ─────────────────────────────────────────
   if (kind === 'voltage-probe') {
+    const prev = prevInstrument as Extract<Instrument, { kind: 'voltage-probe' }>
+    const next = nextInstrument as Extract<Instrument, { kind: 'voltage-probe' }>
+    // net change → reload (rewiring the probe changes what node it observes, not just its color).
+    if (prev.netId !== next.netId) return { kind: 'reload' }
     return { kind: 'alter', commands: [] }
   }
 

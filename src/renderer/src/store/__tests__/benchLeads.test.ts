@@ -10,6 +10,8 @@
  *   - detachTerminalWire: unwires a terminal back to UNWIRED
  *   - wired-only simulation: powerOn refuses to solve when the only source is
  *     an UNWIRED shelf instrument; wiring it first lets the solve land
+ *   - assignTerminal net rewire while running/paused marks the deck dirty
+ *     (regression for alterPlan misclassifying a net rewire as alter-safe)
  */
 
 import { describe, it, expect } from 'vitest'
@@ -124,5 +126,69 @@ describe('wired-only simulation', () => {
     mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
     const result = await p
     expect(result).not.toBeNull()
+  })
+})
+
+describe('assignTerminal — net rewire mid-run must reload, not silently alter', () => {
+  // Regression for the alterPlan defect: dc-supply/logic-input/function-gen/
+  // voltage-probe branches never compared netId, so a REWIRE (a topology
+  // change) was misclassified as {kind:'alter'} (a value-only tweak). Under
+  // updateInstrument, an 'alter' plan while simState is 'running'/'paused'
+  // sends nothing for netId (there's no alter command for "move this source
+  // to a different node") and never calls markDeckDirty — the loaded ngspice
+  // deck keeps driving the OLD net while the store records the NEW one.
+  // The fix: a netId change on any of these four kinds must plan 'reload',
+  // which routes through markDeckDirty() → deckDirty: true.
+  it('rewiring a wired dc-supply while running marks the deck dirty (no live alter)', () => {
+    const { store, mock } = openedStore()
+    // Drop the auto-attached supply so the test controls wiring precisely.
+    for (const inst of [...store.getState().instruments]) {
+      if (inst.kind === 'dc-supply' && 'id' in inst) store.getState().removeInstrument(inst.id)
+    }
+    const vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
+    const outId = store.getState().circuit!.nets.find(n => n.kicadName === 'OUT')!.id
+    const id = store.getState().addBenchInstrument('dc-supply')
+    store.getState().assignTerminal(id, 'net', { kind: 'net', netId: vinId })
+
+    // Drive the store into a running transient (mirrors orchestration.test.ts's
+    // "supply knob-drag while running" setup).
+    store.getState().run()
+    mock.emit({ type: 'status', running: true, simTimeSeconds: 0, realtimeFactor: 1 })
+    expect(store.getState().simState).toBe('running')
+    expect(store.getState().deckDirty).toBe(false)
+    mock.clearSent()
+
+    // Rewire the SAME supply from VIN to OUT mid-run.
+    store.getState().assignTerminal(id, 'net', { kind: 'net', netId: outId })
+
+    const inst = store.getState().instruments.find(i => 'id' in i && i.id === id)!
+    expect((inst as { netId: number }).netId).toBe(outId)
+    // Must be flagged dirty so the next run()/resume reloads with the new
+    // topology — must NOT be treated as a live-alterable value change.
+    expect(store.getState().deckDirty).toBe(true)
+    expect(mock.sent.some(c => c.type === 'alter')).toBe(false)
+  })
+
+  it('rewiring a wired voltage-probe while paused marks the deck dirty (no live alter)', () => {
+    const { store, mock } = openedStore()
+    const vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
+    const outId = store.getState().circuit!.nets.find(n => n.kicadName === 'OUT')!.id
+    const id = store.getState().addBenchInstrument('voltage-probe')
+    store.getState().assignTerminal(id, 'net', { kind: 'net', netId: vinId })
+
+    store.getState().run()
+    mock.emit({ type: 'status', running: true, simTimeSeconds: 0, realtimeFactor: 1 })
+    store.getState().pause()
+    expect(store.getState().simState).toBe('paused')
+    expect(store.getState().deckDirty).toBe(false)
+    mock.clearSent()
+
+    // Rewire the probe from VIN to OUT while paused.
+    store.getState().assignTerminal(id, 'net', { kind: 'net', netId: outId })
+
+    const inst = store.getState().instruments.find(i => 'id' in i && i.id === id)!
+    expect((inst as { netId: number }).netId).toBe(outId)
+    expect(store.getState().deckDirty).toBe(true)
+    expect(mock.sent.some(c => c.type === 'alter')).toBe(false)
   })
 })

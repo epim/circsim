@@ -17,6 +17,7 @@
  *   - alterPlan: function-gen freq/amp/offset → alter (SIN vector form)
  *   - alterPlan: function-gen wave type change → reload
  *   - alterPlan: current-probe on subckt → reload
+ *   - alterPlan: netId change on dc-supply/logic-input/function-gen/voltage-probe → reload
  */
 
 import { readFileSync, readdirSync } from 'fs'
@@ -2357,6 +2358,62 @@ describe('alterPlan — wave type change → reload', () => {
     const result = alterPlan(prev, next)
     expect(result.kind).toBe('reload')
   })
+})
+
+describe('alterPlan — netId change → reload (net rewire ≠ value alter)', () => {
+  // Table-driven: one row per instrument kind whose branch previously never
+  // compared netId (the fixed defect). Each row asserts BOTH halves:
+  //   - net-only change  → reload (the fix)
+  //   - value-only change → alter (pins the pre-existing, still-correct behavior)
+  // Full literals (not spreads) per case: spreading across a discriminated
+  // union defeats TS's narrowing on `kind`, so each variant is written out.
+  const cases: Array<{ name: string; prev: Instrument; valueChanged: Instrument; netChanged: Instrument }> = [
+    {
+      name: 'dc-supply',
+      prev:         { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.1 },
+      valueChanged: { kind: 'dc-supply', id: '1', netId: 1, volts: 9, seriesOhms: 0.1 },
+      netChanged:   { kind: 'dc-supply', id: '1', netId: 2, volts: 5, seriesOhms: 0.1 },
+    },
+    {
+      name: 'logic-input',
+      prev:         { kind: 'logic-input', id: '3', netId: 1, level: 0, vHigh: 5 },
+      valueChanged: { kind: 'logic-input', id: '3', netId: 1, level: 1, vHigh: 5 },
+      netChanged:   { kind: 'logic-input', id: '3', netId: 2, level: 0, vHigh: 5 },
+    },
+    {
+      name: 'function-gen',
+      prev: {
+        kind: 'function-gen', id: '2', netId: 1,
+        wave: 'sine', freqHz: 1000, amplitudeV: 1, offsetV: 0, outputOhms: 50,
+      },
+      valueChanged: {
+        kind: 'function-gen', id: '2', netId: 1,
+        wave: 'sine', freqHz: 2000, amplitudeV: 1, offsetV: 0, outputOhms: 50,
+      },
+      netChanged: {
+        kind: 'function-gen', id: '2', netId: 2,
+        wave: 'sine', freqHz: 1000, amplitudeV: 1, offsetV: 0, outputOhms: 50,
+      },
+    },
+    {
+      name: 'voltage-probe',
+      prev:         { kind: 'voltage-probe', id: 'p1', netId: 1, color: 'blue' },
+      valueChanged: { kind: 'voltage-probe', id: 'p1', netId: 1, color: 'red' },
+      netChanged:   { kind: 'voltage-probe', id: 'p1', netId: 2, color: 'blue' },
+    },
+  ]
+
+  for (const { name, prev, valueChanged, netChanged } of cases) {
+    test(`${name}: netId change (net rewire) → reload`, () => {
+      const result = alterPlan(prev, netChanged)
+      expect(result.kind).toBe('reload')
+    })
+
+    test(`${name}: value-only change (netId unchanged) → alter (unchanged behavior)`, () => {
+      const result = alterPlan(prev, valueChanged)
+      expect(result.kind).toBe('alter')
+    })
+  }
 })
 
 describe('alterPlan — current-probe on subckt → reload', () => {
