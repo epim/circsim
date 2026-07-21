@@ -39,8 +39,8 @@ The Critic reports; you decide; your PCB editor fixes. For each finding worth ac
 
 Common actions the suggestions point to: widen or reroute a track, move a decoupling cap closer to its pin, increase clearance, add a ground pour, connect an exposed thermal pad to ground.
 
-::: info No export yet
-Findings live in the panel — there's no built-in "export to CSV/PDF" or copy-all button in this version. If you need to share them (a design review, a note to your fab), capture them from the panel manually for now.
+::: tip Sharing findings
+The panel has a **Copy** button (top-right) that copies the whole audit — summary, every finding with its detail, assumption, and suggestion, and any not-assessed checks — as plain text, ready to paste into a design review or a note to your fab.
 :::
 
 ## What "no findings" means

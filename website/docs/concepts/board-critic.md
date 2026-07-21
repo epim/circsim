@@ -51,7 +51,7 @@ The thermal check is a *relative* heat-spread proxy in arbitrary units — it te
 Two limits are worth knowing before you lean on the copper-carrying checks:
 
 - **Copper weight is assumed to be 1 oz** everywhere — it's a fixed default, not read from your board. Ampacity and IR-drop are computed against that, so they're conservative on heavier copper and optimistic on lighter. 
-- **Loop area goes silent on a board with no ground copper** — it measures distance to a ground plane, so with no plane to measure against it produces nothing, which can look like "clean." If you have fast signals and no ground pour, read a silent result as "not assessed."
+- **Loop area can't run without ground copper** — it measures distance to a ground plane. On a board with high-speed nets but no ground plane at all, rather than silently reporting nothing (which would read as "clean"), the panel shows an explicit *"loop area: not assessed — no ground copper"* line, so you know it couldn't check the return path.
 
 The [checks reference](../reference/critic-checks) states every threshold and assumption in full.
 

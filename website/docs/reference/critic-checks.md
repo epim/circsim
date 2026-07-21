@@ -59,8 +59,8 @@ A **coarse v1 heuristic** for high-speed nets (names matching clock/SPI/USB/osci
 
 **Assumes:** it's a coarse first pass — it doesn't model the layer stack or actual return-current spread.
 
-::: danger This check goes silent with no ground copper
-The loop-area check measures distance *to ground copper*. If your board has **no ground plane or pour at all**, it has nothing to measure against and produces **zero findings** — which looks identical to "checked and clean." That's exactly the worst case (a high-speed net with no return plane anywhere), and it's the one condition under which this check can't warn you. If your board has fast signals and no ground pour, treat a silent loop-area result as *"not assessed,"* not *"fine."*
+::: warning No ground copper → "not assessed"
+The loop-area check measures distance *to ground copper*. If your board has **no ground plane or pour at all**, it has nothing to measure against. Rather than silently producing zero findings (which would read as "checked and clean"), the panel then shows an explicit **"loop area: not assessed — no ground copper"** line whenever the board actually has high-speed nets — so the worst case (a fast signal with no return plane anywhere) is called out as *not checked* instead of implied fine.
 :::
 
 ## Ampacity *(needs operating point)*
