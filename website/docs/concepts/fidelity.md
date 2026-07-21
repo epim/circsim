@@ -26,7 +26,7 @@ Most ICs in circsim — op-amps, the 555, regulators — are **behavioral macrom
 
 - Op-amp slew rate and gain-bandwidth come from datasheet numbers, but high-frequency parasitic behavior is approximate.
 - Thermal effects on bias current and offset are not modeled.
-- Power-supply and common-mode rejection (PSRR/CMRR — how well the part ignores noise on its supply and shifts in its input common level) and output impedance differ from the real part.
+- Power-supply and common-mode rejection (PSRR = power-supply rejection ratio, CMRR = common-mode rejection ratio — how well the part ignores noise on its supply and shifts in its input common-mode level) and output impedance differ from the real part.
 
 A behavioral model is a good check. It is not the real chip.
 

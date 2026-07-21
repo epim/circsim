@@ -73,6 +73,16 @@ To check a net *into* the MCU — a voltage divider on an ADC pin, a sensor outp
 
 See [what circsim can and can't tell you](../concepts/fidelity#mcus-and-complex-ics-are-stubs) for the full picture on MCUs.
 
+## A related case: driving real logic gates
+
+Interactive pins are for parts circsim *can't* model. But the 74HC and CD4000 logic families **are** modeled behaviorally, and you drive them the same way — with a **Logic Input** from the bench:
+
+1. Add a **Logic Input** and set its **V High** to the chip's rail (5 V for 74HC, or whatever powers your CD4000). Draw its lead to the gate's input net.
+2. [Energize](./energize), then toggle the Logic Input **LO / HI** and watch the gate's output net flip — the truth table, live.
+3. For a **Schmitt-trigger RC astable** (a 74HC14 or CD40106 inverter with a resistor and cap around it), you don't even need to toggle anything: the gate's real hysteresis makes it self-oscillate. Just power it, [probe the output](./probe-and-scope), and press **Run** to watch it oscillate on the scope.
+
+If a CD4000 part's logic thresholds look wrong, check its rail — see the [rail-voltage note](../reference/model-library#digital-logic-behavioral-xspice) and [rail sensing](../reference/architecture#rail-sensing).
+
 ## Related
 
 - [Fix an unresolved part](./model-doctor) — where the Interactive pins mode lives.

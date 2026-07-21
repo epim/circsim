@@ -60,12 +60,12 @@ Terminal order: drain = 1, gate = 2, source = 3 (bulk tied to source).
 | AO3400 | AO3400(A), SI2302, DMN2075U | N (low Rds) |
 | PMOS generic | DMP2305U, SI2301, BSS84 ⚠️ | P |
 | AO3401 | AO3401(A) | P |
+| NCE4012S | NCE4012S | N (power) |
+| NCE6005AS | NCE6005AS | dual N (subckt) |
 
 ::: warning "PMOS generic" is a wide bucket
 This one card covers a big range: DMP2305U and SI2301 are amp-class load switches, while **BSS84** is a ~130 mA small-signal part. The card's on-resistance is tuned toward the higher-current members, so treat BSS84's numbers (and any current-sensitive result) as rough. When Rds(on) or current capability actually matters, [import the specific part's model](../guides/model-doctor#import-a-lib). (AO3401 got its own dedicated card precisely because the generic bucket was too coarse for it.)
 :::
-| NCE4012S | NCE4012S | N (power) |
-| NCE6005AS | NCE6005AS | dual N (subckt) |
 
 ## Op-amps & comparators — behavioral
 

@@ -24,6 +24,8 @@ circsim designates the ground net, clips a 5 V supply onto the power rail, and s
 - **Voltage labels** float over each net.
 - The copper **tints by voltage** (the overlay flips to `Voltage`).
 
+![Close-up of the energized First Light board: the LED D1 lit up at the top of the board with its supply lead clipped to the copper.](/img/led-glow-closeup.png)
+
 At 5 V through 330 Ω into a red LED (which drops about 1.8 V across itself when conducting — its *forward voltage*), the current is roughly **(5 − 1.8) / 330 ≈ 9.7 mA** — a healthy, clearly-lit LED. Hover the parts to read the numbers back.
 
 ![First Light energized: the LED glowing on the 3D board, the red supply lead running to the copper, the PSU panel on the bench showing 5 V, and the Board Critic panel on the right.](/img/first-light-energized.png)

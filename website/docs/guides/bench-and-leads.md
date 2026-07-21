@@ -33,6 +33,10 @@ Every jack is a small circle on the front panel — **filled** when wired, **hol
 2. **Move over the board.** circsim highlights the net (or, for a current probe, the component) you're about to land on.
 3. **Release on copper** to clip the lead to that net. The jack fills in and a solid wire is drawn from the panel to an alligator-clip marker on the board.
 
+![A voltage probe's dashed lead being dragged from its jack on the bench up toward the board, mid-gesture, before it's dropped on a net.](/img/drawing-a-lead.png)
+
+*(Above: a lead in mid-drag — the dashed wire follows the cursor from the V-Probe's jack up to the board. Drop it on copper to clip it on.)*
+
 The lead stays attached to that copper as you orbit and zoom — it tracks the board in 3D.
 
 ::: tip Leads attach even under a component

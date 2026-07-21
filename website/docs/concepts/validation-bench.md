@@ -18,7 +18,7 @@ circsim does two things, and it's worth understanding them as separate promises.
 
 ### 1. The live bench — "does it do what I want?"
 
-Load the board, apply power, and watch it work. Clip a supply, a function generator, a potentiometer, and probes onto real nets. Turn a knob and the LED responds live. This answers the *functional* question: given ideal-ish components, does the circuit behave the way I intended? Is the bias point right? Does the oscillator oscillate? Does the logic do the truth table?
+Load the board, apply power, and watch it work. Clip a supply, a function generator, a potentiometer, and probes onto real nets. Turn a knob and the LED responds live. This answers the *functional* question: given ideal-ish components, does the circuit behave the way I intended? Is the bias point (another name for the [operating point](../guides/energize) — the resting DC voltages and currents) right? Does the oscillator oscillate? Does the logic do the truth table?
 
 This is the "plug it in on a breadboard and see" experience — for a board you can't breadboard because it's already routed.
 
