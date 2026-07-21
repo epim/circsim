@@ -42,7 +42,13 @@ import {
   ledSenseName,
   deriveMeasuredRailVHigh,
 } from '../../../core/spicegen/generate'
-import type { Instrument } from '../../../core/spicegen/instruments'
+import {
+  wiredInstruments, isFullyWired, type Instrument,
+} from '../../../core/spicegen/instruments'
+import {
+  defaultBenchInstrument, applyTerminal, clearTerminal, GROUND_INST_ID,
+  type BenchKind, type Terminal, type AttachTarget,
+} from '../bench/leads'
 import {
   diagnoseDarkLeds,
   type CoachLed,
@@ -239,6 +245,16 @@ export function nextProbeColor(instruments: Instrument[]): string {
     }
   }
   return PROBE_COLORS.find(c => !used.has(c)) ?? PROBE_COLORS[colored % PROBE_COLORS.length]
+}
+
+/**
+ * Bench palette id allocator: a monotonic counter suffixed onto the kind so
+ * every shelf-added instrument gets a stable, unique SPICE-safe id
+ * (`dc_supply_bench_1`, …). Mirrors the retired InstrumentRack's `genId`.
+ */
+let _benchIdCounter = 0
+function benchId(kind: string): string {
+  return `${kind.replace(/-/g, '_')}_bench_${++_benchIdCounter}`
 }
 
 // ─── transient analysis defaults (Spec §7.5) ─────────────────────────────────────
@@ -601,6 +617,13 @@ export interface AppState {
    */
   attachProbeToNet(netId: number): void
 
+  /** Bench palette: create an UNWIRED instrument on the shelf; returns its id. */
+  addBenchInstrument(kind: BenchKind): string
+  /** Wire one terminal to a net/component (lead drop). Ground routes to setGround. */
+  assignTerminal(instId: string, terminal: Terminal, target: AttachTarget): void
+  /** Unwire one terminal (clip dragged off the board). */
+  detachTerminalWire(instId: string, terminal: Terminal): void
+
   /**
    * Test/synchronisation seam: resolves once the energized re-op coalescer is
    * quiescent (no op in flight and no pending re-op). When nothing is in flight
@@ -800,7 +823,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   function syncRingBuffers(instruments: Instrument[]): void {
     const liveIds = new Set<string>()
     for (const inst of instruments) {
-      if (inst.kind === 'voltage-probe') {
+      if (inst.kind === 'voltage-probe' && isFullyWired(inst)) {
         liveIds.add(inst.id)
         if (!ringBuffers.has(inst.id)) ringBuffers.set(inst.id, createRingBuffer())
       }
@@ -1289,6 +1312,35 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       get().selectInstrument(id)
     },
 
+    addBenchInstrument(kind) {
+      const id = benchId(kind)
+      const inst = defaultBenchInstrument(kind, id, nextProbeColor(get().instruments))
+      get().addInstrument(inst)
+      get().selectInstrument(id)
+      return id
+    },
+
+    assignTerminal(instId, terminal, target) {
+      // Ground is the setGround flow (spec §7) — the ground panel's black lead.
+      if (instId === GROUND_INST_ID && terminal === 'gnd') {
+        if (target.kind === 'net') get().setGround(target.netId)
+        return
+      }
+      const inst = get().instruments.find(i => 'id' in i && i.id === instId)
+      if (!inst) return
+      const next = applyTerminal(inst, terminal, target)
+      // applyTerminal returns the SAME object for invalid combos — no-op then;
+      // otherwise route through updateInstrument so alter/re-op semantics fire.
+      if (next !== inst) get().updateInstrument(instId, next)
+    },
+
+    detachTerminalWire(instId, terminal) {
+      const inst = get().instruments.find(i => 'id' in i && i.id === instId)
+      if (!inst) return
+      const next = clearTerminal(inst, terminal)
+      if (next !== inst) get().updateInstrument(instId, next)
+    },
+
     updateInstrument(id, next) {
       const { instruments, resolutions, simState, opVoltages } = get()
       const prev = instruments.find(i => 'id' in i && i.id === id)
@@ -1358,8 +1410,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         // Guided empty-state (Spec §12): nothing to power on.
         return null
       }
-      // Guided empty-state: zero resolved sources → no-op (Spec §12).
-      const hasSource = instruments.some(
+      // Guided empty-state: zero resolved (wired) sources → no-op (Spec §12).
+      // An UNWIRED source added from the shelf palette (bench-leads) doesn't
+      // count — it drives nothing until a lead is dropped on a net.
+      const hasSource = wiredInstruments(instruments).some(
         i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
       )
       if (!hasSource) return null
@@ -1372,7 +1426,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       const deckLines = generateDeck({
         circuit,
         resolutions,
-        instruments,
+        instruments: wiredInstruments(instruments),
         groundNetId,
         title: get().project.boardFileName ?? undefined,
         modelTexts: buildDeckModelTexts(get()),
@@ -1432,7 +1486,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           const deck2 = generateDeck({
             circuit,
             resolutions,
-            instruments,
+            instruments: wiredInstruments(instruments),
             groundNetId,
             title: get().project.boardFileName ?? undefined,
             modelTexts: buildDeckModelTexts(get()),
@@ -1518,8 +1572,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
       // 2) Ensure a driving source. Reuse the open-time auto-supply: attach a
       //    default 5 V DC supply on the top suggested supply net (≠ ground) when
-      //    no source is present yet. Editable/removable afterwards.
-      const hasSource = get().instruments.some(
+      //    no WIRED source is present yet (an unwired shelf instrument doesn't
+      //    count — it can't drive powerOn's solve either). Editable/removable
+      //    afterwards.
+      const hasSource = wiredInstruments(get().instruments).some(
         i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
       )
       if (!hasSource) {
@@ -1547,8 +1603,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         // Guided empty-state (Spec §12): no ground → Run is a no-op, not a dead button.
         return
       }
-      // Guided empty-state: zero resolved sources → no-op (Spec §12).
-      const hasSource = instruments.some(
+      // Guided empty-state: zero resolved (wired) sources → no-op (Spec §12).
+      const hasSource = wiredInstruments(instruments).some(
         i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
       )
       if (!hasSource) return
@@ -1565,7 +1621,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       const deckLines = generateDeck({
         circuit,
         resolutions,
-        instruments,
+        instruments: wiredInstruments(instruments),
         groundNetId,
         title: get().project.boardFileName ?? undefined,
         modelTexts: buildDeckModelTexts(get()),
@@ -1638,7 +1694,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       const deckLines = generateDeck({
         circuit,
         resolutions,
-        instruments,
+        instruments: wiredInstruments(instruments),
         groundNetId,
         title: get().project.boardFileName ?? undefined,
         modelTexts: buildDeckModelTexts(get()),
