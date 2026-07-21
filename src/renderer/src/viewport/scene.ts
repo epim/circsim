@@ -35,6 +35,7 @@ import { createMarkerController, type MarkerController, type AnnotationLabel, ty
 import { createLedGlowController, isLed, ledColorFor, ledIntensity, type LedGlowController } from './ledGlow'
 import { createCriticOverlayController, MARKER_Z_LIFT, type CriticOverlayController } from './criticOverlay'
 import type { Finding } from '../../../core/critic/types'
+import { projectAnchorSet, type Pt } from '../bench/leadGeometry'
 
 // ─── E2E LED-glow hook (First Light, L5) ─────────────────────────────────────────
 
@@ -168,6 +169,27 @@ export interface SceneManager {
    */
   pickNetAt(xPx: number, yPx: number, width: number, height: number): number | null
 
+  /**
+   * Bench leads: generalized pixel-space hit-test. Copper hit → { netId },
+   * component box hit → { ref }, miss → null. pickNetAt remains for callers
+   * that only accept nets.
+   */
+  pickAttachTargetAt(xPx: number, yPx: number, width: number, height: number):
+    { netId: number } | { ref: string } | null
+
+  /**
+   * Bench leads: project net + component anchor world positions to canvas px
+   * using the active camera. Unknown ids/refs are silently skipped.
+   */
+  projectAnchors(netIds: number[], refs: string[]):
+    { nets: Map<number, Pt>; refs: Map<string, Pt> }
+
+  /**
+   * Bench leads: highlight the candidate attach target during a lead drag via
+   * the picker's external-highlight path (same as critic focus). null clears.
+   */
+  highlightAttachTarget(target: { netId?: number; ref?: string } | null): void
+
   // ── LED operating-point glow ───────────────────────────────────────────────
 
   /**
@@ -255,6 +277,10 @@ export function createSceneManager(): SceneManager {
   // Net positions for op annotations: netId → world position (centroid of copper)
   // Populated in loadBoard from pad positions.
   let netPositionsMap = new Map<number, THREE.Vector3>()
+
+  // Component anchor positions for bench lead clamps: ref → world position
+  // (box position + board-centering offset). Populated in loadBoard.
+  let componentAnchorByRef = new Map<string, THREE.Vector3>()
 
   // ── Picking controller (Task 19) ────────────────────────────────────────────
   const picker = createPicker(
@@ -552,6 +578,8 @@ export function createSceneManager(): SceneManager {
       // ref → footprint, for LED classification / color capture.
       const fpByRef = new Map(board.footprints.map(fp => [fp.ref, fp]))
 
+      componentAnchorByRef = new Map<string, THREE.Vector3>()
+
       const boxEntries = buildComponentBoxes(board.footprints, board.boardThicknessMm)
       for (const entry of boxEntries) {
         const mat = new THREE.MeshStandardMaterial({
@@ -566,6 +594,13 @@ export function createSceneManager(): SceneManager {
         mesh.userData = { ref: entry.ref, className: entry.className }
         componentGroup.add(mesh)
         picker.registerComponentBox(mesh, entry.ref)
+
+        // World-space anchor for bench lead clamps: the box position plus the
+        // group's board-centering offset (same convention as netPositionsMap).
+        componentAnchorByRef.set(
+          entry.ref,
+          new THREE.Vector3(entry.worldX - cx, entry.worldY - cy, entry.worldZ),
+        )
 
         // LEDs get an emissive channel + halo so they can light at their OP current.
         const fp = fpByRef.get(entry.ref)
@@ -734,6 +769,39 @@ export function createSceneManager(): SceneManager {
       const hit = picker.raycastFirst({ x: ndcX, y: ndcY }, cam)
       if (!hit) return null
       return hit.netId ?? null
+    },
+
+    // ── Bench leads: generalized attach-target hit-test + anchor projection ────
+    pickAttachTargetAt(xPx, yPx, width, height) {
+      const cam = getActiveCamera()
+      const ndcX = (xPx / width) * 2 - 1
+      const ndcY = (yPx / height) * -2 + 1
+      const hit = picker.raycastFirst({ x: ndcX, y: ndcY }, cam)
+      if (!hit) return null
+      if (hit.netId !== undefined) return { netId: hit.netId }
+      if (hit.ref !== undefined) return { ref: hit.ref }
+      return null
+    },
+
+    projectAnchors(netIds, refs) {
+      const cam = getActiveCamera()
+      const size = renderer ? renderer.getSize(new THREE.Vector2()) : new THREE.Vector2(800, 600)
+      const nets = new Map<number, THREE.Vector3>()
+      for (const id of netIds) {
+        const pos = netPositionsMap.get(id)
+        if (pos) nets.set(id, pos)
+      }
+      const refMap = new Map<string, THREE.Vector3>()
+      for (const ref of refs) {
+        const pos = componentAnchorByRef.get(ref)
+        if (pos) refMap.set(ref, pos)
+      }
+      return projectAnchorSet(nets, refMap, cam, size.x, size.y)
+    },
+
+    highlightAttachTarget(target) {
+      picker.setExternalHighlight(target?.netId ?? null, target?.ref ? [target.ref] : [])
+      dirty = true
     },
 
     // ── LED operating-point glow ────────────────────────────────────────────────

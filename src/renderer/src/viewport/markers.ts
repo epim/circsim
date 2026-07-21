@@ -152,8 +152,9 @@ export function formatVolts(v: number): string {
  * Project a world-space Vector3 into screen pixel coordinates.
  *
  * @returns { px, py } in pixel space (top-left origin, as CSS pixels).
+ * Exported: same convention as bench/leadGeometry.projectAnchor.
  */
-function projectToScreen(
+export function projectToScreen(
   worldPos: THREE.Vector3,
   camera: THREE.Camera,
   canvasW: number,

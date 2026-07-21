@@ -607,3 +607,27 @@ describe('kicadToWorld sanity for pad positions', () => {
     expect(world.y).toBeCloseTo(-10, 4)
   })
 })
+
+// ─── bench lead clamp drops: component-hit pinning test ───────────────────────
+
+describe('raycastFirst — component box path (bench lead clamp drops)', () => {
+  it('returns { ref } when the first hit is a registered component box', () => {
+    const picker = createPicker(() => {})
+    const boxGeo = new THREE.BoxGeometry(10, 10, 2)
+    const box = new THREE.Mesh(boxGeo, new THREE.MeshStandardMaterial())
+    box.position.set(0, 0, 0)
+    box.updateMatrixWorld(true)
+    picker.registerComponentBox(box, 'D1')
+
+    const cam = new THREE.OrthographicCamera(-50, 50, 50, -50, 0.1, 1000)
+    cam.position.set(0, 0, 100)
+    cam.lookAt(0, 0, 0)
+    cam.updateProjectionMatrix()
+    cam.updateMatrixWorld(true)
+
+    const hit = picker.raycastFirst({ x: 0, y: 0 }, cam)
+    expect(hit).not.toBeNull()
+    expect(hit!.ref).toBe('D1')
+    expect(hit!.netId).toBeUndefined()
+  })
+})
