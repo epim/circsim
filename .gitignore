@@ -13,3 +13,9 @@ coverage/
 playwright-report/
 test-results/
 *.tsbuildinfo
+
+# circsim docs site (website/)
+website/node_modules/
+website/docs/.vitepress/cache/
+website/docs/.vitepress/dist/
+website/.ralph-state.md
