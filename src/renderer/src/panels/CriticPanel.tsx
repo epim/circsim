@@ -61,16 +61,38 @@ export function CriticPanelView({
   selectedFindingId: string | null
   onSelect: (id: string) => void
 }): React.ReactElement | null {
+  const [copied, setCopied] = React.useState(false)
+
   // Nothing to show until the first audit (no board / not yet run).
   if (!report) return null
 
   const byseverity = groupBySeverity(report.findings)
 
+  const handleCopy = (): void => {
+    if (typeof navigator !== 'undefined') {
+      navigator.clipboard?.writeText(formatCriticReport(report)).catch(() => {})
+    }
+    setCopied(true)
+    if (typeof window !== 'undefined') window.setTimeout(() => setCopied(false), 1500)
+  }
+
   return (
     <div style={panelStyle} data-testid="critic-panel">
       <div style={headerStyle}>
         <span style={{ fontWeight: 600 }}>Board Critic</span>
-        <span style={{ fontSize: 11, color: '#7a8499' }}>read-only audit</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {report.findings.length > 0 && (
+            <button
+              style={copyBtnStyle}
+              data-testid="critic-copy-btn"
+              onClick={handleCopy}
+              title="Copy all findings to the clipboard (e.g. for a design review)"
+            >
+              {copied ? 'Copied!' : 'Copy'}
+            </button>
+          )}
+          <span style={{ fontSize: 11, color: '#7a8499' }}>read-only audit</span>
+        </span>
       </div>
 
       {/* Per-severity summary badges. */}
@@ -111,18 +133,57 @@ export function CriticPanelView({
         )
       })}
 
-      {/* Skipped checks (subtle): what an op-solve would add. */}
+      {/* Skipped / not-assessed checks (subtle): what a check couldn't cover. */}
       {report.skipped.length > 0 && (
         <div style={skippedWrapStyle} data-testid="critic-skipped">
           {report.skipped.map(s => (
             <div key={s.check} style={skippedItemStyle}>
-              {(CHECK_LABEL[s.check] ?? s.check)}: needs simulation
+              {(CHECK_LABEL[s.check] ?? s.check)}: {skippedText(s.reason)}
             </div>
           ))}
         </div>
       )}
     </div>
   )
+}
+
+/**
+ * Turn a skip reason into the short panel text. Op-informed checks (their
+ * reason mentions the operating point) read "needs simulation"; anything else
+ * — e.g. loop-area with no ground copper — shows its own not-assessed reason.
+ */
+function skippedText(reason: string): string {
+  return reason.includes('operating-point') ? 'needs simulation' : reason
+}
+
+/**
+ * Format a report as plain text for the clipboard — for pasting into a design
+ * review or a note to a fab. Exported + unit-tested. Mirrors the panel: summary,
+ * findings grouped error → warn → info, then any not-assessed checks.
+ */
+export function formatCriticReport(report: CriticReport): string {
+  const { error, warn, info } = report.summary
+  const lines: string[] = [`Board Critic — ${error} error, ${warn} warn, ${info} info`, '']
+  const groups = groupBySeverity(report.findings)
+  for (const sev of ORDER) {
+    const group = groups[sev]
+    if (group.length === 0) continue
+    lines.push(sev.toUpperCase())
+    for (const f of group) {
+      lines.push(`- ${f.title}`)
+      if (f.detail) lines.push(`  ${f.detail}`)
+      if (f.assumption) lines.push(`  Assumes: ${f.assumption}`)
+      if (f.suggestion) lines.push(`  → ${f.suggestion}`)
+    }
+    lines.push('')
+  }
+  if (report.skipped.length > 0) {
+    lines.push('Not assessed:')
+    for (const s of report.skipped) {
+      lines.push(`- ${CHECK_LABEL[s.check] ?? s.check}: ${skippedText(s.reason)}`)
+    }
+  }
+  return lines.join('\n').replace(/\n+$/, '') + '\n'
 }
 
 function FindingRow({
@@ -284,4 +345,13 @@ const skippedWrapStyle: React.CSSProperties = {
 const skippedItemStyle: React.CSSProperties = {
   color: '#6c7689',
   fontSize: 11,
+}
+const copyBtnStyle: React.CSSProperties = {
+  background: '#23293a',
+  color: '#aeb6c8',
+  border: '1px solid #333c52',
+  borderRadius: 4,
+  padding: '1px 8px',
+  fontSize: 11,
+  cursor: 'pointer',
 }

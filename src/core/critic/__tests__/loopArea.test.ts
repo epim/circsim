@@ -60,6 +60,26 @@ describe('checkLoopArea', () => {
     expect(report.skipped.some((s) => s.check === 'loop-area')).toBe(false)
   })
 
+  it('reports "not assessed" when a high-speed net has no ground copper to measure against', () => {
+    // CLK routed, GND net exists (pads) but NO ground copper (no GND track/zone).
+    const b = makeBoard('CLK', SIG_TRACE)
+    const report = runCritic(b, extract(b))
+    // Not counted as "ran" — it couldn't complete its measurement.
+    expect(report.ranBy).not.toContain('loop-area')
+    const sk = report.skipped.find((s) => s.check === 'loop-area')
+    expect(sk).toBeDefined()
+    expect(sk!.reason.toLowerCase()).toContain('no ground copper')
+    // And it produces no misleading finding.
+    expect(report.findings.some((f) => f.check === 'loop-area')).toBe(false)
+  })
+
+  it('stays silent (neither ran-with-findings nor "not assessed") with no ground copper AND no high-speed net', () => {
+    const b = makeBoard('SENSE_A', SIG_TRACE) // non-high-speed signal, no ground copper
+    const report = runCritic(b, extract(b))
+    expect(report.skipped.some((s) => s.check === 'loop-area')).toBe(false)
+    expect(report.findings.some((f) => f.check === 'loop-area')).toBe(false)
+  })
+
   it('warns on a CLK trace with its ground return 3 mm away (area ≈ 240 mm²)', () => {
     const findings = loopFindings('CLK', SIG_TRACE + GND_NEAR)
     expect(findings).toHaveLength(1)

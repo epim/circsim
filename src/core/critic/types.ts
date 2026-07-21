@@ -56,6 +56,15 @@ export interface CriticReport {
   summary: { error: number; warn: number; info: number }
 }
 
+/**
+ * A check returns its findings, or — when it ran but a missing precondition
+ * kept it from actually assessing (e.g. loop-area with no ground copper to
+ * measure against) — an object carrying `notAssessed`. The runner surfaces
+ * that reason in `skipped` so the panel never presents "no findings" as
+ * "checked and clean". Checks that always assess just return `Finding[]`.
+ */
+export type CheckOutput = Finding[] | { findings: Finding[]; notAssessed?: string }
+
 export interface CriticOptions {
   /** Copper weight in oz (thickness = oz × 34.8 µm). Default 1. */
   copperOz: number

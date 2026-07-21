@@ -22,7 +22,7 @@
  * order).
  */
 
-import type { Finding } from '../types'
+import type { CheckOutput, Finding } from '../types'
 import type { CriticContext } from '../context'
 import type { OutlineGeometry, TrackSegment, Vec2 } from '../../kicad/types'
 import { classifyRails } from '../classify'
@@ -83,12 +83,30 @@ function distToGround(a: Vec2, b: Vec2, gnd: GroundCopper): number {
   return best
 }
 
-export function checkLoopArea(ctx: CriticContext): Finding[] {
+export function checkLoopArea(ctx: CriticContext): CheckOutput {
   const { board, circuit, opts } = ctx
   const { powerNetIds, groundNetIds } = classifyRails(circuit, ctx)
 
   const gnd = collectGroundCopper(ctx, groundNetIds)
-  if (gnd.chords.length === 0 && gnd.zones.length === 0) return [] // no return copper at all
+  if (gnd.chords.length === 0 && gnd.zones.length === 0) {
+    // No ground copper anywhere → no return path to measure against. If the
+    // board actually has high-speed nets, this is the dangerous silent case
+    // (a signal with no return plane): surface it as "not assessed" rather
+    // than letting an empty result read as "checked and clean". With no
+    // high-speed nets there is nothing to assess, so stay quiet.
+    const hasHighSpeed = circuit.nets.some(
+      (net) =>
+        !powerNetIds.has(net.id) &&
+        !groundNetIds.has(net.id) &&
+        HIGH_SPEED_NET_RE.test(net.kicadName) &&
+        board.tracks.some((t) => t.netId === net.id),
+    )
+    if (!hasHighSpeed) return []
+    return {
+      findings: [],
+      notAssessed: 'not assessed — no ground copper on this board to measure loops against',
+    }
+  }
 
   const findings: Finding[] = []
 

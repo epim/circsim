@@ -10,7 +10,7 @@
 
 import type { BoardModel } from '../kicad/types'
 import type { Circuit } from '../netlist/extract'
-import type { CheckId, CriticOptions, CriticReport, Finding, OpResult } from './types'
+import type { CheckId, CheckOutput, CriticOptions, CriticReport, Finding, OpResult } from './types'
 import { DEFAULT_CRITIC_OPTIONS } from './types'
 import { buildContext, type CriticContext } from './context'
 import { checkFloating } from './checks/floating'
@@ -21,7 +21,7 @@ import { checkAmpacity } from './checks/ampacity'
 import { checkIrDrop } from './checks/irDrop'
 import { checkThermal } from './checks/thermal'
 
-type Check = (ctx: CriticContext) => Finding[]
+type Check = (ctx: CriticContext) => CheckOutput
 
 /** Registry of checks. Each entry may declare what it needs; missing inputs → skipped. */
 const CHECKS: { id: CheckId; run: Check; needs?: 'op' }[] = [
@@ -52,8 +52,20 @@ export function runCritic(
       skipped.push({ check: check.id, reason: 'needs an operating-point simulation' })
       continue
     }
-    findings.push(...check.run(ctx))
-    ranBy.push(check.id)
+    const out = check.run(ctx)
+    if (Array.isArray(out)) {
+      findings.push(...out)
+      ranBy.push(check.id)
+    } else {
+      findings.push(...out.findings)
+      if (out.notAssessed) {
+        // Ran, but a precondition kept it from assessing — record it in skipped
+        // so the panel shows "not assessed", not silence-as-clean.
+        skipped.push({ check: check.id, reason: out.notAssessed })
+      } else {
+        ranBy.push(check.id)
+      }
+    }
   }
 
   const summary = { error: 0, warn: 0, info: 0 }
