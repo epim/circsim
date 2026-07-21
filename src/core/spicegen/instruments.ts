@@ -67,6 +67,35 @@ export function potResistorNames(inst: Extract<Instrument, { kind: 'potentiomete
   return { upper: `rpot_${suffix}_a`, lower: `rpot_${suffix}_b` }
 }
 
+// ── Bench-leads wiring state (2026-07-20 bench-leads spec §1) ────────────────
+// An instrument added from the shelf palette starts UNWIRED: net fields hold
+// UNWIRED (-1) and current-probe.ref holds ''. Everything that feeds SPICE
+// (deck generation, source presence, probe vectors) must see only fully wired
+// instruments — filter with wiredInstruments().
+
+export const UNWIRED = -1
+
+export function isFullyWired(inst: Instrument): boolean {
+  switch (inst.kind) {
+    case 'ground-ref':
+    case 'dc-supply':
+    case 'function-gen':
+    case 'logic-input':
+    case 'voltage-probe':
+      return inst.netId !== UNWIRED
+    case 'current-probe':
+      return inst.ref !== ''
+    case 'potentiometer':
+      return inst.mode === 'rheostat'
+        ? inst.netA !== UNWIRED && inst.netW !== UNWIRED
+        : inst.netHi !== UNWIRED && inst.netW !== UNWIRED && inst.netLo !== UNWIRED
+  }
+}
+
+export function wiredInstruments(list: Instrument[]): Instrument[] {
+  return list.filter(isFullyWired)
+}
+
 // ─── AlterPlan result ─────────────────────────────────────────────────────────
 
 /**
