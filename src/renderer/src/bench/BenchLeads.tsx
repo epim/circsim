@@ -12,7 +12,8 @@
  * Recompute triggers: scene frame render (notifyFrame via ref), window
  * resize, shelf scroll (capture-phase), instruments/ground change.
  *
- * Drag: pointerdown on a jack or clip → setPointerCapture on that element →
+ * Drag: pointerdown on a jack (shelf DOM) or clip (pointerEvents:auto SVG) —
+ * so it never reaches the canvas/OrbitControls — adds window listeners;
  * window pointermove updates the dashed lead + throttled (50 ms) candidate
  * highlight via scene.highlightAttachTarget → pointerup resolves:
  *   over canvas + valid hit  → assignTerminal
@@ -255,12 +256,14 @@ const BenchLeads = forwardRef<BenchLeadsHandle, {
                 data-y={l.clip.py}
                 style={{ pointerEvents: 'auto', cursor: 'grab' }}
                 onPointerDown={e => {
-                  const row = jacksFor(
-                    l.instId === GROUND_INST_ID
-                      ? { kind: 'ground-ref', netId: groundNetId ?? -1 }
-                      : (instruments.find(i => 'id' in i && i.id === l.instId)!),
-                    l.instId,
-                  ).find(j => j.terminal === l.terminal)
+                  // `leads` is set from a post-render effect, so for one frame
+                  // after removeInstrument a clip can still reference a gone
+                  // instrument — guard the lookup instead of asserting non-null.
+                  const owner = l.instId === GROUND_INST_ID
+                    ? ({ kind: 'ground-ref', netId: groundNetId ?? -1 } as const)
+                    : instruments.find(i => 'id' in i && i.id === l.instId)
+                  if (!owner) return
+                  const row = jacksFor(owner, l.instId).find(j => j.terminal === l.terminal)
                   if (row) beginDrag(row, e)
                 }}
               >

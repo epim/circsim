@@ -160,7 +160,9 @@ export interface SceneManager {
 
   /**
    * Return the netId of the copper mesh under the given canvas pixel position,
-   * or null if nothing is hit. Used by Viewport.tsx for instrument drag-drop.
+   * or null if nothing is hit. Nets-only convenience; the bench lead drop path
+   * uses pickAttachTargetAt (nets AND component boxes) instead. Currently
+   * unreferenced — retained as a public nets-only helper.
    *
    * @param xPx     X position in canvas CSS pixels (from left)
    * @param yPx     Y position in canvas CSS pixels (from top)
