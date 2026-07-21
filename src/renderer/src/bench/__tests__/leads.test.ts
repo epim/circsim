@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { UNWIRED, type Instrument } from '../../../../core/spicegen/instruments'
 import {
   jacksFor, defaultBenchInstrument, applyTerminal, clearTerminal, potModeSwitch, resolveDrop,
-  JACK_COLORS, GROUND_INST_ID, type JackDef,
+  computeLeads, JACK_COLORS, GROUND_INST_ID, type JackDef,
 } from '../leads'
 
 describe('defaultBenchInstrument', () => {
@@ -103,6 +103,30 @@ describe('resolveDrop', () => {
   })
   it('null hit → null', () => {
     expect(resolveDrop(null, netJack)).toBeNull()
+  })
+})
+
+describe('computeLeads', () => {
+  const jackRects = new Map([['s1:net', { px: 10, py: 500 }], ['p1:A', { px: 60, py: 500 }]])
+  const anchors = { nets: new Map([[7, { px: 200, py: 100 }]]), refs: new Map<string, { px: number; py: number }>() }
+  it('wired jack with a live net + known anchors → one lead with a path', () => {
+    const inst: Instrument = { kind: 'dc-supply', id: 's1', netId: 7, volts: 5, seriesOhms: 0.1 }
+    const leads = computeLeads([{ inst, instId: 's1' }], jackRects, anchors, new Set([7]))
+    expect(leads).toHaveLength(1)
+    expect(leads[0]).toMatchObject({ jackKey: 's1:net', dangling: false, color: expect.stringMatching(/^#/) })
+    expect(leads[0].path).toMatch(/^M 10 500 C /)
+    expect(leads[0].clip).toEqual({ px: 200, py: 100 })
+  })
+  it('wired jack whose net no longer exists → dangling, no clip', () => {
+    const inst: Instrument = { kind: 'dc-supply', id: 's1', netId: 7, volts: 5, seriesOhms: 0.1 }
+    const leads = computeLeads([{ inst, instId: 's1' }], jackRects, anchors, new Set([99]))
+    expect(leads[0]).toMatchObject({ dangling: true, clip: null, path: null })
+  })
+  it('unwired jacks and jacks without a measured rect produce no lead', () => {
+    const unwired: Instrument = { kind: 'dc-supply', id: 's1', netId: UNWIRED, volts: 5, seriesOhms: 0.1 }
+    expect(computeLeads([{ inst: unwired, instId: 's1' }], jackRects, anchors, new Set([7]))).toHaveLength(0)
+    const wired: Instrument = { kind: 'voltage-probe', id: 'zz', netId: 7, color: '#6f6' }
+    expect(computeLeads([{ inst: wired, instId: 'zz' }], jackRects, anchors, new Set([7]))).toHaveLength(0)
   })
 })
 

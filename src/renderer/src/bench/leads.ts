@@ -8,6 +8,7 @@
 import {
   UNWIRED, isFullyWired, type Instrument,
 } from '../../../core/spicegen/instruments'
+import { leadPath, type Pt } from './leadGeometry'
 
 export { UNWIRED, isFullyWired }
 
@@ -165,4 +166,57 @@ export function resolveDrop(
   if (jack.accepts === 'net' && hit.netId !== undefined) return { kind: 'net', netId: hit.netId }
   if (jack.accepts === 'component' && hit.ref !== undefined) return { kind: 'component', ref: hit.ref }
   return null
+}
+
+export interface LeadRender {
+  jackKey: string
+  instId: string
+  terminal: Terminal
+  color: string
+  jack: Pt
+  /** Projected clip anchor; null while dangling. */
+  clip: Pt | null
+  /** SVG path; null while dangling. */
+  path: string | null
+  /** Wired to a net that no longer exists on the (reloaded) board. */
+  dangling: boolean
+}
+
+/**
+ * Assemble the render model for every wired jack. A lead renders only when
+ * its jack has a measured rect; it is dangling when its net target is absent
+ * from the live circuit (spec §5). Component targets are never dangling here —
+ * a vanished ref simply loses its anchor and the lead is skipped.
+ */
+export function computeLeads(
+  instruments: Array<{ inst: Instrument; instId: string }>,
+  jackRects: Map<string, Pt>,
+  anchors: { nets: Map<number, Pt>; refs: Map<string, Pt> },
+  liveNetIds: Set<number>,
+): LeadRender[] {
+  const out: LeadRender[] = []
+  for (const { inst, instId } of instruments) {
+    for (const jack of jacksFor(inst, instId)) {
+      if (!jack.target) continue
+      const jackPt = jackRects.get(jack.key)
+      if (!jackPt) continue
+      if (jack.target.kind === 'net') {
+        if (!liveNetIds.has(jack.target.netId)) {
+          out.push({ jackKey: jack.key, instId, terminal: jack.terminal, color: jack.color,
+            jack: jackPt, clip: null, path: null, dangling: true })
+          continue
+        }
+        const clip = anchors.nets.get(jack.target.netId)
+        if (!clip) continue
+        out.push({ jackKey: jack.key, instId, terminal: jack.terminal, color: jack.color,
+          jack: jackPt, clip, path: leadPath(jackPt, clip), dangling: false })
+      } else {
+        const clip = anchors.refs.get(jack.target.ref)
+        if (!clip) continue
+        out.push({ jackKey: jack.key, instId, terminal: jack.terminal, color: jack.color,
+          jack: jackPt, clip, path: leadPath(jackPt, clip), dangling: false })
+      }
+    }
+  }
+  return out
 }

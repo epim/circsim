@@ -4,16 +4,19 @@
  * App shell: toolbar (Open), left dock (Parts + Model Doctor), 3D viewport.
  * Bidirectional selection sync: PartsPanel ↔ store.selectedRef ↔ viewport picks.
  *
- * Later tasks (22–24) add the instrument rack, scope, and run controls; this
- * shell leaves room (right/bottom docks) for them.
+ * Bench Leads (Task 5): the center column wraps the viewport in BenchLeads,
+ * which renders the bench shelf + the SVG lead overlay above the bottom dock.
+ * The old InstrumentRack/InstrumentProps right-dock panel is retired; only
+ * the MCU interactive-pins panel (McuPinsPanel) still lives in the right dock.
  */
 
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useRef, useState } from 'react'
 import Viewport from './viewport/Viewport'
 import PartsPanel from './panels/PartsPanel'
 import ModelDoctor from './panels/ModelDoctor'
 import GroundSetup from './panels/GroundSetup'
-import InstrumentRack from './panels/InstrumentRack'
+import McuPinsPanel from './panels/McuPinsPanel'
+import BenchLeads, { type BenchLeadsHandle } from './bench/BenchLeads'
 import Toolbar from './panels/Toolbar'
 import WarningsBar, { FidelityBadge } from './panels/WarningsBar'
 import CoachNotes from './panels/CoachNotes'
@@ -52,6 +55,12 @@ function Shell(): React.ReactElement {
 
   const summary = resolutionSummary(resolutions)
 
+  // Bench Leads (Task 5): the live SceneManager, shared with BenchLeads so it
+  // can project net/component anchors; the handle lets Viewport's onRender
+  // trigger a lead recompute without re-rendering React at frame rate.
+  const [sceneMgr, setSceneMgr] = useState<SceneManager | null>(null)
+  const benchRef = useRef<BenchLeadsHandle>(null)
+
   // Overlay mode: App owns the UI selection; the scene is imperative. Defaults to
   // voltage once an op result is in, so the primary scenario lights up the copper.
   const [overlay, setOverlay] = useState<OverlayMode>('realistic')
@@ -76,6 +85,7 @@ function Shell(): React.ReactElement {
   const handleSceneReady = useCallback(
     (scene: SceneManager | null) => {
       store.getState().setBoardHooks(scene)
+      setSceneMgr(scene)
     },
     [store],
   )
@@ -163,41 +173,15 @@ function Shell(): React.ReactElement {
     [store],
   )
 
-  // Task 22: instrument chip dropped onto a net on the 3D board
-  const handleNetDrop = useCallback(
-    (netId: number, kind: string) => {
-      const st = store.getState()
-      // Generate a unique id
-      const id = `${kind.replace(/-/g, '_')}_${Date.now()}`
-      switch (kind) {
-        case 'dc-supply':
-          st.addInstrument({ kind: 'dc-supply', id, netId, volts: 5, seriesOhms: 0.1 })
-          break
-        case 'function-gen':
-          st.addInstrument({
-            kind: 'function-gen', id, netId,
-            wave: 'sine', freqHz: 1000, amplitudeV: 1, offsetV: 0, outputOhms: 50,
-          })
-          break
-        case 'logic-input':
-          st.addInstrument({ kind: 'logic-input', id, netId, level: 0, vHigh: 3.3 })
-          break
-        case 'voltage-probe':
-          // Shared attach path: per-net dedupe + the ONE color allocator, so a
-          // dragged probe never collides with a click-attached one (M7 review).
-          st.attachProbeToNet(netId)
-          break
-        case 'current-probe':
-          // Current probes need a component ref — can't resolve from a net drop
-          // alone. Fall back to a voltage probe via the same shared path.
-          st.attachProbeToNet(netId)
-          break
-        default:
-          break
-      }
-    },
-    [store],
-  )
+  // MCU interactive-pins panel gating (lifted from the retired InstrumentRack,
+  // InstrumentRack.tsx:323-328): shown in the right dock when the part
+  // selected in Parts resolves to an 'interactive-pins' stub.
+  const selectedMcuRef = selectedRef
+  const isMcuSelected =
+    selectedMcuRef !== null &&
+    resolutions.some(
+      r => r.ref === selectedMcuRef && r.model?.kind === 'stub' && r.model.mode === 'interactive-pins',
+    )
 
   // Drag-drop onto the window: a .kicad_pcb opens a board; a .kicad_sch dropped
   // while a board is loaded ATTACHES to it (M3 — the manual-attach drag path for
@@ -311,30 +295,32 @@ function Shell(): React.ReactElement {
           <ModelDoctor />
         </aside>
         <div style={centerColStyle}>
-          <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
-            {board ? (
-              <Viewport
-                board={board}
-                onPick={handlePick}
-                onNetDrop={handleNetDrop}
-                onSceneReady={handleSceneReady}
-                netVoltages={opVoltages ?? undefined}
-                voltageRange={voltageRange}
-                overlay={overlay}
-              />
-            ) : (
-              <NoBoardState
-                onOpen={handleOpen}
-                onOpenSample={handleOpenSample}
-                onOpenFirstLight={handleOpenFirstLight}
-              />
-            )}
-            {/* Plain-language dark-LED coach (non-blocking overlay). */}
-            {board && <CoachNotes />}
-            {selectedRef && (
-              <div style={selectionBadge}>Selected: {selectedRef}</div>
-            )}
-          </div>
+          <BenchLeads ref={benchRef} scene={sceneMgr}>
+            <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+              {board ? (
+                <Viewport
+                  board={board}
+                  onPick={handlePick}
+                  onSceneReady={handleSceneReady}
+                  onRender={() => benchRef.current?.notifyFrame()}
+                  netVoltages={opVoltages ?? undefined}
+                  voltageRange={voltageRange}
+                  overlay={overlay}
+                />
+              ) : (
+                <NoBoardState
+                  onOpen={handleOpen}
+                  onOpenSample={handleOpenSample}
+                  onOpenFirstLight={handleOpenFirstLight}
+                />
+              )}
+              {/* Plain-language dark-LED coach (non-blocking overlay). */}
+              {board && <CoachNotes />}
+              {selectedRef && (
+                <div style={selectionBadge}>Selected: {selectedRef}</div>
+              )}
+            </div>
+          </BenchLeads>
           {/* Bottom dock: Oscilloscope + Sim log (Spec §11). */}
           {board && (
             <div style={bottomDockStyle}>
@@ -375,10 +361,12 @@ function Shell(): React.ReactElement {
             </div>
           )}
         </div>
-        {/* Right dock: GroundSetup + InstrumentRack + Board Critic */}
+        {/* Right dock: GroundSetup + MCU pins (when selected) + Board Critic.
+            The bench shelf itself now lives between the viewport and the
+            bottom dock (see BenchLeads above) — the rack is retired. */}
         <aside style={rightDockStyle}>
           <GroundSetup />
-          <InstrumentRack />
+          {isMcuSelected && selectedMcuRef && <McuPinsPanel ref_={selectedMcuRef} />}
           {board && <CriticPanel />}
         </aside>
       </main>
