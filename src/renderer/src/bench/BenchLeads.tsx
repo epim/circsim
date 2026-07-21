@@ -172,6 +172,22 @@ const BenchLeads = forwardRef<BenchLeadsHandle, {
     if (e.key === 'Escape') endDrag()
   }, [endDrag])
 
+  // Keep a live handle on the current drag listeners so the unmount cleanup
+  // removes exactly what beginDrag last added — without re-running on every
+  // memoization change (which would tear down an in-progress drag).
+  const dragListenersRef = useRef<{ move: (e: PointerEvent) => void; up: (e: PointerEvent) => void; key: (e: KeyboardEvent) => void } | null>(null)
+  useEffect(() => { dragListenersRef.current = { move: onDragMove, up: onDragUp, key: onDragKey } }, [onDragMove, onDragUp, onDragKey])
+
+  // Remove drag listeners on unmount to prevent leaks if drag is in progress.
+  useEffect(() => () => {
+    const l = dragListenersRef.current
+    if (l) {
+      window.removeEventListener('pointermove', l.move)
+      window.removeEventListener('pointerup', l.up)
+      window.removeEventListener('keydown', l.key)
+    }
+  }, [])
+
   const beginDrag = useCallback((jack: JackDef, e: React.PointerEvent) => {
     e.preventDefault()
     const cRect = containerRef.current!.getBoundingClientRect()

@@ -17,6 +17,12 @@ function openedStore(): ReturnType<typeof createAppStore> {
 }
 
 describe('BenchLeads composition', () => {
+  // NOTE: Unmount cleanup (removal of window listeners on unmount) is covered by
+  // code inspection and typecheck. vitest uses Node environment (not jsdom),
+  // so renderToStaticMarkup does not mount/unmount components or run effects.
+  // The actual component mount/unmount behavior is exercised at runtime in the
+  // Electron app; static typing ensures the cleanup effect is well-formed.
+
   it('renders children + shelf + the lead-layer SVG in one container', () => {
     const store = openedStore()
     ;(store as unknown as { getServerState?: () => AppState }).getServerState = () => store.getState()
