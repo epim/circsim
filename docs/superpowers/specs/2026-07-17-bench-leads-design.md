@@ -48,9 +48,13 @@ instrument by **dragging a lead out of a jack** and dropping it on copper.
 - **Leads** are sagging wires drawn from jack to clip. Wired = solid, in
   the jack color above; drag-in-progress = dashed; dangling (net vanished
   after reload) = dashed + clip hidden + jack ringed open.
-- The **board-end clip** is the existing probe-marker sprite restyled as an
-  alligator clip, so it stays anchored to the copper through orbit/zoom and
-  keeps the marker declutter/anchor machinery.
+- The **board-end clip** renders as an SVG glyph in the LeadLayer at the
+  projected anchor (`data-x`/`data-y` in container px), doubling as the
+  re-attach hit target. **[2026-07-20 implementation note]** The spec
+  originally reused "the existing probe-marker sprite", but `addProbeMarker`
+  turned out to have zero production callers — the Task-20 marker layer was
+  never wired to any in-scene visual, so there was nothing to restyle; the
+  anchor world positions (`netPositionsMap`) are reused as specced.
 
 ## 2. Lead gesture
 
@@ -119,7 +123,13 @@ wiring from its instrument's net fields. Scene render → `onAfterRender` →
 re-project the (small) set of wired anchors → `LeadLayer` state. Camera
 moves already invalidate/render, so leads track orbit/zoom with zero new
 render loops. Lead drop → `pickAttachTargetAt` → store action → existing
-`alterPlan` decides alter vs reload, exactly as today.
+`alterPlan` decides alter vs reload, exactly as today. **[2026-07-20
+amendment]** "Exactly as today" no longer holds for the netId-change case:
+fix 67ed91a made a net **rewire** (drag a lead to a new net) `alterPlan`-
+classified as `reload` for dc-supply/logic-input/function-gen/voltage-probe,
+where it had previously fallen through to `alter` — a live alter cannot move
+a source's node, so treating rewiring as a value edit was a latent bug, not
+a spec-conformant behavior worth preserving.
 
 ## 5. Edge cases
 

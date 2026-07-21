@@ -16,10 +16,22 @@
  *   4. Poll window.__circsimLedGlow (published by scene.ts applyLedCurrents →
  *      publishLedGlow on every op solve) until max > 0.05 — the LED is lit.
  *      Cross-check the <html data-led-glow-max> mirror attribute.
- *   5. Lower the supply to 2.5 V via the supply voltage input (the auto supply is
- *      auto-selected in the InstrumentRack so data-testid="supply-volts-input" is
- *      visible). updateInstrument sees the energized state and runs the coalesced
- *      re-op; poll until the glow settles LOWER, then assert the decrease.
+ *   5. Bench leads: assert the auto-attached supply + ground already render as
+ *      drawn leads (lead-path SVG elements), then add an I-probe from the
+ *      palette and drag its open jack onto the board — dropped on the first
+ *      lead-clip's projected anchor (data-x/data-y). On this 2-part demo
+ *      board VIN/GND are single-pad nets whose only pad sits directly under
+ *      its component's 3D body, so a raycast there hits the *component*
+ *      (ref: "D1"), not the net — a voltage-probe (accepts a net) can never
+ *      land there, but a current-probe (accepts a component) does,
+ *      deterministically. Assert the lead count grows by one and the probe's
+ *      jack goes from data-wired="false" to wired.
+ *   6. Turn the supply knob DOWN (the tactile path, not the numeric field):
+ *      a 20 px downward drag on supply-volts-knob (0-30 V range) clamps the
+ *      5 V supply to 0 V (DragKnob math: (startY-clientY)/100 * (max-min) =
+ *      (-20/100)*30 = -6 V). updateInstrument sees the energized state and
+ *      runs the coalesced re-op; poll until the glow settles LOWER, then
+ *      assert the decrease.
  *
  * No fixed sleeps for the sim itself: all op-result waits go through
  * page.waitForFunction polling the glow instrumentation.
@@ -80,7 +92,7 @@ test.describe('First Light E2E', () => {
     }
   })
 
-  test('open demo → Energize → LED glows → lower supply → LED dims', async () => {
+  test('open demo → Energize → LED glows → run a lead → turn the knob → LED dims', async () => {
     const result = await launchApp()
     app = result.app
     const page = result.page
@@ -123,12 +135,49 @@ test.describe('First Light E2E', () => {
     expect(attr).not.toBeNull()
     expect(parseFloat(attr!)).toBeCloseTo(glowAt5V!.max, 2)
 
-    // 4. Lower the supply 5 V → 2.5 V. The auto-attached supply is auto-selected
-    //    in the InstrumentRack, so its voltage input is already visible.
-    const supplyInput = page.locator('[data-testid="supply-volts-input"]')
-    await expect(supplyInput).toBeVisible({ timeout: 10_000 })
-    await supplyInput.fill('2.5')
-    await supplyInput.press('Enter')
+    // 4. Bench leads: the auto-attached supply + ground render as drawn leads.
+    const leadPaths = page.locator('[data-testid="lead-path"]')
+    await expect(leadPaths.first()).toBeVisible({ timeout: 10_000 })
+    const leadCountBefore = await leadPaths.count()
+    expect(leadCountBefore).toBeGreaterThanOrEqual(2) // supply + ground
+
+    // 5. Run a lead: add an I-probe from the palette, drag its open jack onto
+    //    the board. Drop target: the first lead-clip's anchor (data-x/data-y
+    //    are container-relative px). That pixel is a component-covered pad
+    //    (see comment above), so the current-probe's component-accepting
+    //    jack attaches deterministically where a net-accepting jack could not.
+    await page.locator('[data-testid="add-instrument-btn"]').click()
+    await page.locator('[data-testid="palette-current-probe"]').click()
+    const openJack = page.locator('[data-testid^="jack-current_probe"][data-wired="false"]')
+    await expect(openJack).toBeVisible()
+    const clip = page.locator('[data-testid="lead-clip"]').first()
+    const clipX = Number(await clip.getAttribute('data-x'))
+    const clipY = Number(await clip.getAttribute('data-y'))
+    const layerBox = (await page.locator('[data-testid="lead-layer"]').boundingBox())!
+    const jackBox = (await openJack.boundingBox())!
+    await page.mouse.move(jackBox.x + jackBox.width / 2, jackBox.y + jackBox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(layerBox.x + clipX, layerBox.y + clipY, { steps: 10 })
+    await page.mouse.up()
+    await expect(leadPaths).toHaveCount(leadCountBefore + 1, { timeout: 10_000 })
+    await expect(openJack).toHaveCount(0) // the jack is now wired
+
+    // 6. Turn the supply knob DOWN (the tactile path — spec §6 replaces the
+    //    typed set-value step). The shipped SupplyPanel knob range is 0-30 V
+    //    (verified in bench/panels.tsx), not the 0-24 V a stale comment might
+    //    suggest: DragKnob's value math is (startY-clientY)/100 * (max-min),
+    //    so a +20 px downward drag ≈ (-20/100)*30 = -6 V. From the 5 V
+    //    starting point that clamps at the knob's 0 V floor — the LED goes
+    //    fully dark, which is well past the margin the waitForFunction below
+    //    already requires.
+    const knob = page.locator('[data-testid="supply-volts-knob"]')
+    const knobBox = (await knob.boundingBox())!
+    const kx = knobBox.x + knobBox.width / 2
+    const ky = knobBox.y + knobBox.height / 2
+    await page.mouse.move(kx, ky)
+    await page.mouse.down()
+    await page.mouse.move(kx, ky + 20, { steps: 5 })
+    await page.mouse.up()
 
     // updateInstrument (while energized) triggers the coalesced re-op; poll until
     // the glow settles clearly LOWER than before (margin guards against reading a
@@ -142,14 +191,14 @@ test.describe('First Light E2E', () => {
       { timeout: 30_000, polling: 250 },
     )
 
-    const glowAt2V5 = await readGlow(page)
-    expect(glowAt2V5).not.toBeNull()
-    expect(glowAt2V5!.max).toBeLessThan(glowAt5V!.max)
-    expect(glowAt2V5!.byRef['D1']).toBeLessThan(glowAt5V!.byRef['D1'])
+    const glowAfterKnobDown = await readGlow(page)
+    expect(glowAfterKnobDown).not.toBeNull()
+    expect(glowAfterKnobDown!.max).toBeLessThan(glowAt5V!.max)
+    expect(glowAfterKnobDown!.byRef['D1']).toBeLessThan(glowAt5V!.byRef['D1'])
 
     // Diagnostic breadcrumb for CI logs (list reporter prints test stdout).
     console.log(
-      `[first-light] D1 glow: ${glowAt5V!.byRef['D1'].toFixed(3)} @ 5 V → ${glowAt2V5!.byRef['D1'].toFixed(3)} @ 2.5 V`,
+      `[first-light] D1 glow: ${glowAt5V!.byRef['D1'].toFixed(3)} @ 5 V → ${glowAfterKnobDown!.byRef['D1'].toFixed(3)} after knob-down drag`,
     )
   })
 })
