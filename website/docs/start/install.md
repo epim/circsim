@@ -1,6 +1,6 @@
 # Install circsim
 
-circsim is a desktop app for **Windows, macOS, and Linux**. It is fully offline — nothing you open is ever uploaded, and the app makes no network calls. Download one file, run it, and you're on the bench.
+circsim is a desktop app for **Windows, macOS, and Linux**. It is fully offline: nothing you open is ever uploaded, and the app makes no network calls. Download one file, run it, and you're on the bench.
 
 ## Download
 
@@ -8,23 +8,23 @@ Grab the latest installer for your platform from the [releases page](https://git
 
 | Platform | File | Notes |
 | --- | --- | --- |
-| **Windows (x64)** | `circsim-<version>-x64-setup.exe` | Standard Windows installer — run it and follow the prompts |
+| **Windows (x64)** | `circsim-<version>-x64-setup.exe` | Standard Windows installer: run it and follow the prompts |
 | **macOS (Apple Silicon)** | `circsim-<version>-arm64.dmg` | M1/M2/M3/M4 Macs |
 | **macOS (Intel)** | `circsim-<version>-x64.dmg` | Intel Macs |
 | **Linux (AppImage)** | `circsim-<version>-x86_64.AppImage` | Portable, runs anywhere |
 | **Linux (Debian/Ubuntu)** | `circsim-<version>-amd64.deb` | `sudo dpkg -i …` |
 
-Each installer bundles its own SPICE engine and model library — there is nothing else to install, no toolchain, no Python, no ngspice on your PATH.
+Each installer bundles its own SPICE engine and model library. There is nothing else to install: no toolchain, no Python, no ngspice on your PATH.
 
 ## First-run security prompts
 
-The installers are **unsigned**. That's a deliberate choice, not an oversight — code-signing certificates tie a build to a legal identity, and circsim ships without one for now. The app itself is unchanged by this; you just have to tell your OS you trust it the first time.
+The installers are **unsigned**. That's a deliberate choice, not an oversight: code-signing certificates tie a build to a legal identity, and circsim ships without one for now. The app itself is unchanged by this; you just have to tell your OS you trust it the first time.
 
-::: details Windows — SmartScreen
+::: details Windows: SmartScreen
 On first launch Windows SmartScreen may show *"Windows protected your PC."* Click **More info → Run anyway**. This appears once.
 :::
 
-::: details macOS — Gatekeeper
+::: details macOS: Gatekeeper
 Gatekeeper blocks unsigned apps by default. After dragging circsim to Applications:
 
 - **Right-click** the app → **Open** → **Open** in the dialog, **or**
@@ -36,7 +36,7 @@ Gatekeeper blocks unsigned apps by default. After dragging circsim to Applicatio
 This is a one-time step per install.
 :::
 
-::: details Linux — AppImage
+::: details Linux: AppImage
 Mark it executable and run it:
 ```sh
 chmod +x circsim-*-x86_64.AppImage
@@ -47,12 +47,12 @@ On some distros you may need FUSE (`sudo apt install libfuse2`).
 
 ## What you'll need to feed it
 
-circsim opens a **routed KiCad board** — a `.kicad_pcb` file (KiCad 6 or newer). That's the one required input; the circuit is rebuilt straight from the copper. Two optional inputs make the simulation sharper:
+circsim opens a **routed KiCad board**: a `.kicad_pcb` file (KiCad 6 or newer). That's the one required input; the circuit is rebuilt straight from the copper. Two optional inputs make the simulation sharper:
 
-- the matching **`.kicad_sch` schematic** — the only source of KiCad `Sim.*` fields and of symbol pin names (which resolve diode/LED polarity from the design instead of a guess), and
-- a **BOM** (bill of materials — a spreadsheet listing every part) as a CSV with a manufacturer part-number column, to pin down exact parts.
+- the matching **`.kicad_sch` schematic**: the only source of KiCad `Sim.*` fields and of symbol pin names (which resolve diode/LED polarity from the design instead of a guess), and
+- a **BOM** (bill of materials, a spreadsheet listing every part) as a CSV with a manufacturer part-number column, to pin down exact parts.
 
-Don't have a board handy? That's fine — circsim ships with two sample projects you can open from the start screen. Head to [your first five minutes](./first-run) next.
+Don't have a board handy? That's fine: circsim ships with two sample projects you can open from the start screen. Head to [your first five minutes](./first-run) next.
 
 ## System requirements
 
