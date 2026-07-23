@@ -4,7 +4,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'circsim',
   description:
-    'Load your routed PCB, power it up, and probe it in 3D — an interactive SPICE validation bench for boards you built before you pay for fabrication.',
+    'Load your routed PCB, power it up, and probe it in 3D. An interactive SPICE validation bench for boards you built before you pay for fabrication.',
   lang: 'en-US',
 
   // Deployed at https://epim.github.io/circsim/
@@ -16,7 +16,7 @@ export default defineConfig({
   head: [
     ['meta', { name: 'theme-color', content: '#2f81f7' }],
     ['meta', { property: 'og:type', content: 'website' }],
-    ['meta', { property: 'og:title', content: 'circsim — the validation bench for routed boards' }],
+    ['meta', { property: 'og:title', content: 'circsim: the validation bench for routed boards' }],
   ],
 
   themeConfig: {
@@ -104,7 +104,7 @@ export default defineConfig({
 
     footer: {
       message: 'Released under the MIT License. circsim is fully offline and never modifies your design files.',
-      copyright: 'circsim — the validation bench for routed boards',
+      copyright: 'circsim: the validation bench for routed boards',
     },
   },
 })
