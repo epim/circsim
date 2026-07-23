@@ -79,7 +79,7 @@ export default function McuPinsPanel({ ref_ }: McuPinsPanelProps): React.ReactEl
   if (!part) {
     return (
       <div style={propsStyle}>
-        <div style={propsHeaderStyle}>{ref_} — Interactive Pins</div>
+        <div style={propsHeaderStyle}>{ref_}: Interactive Pins</div>
         <div style={{ color: '#888', fontSize: 11, padding: 4 }}>Part not in circuit.</div>
       </div>
     )
@@ -118,7 +118,7 @@ export default function McuPinsPanel({ ref_ }: McuPinsPanelProps): React.ReactEl
 
   return (
     <div style={propsStyle}>
-      <div style={propsHeaderStyle}>{ref_} — Interactive Pins</div>
+      <div style={propsHeaderStyle}>{ref_}: Interactive Pins</div>
       <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
         Hi-Z: floating | 0/1: drive logic | Watch: read voltage
       </div>

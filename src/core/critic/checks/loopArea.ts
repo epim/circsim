@@ -104,7 +104,7 @@ export function checkLoopArea(ctx: CriticContext): CheckOutput {
     if (!hasHighSpeed) return []
     return {
       findings: [],
-      notAssessed: 'not assessed — no ground copper on this board to measure loops against',
+      notAssessed: 'not assessed (no ground copper on this board to measure loops against)',
     }
   }
 

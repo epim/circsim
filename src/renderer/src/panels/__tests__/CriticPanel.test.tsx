@@ -103,12 +103,12 @@ describe('CriticPanel', () => {
       ...FAKE_REPORT,
       skipped: [
         { check: 'thermal', reason: 'needs an operating-point simulation' },
-        { check: 'loop-area', reason: 'not assessed — no ground copper on this board to measure loops against' },
+        { check: 'loop-area', reason: 'not assessed (no ground copper on this board to measure loops against)' },
       ],
     }
     const html = renderPanel(report)
     expect(html).toContain('thermal: needs simulation')
-    expect(html).toContain('loop area: not assessed — no ground copper')
+    expect(html).toContain('loop area: not assessed (no ground copper')
     // the loop-area line must NOT be mislabeled as needing a simulation
     expect(html).not.toContain('loop area: needs simulation')
   })
@@ -122,7 +122,7 @@ describe('CriticPanel', () => {
   it('formatCriticReport renders a shareable summary + findings + not-assessed', () => {
     const report: CriticReport = {
       ...FAKE_REPORT,
-      skipped: [{ check: 'loop-area', reason: 'not assessed — no ground copper on this board to measure loops against' }],
+      skipped: [{ check: 'loop-area', reason: 'not assessed (no ground copper on this board to measure loops against)' }],
     }
     const text = formatCriticReport(report)
     expect(text).toContain('Board Critic — 1 error, 1 warn, 2 info')
@@ -131,6 +131,6 @@ describe('CriticPanel', () => {
     expect(text).toContain('Assumes: 1 oz copper')
     expect(text).toContain('→ widen to')
     expect(text).toContain('Not assessed:')
-    expect(text).toContain('loop area: not assessed — no ground copper')
+    expect(text).toContain('loop area: not assessed (no ground copper')
   })
 })
