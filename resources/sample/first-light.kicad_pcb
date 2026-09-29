@@ -32,7 +32,7 @@
     (pad "2" smd roundrect (at 0.9125 0 180) (size 1.025 1.4)
       (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) (net 2 "LEDA"))
   )
-  (segment (start 15.9125 12) (end 24.0875 12) (width 0.25) (layer "F.Cu") (net 2 "LEDA"))
+  (segment (start 15.9125 12) (end 24.0875 12) (width 0.25) (layer "F.Cu") (net 2))
   (gr_text "first-light" (at 20 24) (layer "F.SilkS")
     (effects (font (size 1.5 1.5) (thickness 0.2))))
   (gr_text "VIN" (at 3 5) (layer "F.SilkS")
