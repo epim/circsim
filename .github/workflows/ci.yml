@@ -49,6 +49,10 @@ jobs:
         run: |
           VERSION="$(node -e "console.log(require('./package.json').config?.circsim?.ngspiceVersion ?? '46')")"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # Pinned archive hashes (scripts/ngspice-pins.json) go into the cache keys,
+          # so bumping a pin invalidates the cache instead of restoring an unverified build.
+          echo "pin-dll=$(node scripts/ngspice-download.mjs --print-sha256 dll | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "pin-src=$(node scripts/ngspice-download.mjs --print-sha256 source | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
       # ngspice runs on EVERY leg: Windows fetches the prebuilt DLL, macOS/Linux
       # build libngspice from source (same script as the release job). The
@@ -68,7 +72,7 @@ jobs:
         id: cache-ngspice-win
         with:
           path: resources/ngspice/win32-x64
-          key: ngspice-win32-x64-v${{ steps.ngspice-version.outputs.version }}
+          key: ngspice-win32-x64-v${{ steps.ngspice-version.outputs.version }}-${{ steps.ngspice-version.outputs.pin-dll }}
 
       - name: Cache ngspice binaries (macOS x64)
         if: runner.os == 'macOS' && runner.arch == 'X64'
@@ -76,7 +80,7 @@ jobs:
         id: cache-ngspice-darwin-x64
         with:
           path: resources/ngspice/darwin-x64
-          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}-r2
+          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Cache ngspice binaries (macOS arm64)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
@@ -84,7 +88,7 @@ jobs:
         id: cache-ngspice-darwin-arm64
         with:
           path: resources/ngspice/darwin-arm64
-          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}-r2
+          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Cache ngspice binaries (Linux)
         if: runner.os == 'Linux'
@@ -92,7 +96,7 @@ jobs:
         id: cache-ngspice-linux
         with:
           path: resources/ngspice/linux-x64
-          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r2
+          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Install macOS build tools (macOS only)
         if: runner.os == 'macOS' && (steps.cache-ngspice-darwin-x64.outputs.cache-hit != 'true' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true')
@@ -194,6 +198,10 @@ jobs:
         run: |
           VERSION="$(node -e "console.log(require('./package.json').config?.circsim?.ngspiceVersion ?? '46')")"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # Pinned archive hashes (scripts/ngspice-pins.json) go into the cache keys,
+          # so bumping a pin invalidates the cache instead of restoring an unverified build.
+          echo "pin-dll=$(node scripts/ngspice-download.mjs --print-sha256 dll | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "pin-src=$(node scripts/ngspice-download.mjs --print-sha256 source | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
       # Same cache keys as the test/release jobs, so this job normally restores
       # a prebuilt ngspice and never compiles.
@@ -203,7 +211,7 @@ jobs:
         id: cache-ngspice-win
         with:
           path: resources/ngspice/win32-x64
-          key: ngspice-win32-x64-v${{ steps.ngspice-version.outputs.version }}
+          key: ngspice-win32-x64-v${{ steps.ngspice-version.outputs.version }}-${{ steps.ngspice-version.outputs.pin-dll }}
 
       - name: Cache ngspice binaries (Linux)
         if: runner.os == 'Linux'
@@ -211,7 +219,7 @@ jobs:
         id: cache-ngspice-linux
         with:
           path: resources/ngspice/linux-x64
-          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r2
+          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Fetch ngspice DLL (Windows)
         if: runner.os == 'Windows' && steps.cache-ngspice-win.outputs.cache-hit != 'true'
@@ -319,6 +327,10 @@ jobs:
         run: |
           VERSION="$(node -e "console.log(require('./package.json').config?.circsim?.ngspiceVersion ?? '46')")"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # Pinned archive hashes (scripts/ngspice-pins.json) go into the cache keys,
+          # so bumping a pin invalidates the cache instead of restoring an unverified build.
+          echo "pin-dll=$(node scripts/ngspice-download.mjs --print-sha256 dll | cut -c1-12)" >> "$GITHUB_OUTPUT"
+          echo "pin-src=$(node scripts/ngspice-download.mjs --print-sha256 source | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
       # ngspice cache (same keys as the test job, so a release reuses the cache).
       - name: Cache ngspice binaries (Windows)
@@ -327,7 +339,7 @@ jobs:
         id: cache-ngspice-win
         with:
           path: resources/ngspice/win32-x64
-          key: ngspice-win32-x64-v${{ steps.ngspice-version.outputs.version }}
+          key: ngspice-win32-x64-v${{ steps.ngspice-version.outputs.version }}-${{ steps.ngspice-version.outputs.pin-dll }}
 
       - name: Cache ngspice binaries (macOS x64)
         if: runner.os == 'macOS' && runner.arch == 'X64'
@@ -335,7 +347,7 @@ jobs:
         id: cache-ngspice-darwin-x64
         with:
           path: resources/ngspice/darwin-x64
-          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}-r2
+          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Cache ngspice binaries (macOS arm64)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
@@ -343,7 +355,7 @@ jobs:
         id: cache-ngspice-darwin-arm64
         with:
           path: resources/ngspice/darwin-arm64
-          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}-r2
+          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Cache ngspice binaries (Linux)
         if: runner.os == 'Linux'
@@ -351,7 +363,7 @@ jobs:
         id: cache-ngspice-linux
         with:
           path: resources/ngspice/linux-x64
-          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r2
+          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Install macOS build tools (macOS only)
         if: runner.os == 'macOS' && (steps.cache-ngspice-darwin-x64.outputs.cache-hit != 'true' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true')
