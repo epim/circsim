@@ -2,21 +2,25 @@
 
 Resume point for the master orchestrator. One row per issue. Status values: todo, in-progress, in-review, merged, reverted, blocked, wontfix. Update on every transition.
 
-Baseline on master (fill in at setup): commit ____, typecheck ____, unit tests ____ passing, integration ____ passing, corpus n/a, characterization n/a.
+Baseline on master (2026-09-29): commit 53524e3, typecheck clean, unit tests 1633 passing (87 files), integration 43 passing (9 files), corpus n/a, characterization n/a.
+
+Setup notes: Node v24.14.0. kicad-cli 10.0.3 is installed at `C:Program FilesKiCad.0inkicad-cli.exe` and is not on PATH. `resources/ngspice/win32-x64/` is gitignored, so fresh worktrees copy it from the main checkout or run `npm run fetch:ngspice`.
+
+Usage: the master cannot read the status command. Wave 0 usage before: not recorded by the agent (human reading requested). Agent counts are recorded per wave below.
 
 | Issue | Lane | Status | Branch | PR | Rounds | Merged sha | Notes |
 |---|---|---|---|---|---|---|---|
-| #31 No LICENSE file in the repo: MIT is claimed everywhere but GitHub reports no license | W0/F0.1 | todo | | | 0 | | |
-| #54 eslint is configured but never run: no lint script, no CI step, 12 errors today | W0/F0.1 | todo | | | 0 | | |
-| #80 CI runs the ngspice integration suite twice per leg; coverage is configured but never run | W0/F0.1 | todo | | | 0 | | |
-| #21 Model library tests check text, not physics: add a datasheet characterization suite as the shipping gate | W0/F0.2 | todo | | | 0 | | |
-| #22 No real-board regression corpus: CI validates on 7 parts and no realistic sample board ships | W0/F0.2 | todo | | | 0 | | |
-| #23 Real-board regression tests hard-code a C:\Users\bear path and skip silently in CI | W0/F0.2 | todo | | | 0 | | |
-| #24 Shipped sample boards and both schematics fail to load in KiCad (kicad-cli 10.0.3) | W0/F0.2 | todo | | | 0 | | |
-| #48 Critic tests use only unrotated, zone-free, F.Cu-only boards; fixtures have no real layout | W0/F0.2 | todo | | | 0 | | |
-| #63 KiCad 10 unmentioned; name-only net format misattributed to KiCad 9; no 6/8/9 fixtures | W0/F0.2 | todo | | | 0 | | |
-| #67 Deck generation has no whole-deck golden for a shipped sample and no property tests | W0/F0.2 | todo | | | 0 | | |
-| #3 Footprint pad rotation has the wrong handedness: rotated parts get mirrored pads in critic, picking and 3D view | W0/F0.3 | todo | | | 0 | | |
+| #31 No LICENSE file in the repo: MIT is claimed everywhere but GitHub reports no license | W0/F0.1 | in-progress | fix/31-conventions-ci | | 0 | | |
+| #54 eslint is configured but never run: no lint script, no CI step, 12 errors today | W0/F0.1 | in-progress | fix/31-conventions-ci | | 0 | | |
+| #80 CI runs the ngspice integration suite twice per leg; coverage is configured but never run | W0/F0.1 | in-progress | fix/31-conventions-ci | | 0 | | |
+| #21 Model library tests check text, not physics: add a datasheet characterization suite as the shipping gate | W0/F0.2 | in-progress | fix/21-characterization-goldens | | 0 | | |
+| #22 No real-board regression corpus: CI validates on 7 parts and no realistic sample board ships | W0/F0.2 | in-progress | fix/22-corpus-generator | | 0 | | |
+| #23 Real-board regression tests hard-code a C:\Users\bear path and skip silently in CI | W0/F0.2 | in-progress | fix/22-corpus-generator | | 0 | | |
+| #24 Shipped sample boards and both schematics fail to load in KiCad (kicad-cli 10.0.3) | W0/F0.2 | in-progress | fix/24-kicad-cli-fixtures | | 0 | | |
+| #48 Critic tests use only unrotated, zone-free, F.Cu-only boards; fixtures have no real layout | W0/F0.2 | in-progress | fix/22-corpus-generator | | 0 | | |
+| #63 KiCad 10 unmentioned; name-only net format misattributed to KiCad 9; no 6/8/9 fixtures | W0/F0.2 | in-progress | fix/22-corpus-generator | | 0 | | fixtures here; support statement closes in D4 |
+| #67 Deck generation has no whole-deck golden for a shipped sample and no property tests | W0/F0.2 | in-progress | fix/21-characterization-goldens | | 0 | | |
+| #3 Footprint pad rotation has the wrong handedness: rotated parts get mirrored pads in critic, picking and 3D view | W0/F0.3 | in-progress | fix/3-pad-rotation | | 0 | | |
 | #53 Extract the solve pipeline from appStore and generate.ts into core: deck inputs are assembled in three places | W0/F0.4 | todo | | | 0 | | |
 | #2 IC macromodels draw no load current from their supply pins (KCL violated) | M | todo | | | 0 | | |
 | #12 Logic outputs have no output resistance: a bare LED on a CD40106 pin sims at 1.5 A | M | todo | | | 0 | | |
