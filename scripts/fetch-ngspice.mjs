@@ -2,8 +2,10 @@
 /**
  * fetch-ngspice.mjs — Download and unpack the ngspice Windows 64-bit shared library.
  *
- * Fetches ngspice-<version>_dll_64.7z from SourceForge master.dl (the only URL that
- * returns the binary directly — other SF mirrors return an HTML interstitial).
+ * Fetches ngspice-<version>_dll_64.7z from SourceForge master.dl (the only host that
+ * returns the binary directly; other SF mirrors return an HTML interstitial). The
+ * archive is tried at the release path and then old-releases/, and its sha256 must
+ * match scripts/ngspice-pins.json (see scripts/ngspice-download.mjs).
  *
  * Output layout:
  *   resources/ngspice/win32-x64/ngspice.dll
@@ -17,13 +19,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import crypto from 'node:crypto'
-import { createWriteStream } from 'node:fs'
-import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
 
 // 7zip-min ships a bundled 7za binary for win/mac/linux.
 import * as _7z from '7zip-min'
+
+import { candidateUrls, downloadVerified, loadPin, sha256File } from './ngspice-download.mjs'
 
 // ---------------------------------------------------------------------------
 // Config — version pinned in package.json config.circsim.ngspiceVersion
@@ -33,9 +34,8 @@ const PROJECT_ROOT = path.resolve(__dirname, '..')
 const pkgJson = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'))
 const VERSION = pkgJson?.config?.circsim?.ngspiceVersion ?? '46'
 
-const ARCHIVE_NAME = `ngspice-${VERSION}_dll_64.7z`
-const DOWNLOAD_URL =
-  `https://master.dl.sourceforge.net/project/ngspice/ng-spice-rework/${VERSION}/${ARCHIVE_NAME}?viasf=1`
+const PIN = loadPin(VERSION, 'dll')
+const ARCHIVE_NAME = PIN.archive
 
 const DEST_DIR = path.join(PROJECT_ROOT, 'resources', 'ngspice', 'win32-x64')
 const CM_DEST_DIR = path.join(DEST_DIR, 'lib', 'ngspice')
@@ -43,13 +43,6 @@ const CM_DEST_DIR = path.join(DEST_DIR, 'lib', 'ngspice')
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Compute SHA-256 hex of a file. */
-function sha256File(filePath) {
-  const hash = crypto.createHash('sha256')
-  hash.update(fs.readFileSync(filePath))
-  return hash.digest('hex')
-}
 
 /** Glob for files matching a suffix inside a directory tree (non-recursive needed for flat dir). */
 function globFiles(dir, suffix) {
@@ -79,55 +72,6 @@ function findByName(dir, name) {
     }
   }
   return results
-}
-
-/** Download URL → local file with validation (content-type + size). */
-async function download(url, destFile) {
-  console.log(`Downloading ${url} ...`)
-
-  // Use fetch (Node 18+ built-in)
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'circsim-build/1.0' },
-    redirect: 'follow',
-  })
-
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`)
-  }
-
-  const contentType = res.headers.get('content-type') ?? ''
-  const contentLength = parseInt(res.headers.get('content-length') ?? '0', 10)
-
-  // Fail loudly if we got an HTML interstitial instead of the binary
-  if (contentType.includes('text/html')) {
-    throw new Error(
-      `DOWNLOAD FAILED: Server returned HTML instead of a 7z archive.\n` +
-      `URL: ${url}\n` +
-      `Content-Type: ${contentType}\n` +
-      `This usually means a SourceForge interstitial page was returned. ` +
-      `Try using the master.dl URL with ?viasf=1 parameter.`
-    )
-  }
-
-  // The body arrives; write it to disk first, then validate size
-  const tmpFile = destFile + '.tmp'
-  const ws = createWriteStream(tmpFile)
-  await pipeline(res.body, ws)
-
-  const stat = fs.statSync(tmpFile)
-  const MIN_SIZE = 2 * 1024 * 1024 // 2 MB
-  if (stat.size < MIN_SIZE) {
-    fs.unlinkSync(tmpFile)
-    throw new Error(
-      `DOWNLOAD FAILED: File is only ${stat.size} bytes (< 2 MB minimum).\n` +
-      `The download likely returned an HTML page or incomplete data.\n` +
-      `URL: ${url}`
-    )
-  }
-
-  fs.renameSync(tmpFile, destFile)
-  console.log(`Downloaded ${(stat.size / 1024 / 1024).toFixed(1)} MB → ${destFile}`)
-  return destFile
 }
 
 /** Unpack archive to destDir using 7zip-min. Returns a promise. */
@@ -164,7 +108,14 @@ async function main() {
 
   try {
     // 1. Download
-    await download(DOWNLOAD_URL, archivePath)
+    //    Tries each candidate SourceForge path and refuses any archive whose
+    //    sha256 differs from scripts/ngspice-pins.json.
+    const { url: downloadedFrom } = await downloadVerified({
+      urls: candidateUrls(VERSION, 'dll'),
+      destFile: archivePath,
+      sha256: PIN.sha256,
+      minSize: 2 * 1024 * 1024,
+    })
 
     // 2. Extract
     console.log(`Extracting to ${tmpDir} ...`)
@@ -249,7 +200,8 @@ async function main() {
     const manifest = {
       version: VERSION,
       platform: 'win32-x64',
-      source: DOWNLOAD_URL,
+      source: downloadedFrom,
+      archiveSha256: PIN.sha256,
       fetched: new Date().toISOString(),
       files: {
         'ngspice.dll': sha256File(ngspiceDllDest),
