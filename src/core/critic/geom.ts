@@ -20,19 +20,45 @@ export function dist(a: Vec2, b: Vec2): number {
 }
 
 /**
- * World (board-coordinate) position of a pad center. The pad offset is rotated
- * by the FOOTPRINT rotation and translated by the footprint origin — matching
- * the convention in `renderer/.../viewport/componentGeometry.ts`
- * (px = cosA·x − sinA·y, py = sinA·x + cosA·y). The pad's own rotation affects
- * pad orientation, not its center, so it is not used here.
+ * Rotate the offset (x, y) by `rotDeg` using KiCad's convention, in KiCad's
+ * Y-down file frame: x' = x·cos + y·sin, y' = −x·sin + y·cos. A positive angle
+ * is counter-clockwise as seen on screen (KiCad's own `RotatePoint`).
+ *
+ * This is the ONE rotation used for every pad world-position path (critic,
+ * copper picking geometry, placeholder boxes, net-label anchors). Multiples of
+ * 90 degrees are exact (no cos(90) rounding residue) so pad centers land
+ * exactly on the track endpoints KiCad wrote.
  */
-export function padWorldPos(fp: Footprint, pad: Pad): Vec2 {
-  const rad = (fp.at.rotDeg * Math.PI) / 180
+export function rotateKicad(x: number, y: number, rotDeg: number): Vec2 {
+  const turns = rotDeg / 90
+  if (Number.isInteger(turns)) {
+    switch ((((turns % 4) + 4) % 4)) {
+      case 0:
+        return { x, y }
+      case 1:
+        return { x: y, y: 0 - x }
+      case 2:
+        return { x: 0 - x, y: 0 - y }
+      default:
+        return { x: 0 - y, y: x }
+    }
+  }
+  const rad = (rotDeg * Math.PI) / 180
   const c = Math.cos(rad)
   const s = Math.sin(rad)
-  const px = c * pad.at.x - s * pad.at.y
-  const py = s * pad.at.x + c * pad.at.y
-  return { x: fp.at.x + px, y: fp.at.y + py }
+  return { x: x * c + y * s, y: -x * s + y * c }
+}
+
+/**
+ * World (board-coordinate) position of a pad center. The pad offset is rotated
+ * by the FOOTPRINT rotation (KiCad convention, see `rotateKicad`) and
+ * translated by the footprint origin. The pad's own `at` rotation is the
+ * absolute pad orientation (it already includes the footprint rotation), so it
+ * affects the pad outline, not its center, and is not used here.
+ */
+export function padWorldPos(fp: Footprint, pad: Pad): Vec2 {
+  const o = rotateKicad(pad.at.x, pad.at.y, fp.at.rotDeg)
+  return { x: fp.at.x + o.x, y: fp.at.y + o.y }
 }
 
 /** Length (mm) of a track — straight chord for segments, arc length for arcs. */

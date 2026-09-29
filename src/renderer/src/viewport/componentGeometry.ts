@@ -29,6 +29,7 @@
 import * as THREE from 'three'
 import type { Footprint } from '../../../core/kicad/types'
 import { kicadToWorld } from './boardGeometry'
+import { rotateKicad } from '../../../core/critic/geom'
 
 // ─── classification table ──────────────────────────────────────────────────────
 
@@ -149,25 +150,20 @@ export function computePlaceholderBox(
     w = fp.courtyardBounds.w
     h = fp.courtyardBounds.h
   } else if (fp.pads.length > 0) {
-    // Compute pad bounding box in footprint-local coords (before fp rotation).
-    // Each pad is at fp.pads[i].at.{x,y} relative to footprint origin.
-    // Include pad half-size in each direction.
-    const fpRad = (fp.at.rotDeg * Math.PI) / 180
-    const cosA = Math.cos(fpRad)
-    const sinA = Math.sin(fpRad)
-
+    // Compute the pad bounding box on the board, relative to the footprint
+    // origin. Each pad offset is rotated by the footprint rotation with KiCad's
+    // handedness (shared helper); the pad size is rotated by the pad's own
+    // absolute angle, so a pad at 90 or 270 degrees swaps its width and height.
     let minX = Infinity, maxX = -Infinity
     let minY = Infinity, maxY = -Infinity
 
     for (const pad of fp.pads) {
-      // Rotate pad position by footprint rotation
-      const pxLocal = pad.at.x
-      const pyLocal = pad.at.y
-      const pxFp = cosA * pxLocal - sinA * pyLocal
-      const pyFp = sinA * pxLocal + cosA * pyLocal
+      const { x: pxFp, y: pyFp } = rotateKicad(pad.at.x, pad.at.y, fp.at.rotDeg)
 
-      const hw = pad.size.w / 2
-      const hh = pad.size.h / 2
+      const quarterTurns = Math.round(pad.at.rotDeg / 90)
+      const swap = Math.abs(quarterTurns) % 2 === 1
+      const hw = (swap ? pad.size.h : pad.size.w) / 2
+      const hh = (swap ? pad.size.w : pad.size.h) / 2
 
       minX = Math.min(minX, pxFp - hw)
       maxX = Math.max(maxX, pxFp + hw)

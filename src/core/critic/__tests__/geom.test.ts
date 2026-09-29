@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest'
 import type { Footprint, Pad, TrackSegment, OutlineGeometry } from '../../kicad/types'
 import {
   padWorldPos,
+  rotateKicad,
   dist,
   segLengthMm,
   arcLengthMm,
@@ -51,18 +52,27 @@ describe('padWorldPos', () => {
     expect(padWorldPos(f, f.pads[0])).toEqual({ x: 11, y: 10 })
   })
 
-  it('rotates the pad offset by the footprint rotation (matches viewport convention)', () => {
-    // (1,0) rotated 90° → (0,1); origin (10,10) → (10,11)
+  it('rotates the pad offset with KiCad handedness (positive angle is counter-clockwise on screen)', () => {
+    // KiCad RotatePoint, Y-down: x' = x cos + y sin, y' = -x sin + y cos.
+    // (1,0) at 90 -> (0,-1) (up on screen); origin (10,10) -> (10,9)
     const f90 = fp(10, 10, 90, [pad('1', 1, 0)])
-    const p = padWorldPos(f90, f90.pads[0])
-    expect(p.x).toBeCloseTo(10)
-    expect(p.y).toBeCloseTo(11)
+    expect(padWorldPos(f90, f90.pads[0])).toEqual({ x: 10, y: 9 })
 
-    // (1,0) rotated 180° → (-1,0) → (9,10)
+    // (1,0) at 270 -> (0,1); origin (10,10) -> (10,11)
+    const f270 = fp(10, 10, 270, [pad('1', 1, 0)])
+    expect(padWorldPos(f270, f270.pads[0])).toEqual({ x: 10, y: 11 })
+
+    // (1,0) at 180 -> (-1,0) -> (9,10)
     const f180 = fp(10, 10, 180, [pad('1', 1, 0)])
-    const p2 = padWorldPos(f180, f180.pads[0])
-    expect(p2.x).toBeCloseTo(9)
-    expect(p2.y).toBeCloseTo(10)
+    expect(padWorldPos(f180, f180.pads[0])).toEqual({ x: 9, y: 10 })
+  })
+
+  it('handles off-axis angles and negative or over-full-turn angles', () => {
+    const p45 = rotateKicad(1, 0, 45)
+    expect(p45.x).toBeCloseTo(Math.SQRT1_2)
+    expect(p45.y).toBeCloseTo(-Math.SQRT1_2)
+    expect(rotateKicad(1, 2, -90)).toEqual(rotateKicad(1, 2, 270))
+    expect(rotateKicad(1, 2, 450)).toEqual(rotateKicad(1, 2, 90))
   })
 })
 

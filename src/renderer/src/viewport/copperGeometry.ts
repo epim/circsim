@@ -39,6 +39,7 @@ import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { BoardModel, Pad, Via } from '../../../core/kicad/types'
 import { kicadToWorld } from './boardGeometry'
+import { rotateKicad } from '../../../core/critic/geom'
 
 // ─── constants ─────────────────────────────────────────────────────────────────
 
@@ -246,7 +247,7 @@ function buildStripGeometry(
 // ─── pad geometry ──────────────────────────────────────────────────────────────
 
 /** Convert a pad to a flat geometry in the XY plane, centered at world (cx, cy). */
-function buildPadGeometry(
+export function buildPadGeometry(
   pad: Pad,
   footprintAtX: number,
   footprintAtY: number,
@@ -255,25 +256,17 @@ function buildPadGeometry(
   const { w, h } = pad.size
   if (w <= 0 || h <= 0) return null
 
-  // Pad local position + global footprint position
-  // Rotate pad.at by footprint rotation around footprint origin
-  const fpRad = (footprintRotDeg * Math.PI) / 180
-  const pxLocal = pad.at.x
-  const pyLocal = pad.at.y
+  // Pad center: footprint origin plus the pad offset rotated by the footprint
+  // rotation with KiCad's handedness (shared helper, see core/critic/geom.ts).
+  const off = rotateKicad(pad.at.x, pad.at.y, footprintRotDeg)
+  const world = kicadToWorld(footprintAtX + off.x, footprintAtY + off.y)
 
-  // Apply footprint rotation to pad position
-  const cosA = Math.cos(fpRad)
-  const sinA = Math.sin(fpRad)
-  const pxFp = cosA * pxLocal - sinA * pyLocal
-  const pyFp = sinA * pxLocal + cosA * pyLocal
-
-  const kx = footprintAtX + pxFp
-  const ky = footprintAtY + pyFp
-  const world = kicadToWorld(kx, ky)
-
-  // Total rotation for the pad itself
-  const padRotDeg = footprintRotDeg + pad.at.rotDeg
-  const padRad = (padRotDeg * Math.PI) / 180
+  // Pad outline angle. The pad's `at` angle in a .kicad_pcb is ABSOLUTE (it
+  // already includes the footprint rotation; verified against kicad-cli
+  // Gerber output), so the footprint rotation must not be added again. A
+  // positive KiCad angle is counter-clockwise on screen, which is a positive
+  // rotation in the Y-up world frame.
+  const padRad = (pad.at.rotDeg * Math.PI) / 180
 
   const { shape } = pad
 
