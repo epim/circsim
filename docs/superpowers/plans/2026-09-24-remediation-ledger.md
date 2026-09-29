@@ -10,17 +10,17 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 
 | Issue | Lane | Status | Branch | PR | Rounds | Merged sha | Notes |
 |---|---|---|---|---|---|---|---|
-| #31 No LICENSE file in the repo: MIT is claimed everywhere but GitHub reports no license | W0/F0.1 | in-progress | fix/31-conventions-ci | | 0 | | |
-| #54 eslint is configured but never run: no lint script, no CI step, 12 errors today | W0/F0.1 | in-progress | fix/31-conventions-ci | | 0 | | |
-| #80 CI runs the ngspice integration suite twice per leg; coverage is configured but never run | W0/F0.1 | in-progress | fix/31-conventions-ci | | 0 | | |
-| #21 Model library tests check text, not physics: add a datasheet characterization suite as the shipping gate | W0/F0.2 | in-progress | fix/21-characterization-goldens | | 0 | | |
-| #22 No real-board regression corpus: CI validates on 7 parts and no realistic sample board ships | W0/F0.2 | in-progress | fix/22-corpus-generator | | 0 | | |
-| #23 Real-board regression tests hard-code a C:\Users\bear path and skip silently in CI | W0/F0.2 | in-progress | fix/22-corpus-generator | | 0 | | |
-| #24 Shipped sample boards and both schematics fail to load in KiCad (kicad-cli 10.0.3) | W0/F0.2 | in-progress | fix/24-kicad-cli-fixtures | | 0 | | |
-| #48 Critic tests use only unrotated, zone-free, F.Cu-only boards; fixtures have no real layout | W0/F0.2 | in-progress | fix/22-corpus-generator | | 0 | | |
-| #63 KiCad 10 unmentioned; name-only net format misattributed to KiCad 9; no 6/8/9 fixtures | W0/F0.2 | in-progress | fix/22-corpus-generator | | 0 | | fixtures here; support statement closes in D4 |
-| #67 Deck generation has no whole-deck golden for a shipped sample and no property tests | W0/F0.2 | in-progress | fix/21-characterization-goldens | | 0 | | |
-| #3 Footprint pad rotation has the wrong handedness: rotated parts get mirrored pads in critic, picking and 3D view | W0/F0.3 | in-progress | fix/3-pad-rotation | | 0 | | |
+| #31 No LICENSE file in the repo: MIT is claimed everywhere but GitHub reports no license | W0/F0.1 | in-review | fix/31-conventions-ci | #82 | 1 | | both reviewers APPROVE, sonnet rung; waiting on CI (blocked by ngspice 404, see #36) |
+| #54 eslint is configured but never run: no lint script, no CI step, 12 errors today | W0/F0.1 | in-review | fix/31-conventions-ci | #82 | 1 | | both reviewers APPROVE, sonnet rung; waiting on CI (blocked by ngspice 404, see #36) |
+| #80 CI runs the ngspice integration suite twice per leg; coverage is configured but never run | W0/F0.1 | in-review | fix/31-conventions-ci | #82 | 1 | | both reviewers APPROVE, sonnet rung; waiting on CI (blocked by ngspice 404, see #36) |
+| #21 Model library tests check text, not physics: add a datasheet characterization suite as the shipping gate | W0/F0.2 | in-review | fix/21-characterization-goldens | #88 | 1 | | both reviewers APPROVE, sonnet rung; waiting on CI (blocked by ngspice 404, see #36) |
+| #22 No real-board regression corpus: CI validates on 7 parts and no realistic sample board ships | W0/F0.2 | in-review | fix/22-corpus-generator | #89 | 1 | | both reviewers APPROVE, sonnet rung; waiting on CI (blocked by ngspice 404, see #36) |
+| #23 Real-board regression tests hard-code a C:\Users\bear path and skip silently in CI | W0/F0.2 | in-review | fix/22-corpus-generator | #89 | 1 | | both reviewers APPROVE, sonnet rung; waiting on CI (blocked by ngspice 404, see #36) |
+| #24 Shipped sample boards and both schematics fail to load in KiCad (kicad-cli 10.0.3) | W0/F0.2 | in-review | fix/24-kicad-cli-fixtures | #83 | 2 | | both reviewers APPROVE, sonnet rung; waiting on CI (blocked by ngspice 404, see #36) |
+| #48 Critic tests use only unrotated, zone-free, F.Cu-only boards; fixtures have no real layout | W0/F0.2 | in-review | fix/22-corpus-generator | #89 | 1 | | both reviewers APPROVE, sonnet rung; waiting on CI (blocked by ngspice 404, see #36) |
+| #63 KiCad 10 unmentioned; name-only net format misattributed to KiCad 9; no 6/8/9 fixtures | W0/F0.2 | in-review | fix/22-corpus-generator | #89 | 1 | | fixtures here; support statement closes in D4; both reviewers APPROVE, sonnet rung; waiting on CI (blocked by ngspice 404, see #36) |
+| #67 Deck generation has no whole-deck golden for a shipped sample and no property tests | W0/F0.2 | in-review | fix/21-characterization-goldens | #88 | 1 | | both reviewers APPROVE, sonnet rung; waiting on CI (blocked by ngspice 404, see #36) |
+| #3 Footprint pad rotation has the wrong handedness: rotated parts get mirrored pads in critic, picking and 3D view | W0/F0.3 | in-review | fix/3-pad-rotation | #84 | 1 | | both reviewers APPROVE, sonnet rung; waiting on CI (blocked by ngspice 404, see #36) |
 | #53 Extract the solve pipeline from appStore and generate.ts into core: deck inputs are assembled in three places | W0/F0.4 | todo | | | 0 | | |
 | #2 IC macromodels draw no load current from their supply pins (KCL violated) | M | todo | | | 0 | | |
 | #12 Logic outputs have no output resistance: a bare LED on a CD40106 pin sims at 1.5 A | M | todo | | | 0 | | |
@@ -57,7 +57,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #78 Samples flush at 50 ms, not the documented 16 ms: the age check lives in the pacing tick | S | todo | | | 0 | | |
 | #15 Linux deb and AppImage ship a libngspice.so that needs libfftw3.so.3 but never declare or bundle it | R | todo | | | 0 | | |
 | #34 Electron 30.5.1 is 23 months past EOL; upgrading past 32 breaks drag-drop sibling discovery | R | todo | | | 0 | | |
-| #36 ngspice download and source build have no pinned hash; CI cache and release trust the network | R | todo | | | 0 | | |
+| #36 ngspice download and source build have no pinned hash; CI cache and release trust the network | W0 prereq (from R2) | merged | fix/36-ngspice-pinned-download | #90 | 1 | 4a943b6 | pulled forward 2026-09-29 (SourceForge moved ngspice 46 to old-releases); merged on the human's instruction; canary green (typecheck, 1641 unit); #15 stays in R2 |
 | #37 Renderer hardening: header CSP allows unsafe-inline, no navigation guards, readFile IPC reads any path | R | todo | | | 0 | | |
 | #38 Offline promise is unenforced: the spellchecker dictionary download path to gvt1.com is live | R | todo | | | 0 | | |
 | #39 Silkscreen text never renders: CSP blocks troika's worker scripts and CDN fonts | R | todo | | | 0 | | |
@@ -89,3 +89,13 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #68 Fidelity page promises NE555 few-percent accuracy and 74HC timing; tests gate at 20 percent | D | todo | | | 0 | | |
 | #66 E2E gaps: scope pixel check passes with zero samples, no critic path, no mac launch | T | todo | | | 0 | | |
 | #20 Put the routed copper into the SPICE deck: op-point cost is small and it delivers the thesis | W2 | todo | | | 0 | | |
+| #85 74HC74, 74HC164 and 74HC595 active-low PRE_N, CLR_N and MR_N controls behave active-high | M | todo | | | 0 | | filed by F0.2c characterization (knownFailing) |
+| #86 DSMAJ24A TVS forward path inherits the 1.16 ohm clamp series resistance: 1.87 V at 1 A | M | todo | | | 0 | | filed by F0.2c characterization (knownFailing) |
+| #87 LM358 output low level is 69 mV against a 20 mV maximum (rout=100 ohm in the output stage) | M | todo | | | 0 | | filed by F0.2c characterization (knownFailing) |
+
+## Wave log
+
+- Wave 0 workflow A (F0.1, F0.2a, F0.2b, F0.2c, F0.3): 18 agents, 1,978,450 subagent tokens, 48 min wall clock, concurrency 4. One fix round total (F0.2a), zero escalations.
+- Wave 0 CI unblock (#36, PR #90): 2 agents, 189,090 subagent tokens, 28 min. One review round, sonnet rung.
+- 2026-09-29 12:45 PDT: master attempted the squash-merge of #90; the session permission layer denied merges. Merge queue on hold: #90, then rebase and re-verify #82, #84, #83, #89, #88 in that order. F0.4 (#53) not started.
+- 2026-09-29 14:25 PDT: #90 merged on the human's instruction, canary green. Each later merge needs the human's go-ahead unless a permission rule is added. PR branches are updated by merging master in (no force-push), then squash-merged.
