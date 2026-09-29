@@ -9,8 +9,10 @@
  *
  * kicad-cli discovery order: CIRCSIM_KICAD_CLI, PATH, then the standard install
  * locations. When no kicad-cli is found the test is skipped, unless
- * CIRCSIM_REQUIRE_KICAD_CLI=1 (set by the dedicated CI job), in which case a
- * missing kicad-cli is itself a failure so the gate can never silently vanish.
+ * CIRCSIM_REQUIRE_KICAD_CLI=1, in which case a missing kicad-cli is itself a
+ * failure so a gate job cannot silently vanish. The oracle is KiCad 10: some
+ * fixtures are written in the KiCad 10 board format and an older kicad-cli
+ * (for example 9.x) cannot load them.
  *
  * Files are copied to a temp directory first: kicad-cli writes a .kicad_prl
  * next to any board it loads, and fixtures must stay untouched.
