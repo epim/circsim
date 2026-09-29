@@ -57,7 +57,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #78 Samples flush at 50 ms, not the documented 16 ms: the age check lives in the pacing tick | S | todo | | | 0 | | |
 | #15 Linux deb and AppImage ship a libngspice.so that needs libfftw3.so.3 but never declare or bundle it | R | todo | | | 0 | | |
 | #34 Electron 30.5.1 is 23 months past EOL; upgrading past 32 breaks drag-drop sibling discovery | R | todo | | | 0 | | |
-| #36 ngspice download and source build have no pinned hash; CI cache and release trust the network | W0 prereq (from R2) | in-progress | fix/36-ngspice-pinned-download | | 0 | | pulled forward 2026-09-29: SourceForge moved ngspice 46 to old-releases, master CI red on every leg since; #15 stays in R2 |
+| #36 ngspice download and source build have no pinned hash; CI cache and release trust the network | W0 prereq (from R2) | in-review | fix/36-ngspice-pinned-download | #90 | 1 | | pulled forward 2026-09-29 (SourceForge moved ngspice 46 to old-releases); opus reviewer APPROVE, mutation check ok, CI green on all 6 legs; MERGE-READY, merge waits on human permission (session merge was denied); #15 stays in R2 |
 | #37 Renderer hardening: header CSP allows unsafe-inline, no navigation guards, readFile IPC reads any path | R | todo | | | 0 | | |
 | #38 Offline promise is unenforced: the spellchecker dictionary download path to gvt1.com is live | R | todo | | | 0 | | |
 | #39 Silkscreen text never renders: CSP blocks troika's worker scripts and CDN fonts | R | todo | | | 0 | | |
@@ -96,3 +96,5 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 ## Wave log
 
 - Wave 0 workflow A (F0.1, F0.2a, F0.2b, F0.2c, F0.3): 18 agents, 1,978,450 subagent tokens, 48 min wall clock, concurrency 4. One fix round total (F0.2a), zero escalations.
+- Wave 0 CI unblock (#36, PR #90): 2 agents, 189,090 subagent tokens, 28 min. One review round, sonnet rung.
+- 2026-09-29 12:45 PDT: master attempted the squash-merge of #90; the session permission layer denied merges. Merge queue on hold: #90, then rebase and re-verify #82, #84, #83, #89, #88 in that order. F0.4 (#53) not started.
