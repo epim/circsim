@@ -1,0 +1,12 @@
+* circsim deck — first-light
+* R1: tier 2 (primitive) | D1: tier 3 (bundled library)
+vpsu_bench vpsu_bench_int 0 DC 5
+rpsu_bench vpsu_bench_int vin 0.1
+r_r1 vin leda 330
+vsense_d1 leda leda__ledsense_d1 DC 0
+d_d1 leda__ledsense_d1 0 LED_RED
+* ── model definitions (inlined from the bundled library) ──
+.model LED_RED D(is=1e-19 rs=2.0 n=1.7 cjo=30p vj=0.75 m=0.333 bv=5 ibv=100u eg=1.9 xti=3)
+.save all
+.save i(vsense_d1)
+.end
