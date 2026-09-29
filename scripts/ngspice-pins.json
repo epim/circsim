@@ -1,0 +1,13 @@
+{
+  "_comment": "Expected sha256 of the ngspice release archives, per version. Both archives were also checked against the md5 values SourceForge publishes on the release file listing. Bump together with config.circsim.ngspiceVersion in package.json.",
+  "46": {
+    "dll": {
+      "archive": "ngspice-46_dll_64.7z",
+      "sha256": "5c03f25709d6ea7d1e58a82ebe7c1e6eb5177f266787466bf0c716791ba26e4c"
+    },
+    "source": {
+      "archive": "ngspice-46.tar.gz",
+      "sha256": "a0d1699af1940b06649276dcd6ff5a566c8c0cad01b2f7b5e99dedbb4d64c19b"
+    }
+  }
+}
