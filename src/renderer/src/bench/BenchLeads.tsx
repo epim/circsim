@@ -124,7 +124,6 @@ const BenchLeads = forwardRef<BenchLeadsHandle, {
     window.removeEventListener('pointermove', onDragMove)
     window.removeEventListener('pointerup', onDragUp)
     window.removeEventListener('keydown', onDragKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scene])
 
   const canvasHit = useCallback((clientX: number, clientY: number) => {

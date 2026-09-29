@@ -116,6 +116,9 @@ jobs:
       # -----------------------------------------------------------------------
       # Build + Test
       # -----------------------------------------------------------------------
+      - name: Lint
+        run: npm run lint
+
       - name: Typecheck
         run: npm run typecheck
 
@@ -125,12 +128,24 @@ jobs:
       - name: License hygiene check
         run: npm run license:check
 
-      - name: Test (unit + ngspice resources)
+      # npm test already runs every *.integration.test.ts (real ngspice), so
+      # there is no separate integration step.
+      - name: Test (unit + real-ngspice integration)
+        if: runner.os != 'Linux'
         run: npm test
 
-      - name: Test integration (requires ngspice resources)
-        run: npm run test:integration
-        continue-on-error: false
+      # Linux leg runs the same suite with v8 coverage and uploads the report.
+      - name: Test with coverage (unit + real-ngspice integration)
+        if: runner.os == 'Linux'
+        run: npm run coverage
+
+      - name: Upload coverage report
+        if: runner.os == 'Linux' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          if-no-files-found: ignore
 
   # ===========================================================================
   # E2E job — Playwright drives the BUILT app (out/) via _electron.launch with

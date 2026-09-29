@@ -71,7 +71,7 @@ describe('NetVoltages panel — static render (M7 F8)', () => {
       const out = nets.find(n => n.kicadName === 'OUT')!.id
       store.setState({ opVoltages: new Map([[vin, 5], [out, -0.0000001]]) })
     }
-    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+    (store as unknown as { getServerState?: () => AppState }).getServerState = () =>
       store.getState()
     return renderToStaticMarkup(
       <AppStoreProvider store={store}>
@@ -111,7 +111,7 @@ describe('NetVoltages panel — caveat / staleness / degenerate op (M7 review)',
   }
 
   function render(store: ReturnType<typeof createAppStore>): string {
-    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+    (store as unknown as { getServerState?: () => AppState }).getServerState = () =>
       store.getState()
     return renderToStaticMarkup(
       <AppStoreProvider store={store}>
@@ -182,7 +182,7 @@ describe('NetVoltages panel — per-net rail override (Task 7)', () => {
     if (opts.override !== undefined) {
       store.setState({ railOverrides: new Map([['VIN', opts.override]]) })
     }
-    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+    (store as unknown as { getServerState?: () => AppState }).getServerState = () =>
       store.getState()
     return renderToStaticMarkup(
       <AppStoreProvider store={store}>

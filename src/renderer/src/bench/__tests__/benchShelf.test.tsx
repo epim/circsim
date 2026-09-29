@@ -16,7 +16,7 @@ function openedStore(): ReturnType<typeof createAppStore> {
   return store
 }
 function renderShelf(store: ReturnType<typeof createAppStore>): string {
-  ;(store as unknown as { getServerState?: () => AppState }).getServerState = () => store.getState()
+  (store as unknown as { getServerState?: () => AppState }).getServerState = () => store.getState()
   return renderToStaticMarkup(
     <AppStoreProvider store={store}><BenchShelf /></AppStoreProvider>)
 }
