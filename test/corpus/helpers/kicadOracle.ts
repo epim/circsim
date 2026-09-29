@@ -165,3 +165,57 @@ export function ambiguousRefPredicate(refsInBoard: string[]): (ref: string) => b
     return !!m && dup.has(m[1])
   }
 }
+
+/**
+ * IPC-2581 pad map for a corpus board, cached on disk next to the board so the
+ * several suites that need KiCad's answer pay for one kicad-cli run. The cache
+ * key includes the board's sha256 and the kicad-cli version.
+ */
+export function oraclePadsCached(cli: KicadCli, boardPath: string, boardSha: string): Map<string, OraclePad> {
+  const tag = crypto.createHash('sha256').update(`${boardSha}|${cli.version}`).digest('hex').slice(0, 16)
+  const cacheDir = path.join(path.dirname(boardPath), 'oracle-cache')
+  const cacheFile = path.join(cacheDir, `${path.basename(boardPath)}.${tag}.json`)
+  if (fs.existsSync(cacheFile)) {
+    const rows = JSON.parse(fs.readFileSync(cacheFile, 'utf8')) as [string, OraclePad][]
+    return new Map(rows)
+  }
+  const pads = parseIpc2581Pads(exportIpc2581(cli.path, boardPath))
+  fs.mkdirSync(cacheDir, { recursive: true })
+  fs.writeFileSync(cacheFile, JSON.stringify([...pads]))
+  return pads
+}
+
+export interface DrcSummary {
+  violations: number
+  unconnected: number
+}
+
+/**
+ * Run `kicad-cli pcb drc` on a scratch copy and return the violation and
+ * unconnected-item counts. Only the unconnected count is a connectivity oracle;
+ * the synthetic boards carry an uncut pour as their zone fill, so clearance
+ * violations against the pour are expected noise there.
+ */
+export function runDrc(cliPath: string, boardPath: string): DrcSummary {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'circsim-drc-'))
+  try {
+    const copy = path.join(dir, 'board.kicad_pcb')
+    const out = path.join(dir, 'drc.json')
+    fs.copyFileSync(boardPath, copy)
+    try {
+      execFileSync(cliPath, ['pcb', 'drc', '--format', 'json', '--severity-all', '-o', out, copy], {
+        stdio: 'pipe',
+        timeout: 180_000
+      })
+    } catch {
+      // A non-zero exit still leaves the report; read it below.
+    }
+    const report = JSON.parse(fs.readFileSync(out, 'utf8')) as {
+      violations?: unknown[]
+      unconnected_items?: unknown[]
+    }
+    return { violations: report.violations?.length ?? 0, unconnected: report.unconnected_items?.length ?? 0 }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}

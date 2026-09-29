@@ -38,12 +38,11 @@ import {
   readCorpusBoard,
   type CorpusEntry
 } from './helpers/corpus'
+import { NO_DIFF, circsimPadNets, diffConnectivity, oraclePadNets } from './helpers/connectivity'
 import {
-  ambiguousRefPredicate,
-  exportIpc2581,
+  oraclePadsCached,
   findKicadCli,
   partitionDigest,
-  parseIpc2581Pads
 } from './helpers/kicadOracle'
 import { corpusFile } from '../../scripts/fetch-corpus.mjs'
 import {
@@ -75,21 +74,6 @@ if (!kicad) {
     '[corpus] kicad-cli not found: pad-to-net checks use the committed digests in test/corpus/oracle.json ' +
       '(set CIRCSIM_KICAD_CLI to run them live).'
   )
-}
-
-/** circsim's pad -> net-name map for one board, keyed "ref\tpin". */
-function circsimPadNets(result: PipelineResult): Map<string, string> {
-  const map = new Map<string, string>()
-  const { board } = result
-  for (const fp of board.footprints) {
-    for (const pad of fp.pads) {
-      if (pad.netId === undefined) continue
-      const net = board.netById.get(pad.netId)
-      if (!net) continue
-      map.set(`${fp.ref}\t${pad.number}`, net.name)
-    }
-  }
-  return map
 }
 
 describe.each(corpusBoards())('corpus: $id', (entry: CorpusEntry) => {
@@ -143,59 +127,23 @@ describe.each(corpusBoards())('corpus: $id', (entry: CorpusEntry) => {
 
   it('pad-to-net connectivity equals KiCad (kicad-cli ipc2581 oracle)', () => {
     expect(result).toBeDefined()
-    const mine = circsimPadNets(result!)
-    const isAmbiguous = ambiguousRefPredicate(result!.board.footprints.map((f) => f.ref))
-    const filteredMine = new Map([...mine].filter(([k]) => !isAmbiguous(k.split('\t')[0])))
-
+    const board = result!.board
+    const mine = circsimPadNets(board)
     const recorded = committedOracle[entry.id]
 
     if (kicad) {
-      const oraclePads = parseIpc2581Pads(exportIpc2581(kicad.path, corpusFile(entry)))
-      const oracleNets = new Map<string, string>()
-      for (const [k, p] of oraclePads) {
-        if (!isAmbiguous(k.split('\t')[0])) oracleNets.set(k, p.net)
-      }
-      const missingInMine: string[] = []
-      const extraInMine: string[] = []
-      // Net NAMES may differ legitimately (IPC-2581 writes GND_2 when an inner
-      // layer is named GND), so the check is a bijection between circsim nets
-      // and KiCad nets over the shared pads: same net for two pads in one tool
-      // means same net in the other.
-      const mineToOracle = new Map<string, string>()
-      const oracleToMine = new Map<string, string>()
-      const split: string[] = []
-      for (const [k, net] of oracleNets) {
-        const m = filteredMine.get(k)
-        if (m === undefined) {
-          missingInMine.push(`${k.replace('	', ' pad ')} (KiCad: ${net})`)
-          continue
-        }
-        const prevOracle = mineToOracle.get(m)
-        const prevMine = oracleToMine.get(net)
-        if ((prevOracle !== undefined && prevOracle !== net) || (prevMine !== undefined && prevMine !== m)) {
-          split.push(`${k.replace('	', ' pad ')}: circsim ${m}, KiCad ${net}`)
-        }
-        if (prevOracle === undefined) mineToOracle.set(m, net)
-        if (prevMine === undefined) oracleToMine.set(net, m)
-      }
-      for (const [k, net] of filteredMine) {
-        if (!oracleNets.has(k)) extraInMine.push(`${k.replace('	', ' pad ')} (circsim: ${net})`)
-      }
-      expect(
-        { missingInMine: missingInMine.slice(0, 10), extraInMine: extraInMine.slice(0, 10), split: split.slice(0, 10) },
-        `pad-to-net mismatch vs ${kicad.version}`
-      ).toEqual({ missingInMine: [], extraInMine: [], split: [] })
+      const oracle = oraclePadNets(board, oraclePadsCached(kicad, corpusFile(entry), entry.sha256))
+      expect(diffConnectivity(mine, oracle), `pad-to-net mismatch vs ${kicad.version}`).toEqual(NO_DIFF)
 
-      const digest = partitionDigest(oracleNets)
-      const record = { pads: oracleNets.size, digest, kicadCli: kicad.version }
-      if (updateOracle) oracleUpdates[entry.id] = record
+      const digest = partitionDigest(oracle)
+      if (updateOracle) oracleUpdates[entry.id] = { pads: oracle.size, digest, kicadCli: kicad.version }
       else if (recorded) {
         expect(digest, 'committed oracle digest is stale; rerun with CIRCSIM_CORPUS_UPDATE_ORACLE=1').toBe(recorded.digest)
       }
     } else {
       expect(recorded, `no committed oracle digest for ${entry.id}; run with kicad-cli and CIRCSIM_CORPUS_UPDATE_ORACLE=1`).toBeDefined()
-      expect(partitionDigest(filteredMine), 'circsim pad-to-net partition differs from the KiCad oracle digest').toBe(recorded.digest)
-      expect(filteredMine.size).toBe(recorded.pads)
+      expect(partitionDigest(mine), 'circsim pad-to-net partition differs from the KiCad oracle digest').toBe(recorded.digest)
+      expect(mine.size).toBe(recorded.pads)
     }
   })
 

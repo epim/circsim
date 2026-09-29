@@ -31,7 +31,7 @@ export interface CorpusEntry {
 }
 
 export function corpusBoards(): CorpusEntry[] {
-  return readManifest().boards as CorpusEntry[]
+  return readManifest().boards as unknown as CorpusEntry[]
 }
 
 /** Read a board from the cache, failing with the fix when it has not been fetched. */
