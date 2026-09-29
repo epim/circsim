@@ -22,8 +22,12 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # Read version from package.json
 VERSION="$(node -e "console.log(require('${PROJECT_ROOT}/package.json').config?.circsim?.ngspiceVersion ?? '46')")"
 
+# The archive name and its expected sha256 are pinned in scripts/ngspice-pins.json.
+# Downloading and hash verification live in scripts/ngspice-download.mjs, which
+# also tries SourceForge's old-releases/ path when a version has been moved.
 ARCHIVE_NAME="ngspice-${VERSION}.tar.gz"
-SOURCE_URL="https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/${VERSION}/${ARCHIVE_NAME}"
+SOURCE_URL="sourceforge:ng-spice-rework/${VERSION}/${ARCHIVE_NAME} (release path, then old-releases/)"
+ARCHIVE_SHA256="$(node "${SCRIPT_DIR}/ngspice-download.mjs" --print-sha256 source)"
 
 # Detect platform
 OS="$(uname -s)"
@@ -64,8 +68,9 @@ trap 'rm -rf "${WORK_DIR}"' EXIT
 ARCHIVE_PATH="${WORK_DIR}/${ARCHIVE_NAME}"
 
 echo ""
-echo "Downloading ${ARCHIVE_NAME} ..."
-curl -L --fail --show-error -o "${ARCHIVE_PATH}" "${SOURCE_URL}"
+echo "Downloading ${ARCHIVE_NAME} (pinned sha256 ${ARCHIVE_SHA256}) ..."
+# Fails (non-zero exit, set -e) on a hash mismatch or when no candidate URL serves the file.
+node "${SCRIPT_DIR}/ngspice-download.mjs" source "${ARCHIVE_PATH}"
 echo "Download complete: $(du -sh "${ARCHIVE_PATH}" | cut -f1)"
 
 # ---------------------------------------------------------------------------
@@ -273,6 +278,7 @@ const manifest = {
   version: '${VERSION}',
   platform: '${PLATFORM}',
   source: '${SOURCE_URL}',
+  archiveSha256: '${ARCHIVE_SHA256}',
   fetched: '${FETCHED}',
   builtFromSource: true,
   files: {
