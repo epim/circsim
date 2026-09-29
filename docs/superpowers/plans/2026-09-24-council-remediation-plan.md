@@ -18,7 +18,7 @@
 - No vendor SPICE model text in the repo. A card that is a copied vendor card is rewritten from datasheet parameters or attributed with its license (#14). A fingerprint test against known vendor cards guards this.
 - No third-party board files committed to the repo. The corpus is fetched at test time from pinned URLs with sha256 (#22). The private lantern board is referenced only through the `CIRCSIM_PRIVATE_BOARDS_DIR` environment variable (#23).
 - master is never force-pushed. Tags are never moved. The v0.3.0 tag is created only in wave 3.
-- Every change goes through a branch and a PR, squash-merged. Commit trailer: `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. Branch names: `fix/<issue>-<slug>` or `feat/<issue>-<slug>`.
+- Every change goes through a branch and a PR, squash-merged. Commit trailer: the `Co-Authored-By` line for the model that wrote the change. Branch names: `fix/<issue>-<slug>` or `feat/<issue>-<slug>`.
 - Every behavior or claim change updates `website/docs` and, where relevant, `docs/what-circsim-can-tell-you.md` in the same PR.
 - CI green on every matrix leg (see `.github/workflows/ci.yml`) before merge.
 - Commands: `npm run typecheck`, `npm test`, `npm run test:integration`, `npm run lint` (added in F0.1), `npm run test:e2e` (after `npm run build`), `npm run test:corpus` (added in F0.2), `npm run test:characterization` (added in F0.2).
@@ -37,16 +37,35 @@ The failure modes most likely to bite a real user that no single issue's test co
 
 ## 1. Roles, models, effort
 
+The rule is the cheapest model that passes the gate. The review gate stays constant; the implementer tier moves. Model names below are the Claude Code aliases, so `sonnet` resolves to the newest Sonnet the account has.
+
 | Role | Model | Effort | Why |
 |---|---|---|---|
-| Master orchestrator | Claude Fable 5.1 | xhigh | Long-horizon run, sustained communication with many subagents, judgment on review verdicts. Its mistakes compound across 79 tasks. |
-| Implementer, standard task | Claude Fable 5.1 | high | Best code review and debugging tier; high is the sweet spot for bounded fixes. |
-| Implementer, hard task (#2, #3, #14, #20, #25, #34, #53, #10) | Claude Fable 5.1 | xhigh | Cross-cutting physics or architecture where deliberation pays. |
-| Reviewer A (adversary) and Reviewer B (fidelity) | Claude Fable 5.1 | xhigh | This is where mistakes are caught. Never economize here. Always a fresh context. |
-| Mechanical task (F0.1, D lane copy edits, dependency bumps) | Claude Opus 5.5 | high | Plenty capable, 2.5x cheaper. Fable 5.1 at low is an equivalent choice. |
-| Wave 3 mini council | Claude Fable 5.1 | xhigh | Same setup as the original council. |
+| Master orchestrator | `fable` | high | Long-horizon judgment on verdicts and merge order. Its token use stays small if it follows section 1a. |
+| Implementer, default | `sonnet` | high | The issues carry file:line evidence, a reproduction, and a direction. That is the well-specified work Sonnet does well at a fifth of the Fable price. |
+| Implementer, design-heavy task (#2, #10, #14, #20, #25, #34, #53, and the P2 bundle) | `opus` | xhigh | These need design, not just a fix. Starting them on Sonnet and failing twice costs more than starting one rung up. |
+| Mechanical task (F0.1, docs copy edits, dependency bumps) | `sonnet` | medium | No deliberation needed. |
+| Reviewer, medium and low severity issues | `opus` | high | One combined reviewer runs the whole section 5 checklist including the mutation check. |
+| Reviewers, critical and high severity issues and every design-heavy task | `fable` adversary plus `opus` fidelity | high | Two fresh reviewers. This is where a cheaper implementer's mistakes are caught, so the adversary stays on the strongest model. |
+| Wave 3 mini council | `opus` lenses, `fable` verifiers | xhigh, high | Four lenses, each finding verified before filing. |
 
-If cost becomes a constraint, move implementers to Claude Opus 5.5 at xhigh and keep the master and both reviewers on Fable 5.1. Expect on the order of 100 million subagent tokens and one to two days of wall clock at 12 to 16 concurrent agents. The council review that produced the issues used 5.5 million tokens for 40 agents in 104 minutes; implementation agents run longer.
+**Escalation ladder.** An implementer that fails two review rounds is replaced one rung up: `sonnet` at high, then `opus` at xhigh, then `fable` at xhigh. The replacement gets the prior diff and the review histories. Record the rung in the ledger notes. If one lane escalates on more than a third of its tasks, start the rest of that lane one rung up.
+
+**Severity lookup.** The issue's `severity:*` label decides the review tier: `severity:critical` and `severity:high` get two reviewers, `severity:medium` and `severity:low` get one.
+
+## 1a. Token discipline
+
+Usage on a subscription plan is one pool shared by the master and every subagent, weighted by model. These rules are binding.
+
+- **Calibrate before scaling.** Run wave 0 at concurrency 4. Record the usage shown by the status command before and after in the ledger header, along with the agent count. Size wave 1 concurrency from that measurement, and tell the human the projected total before launching wave 1.
+- **The master's context is the most expensive context.** The master never reads diffs, source files, or full issue bodies. It consumes ledger rows and the section 5 verdict objects, and delegates all reading. Workflow scripts return small structured objects, not prose.
+- **Prompts carry pointers, not payloads.** An implementer prompt holds the issue number, the lane file list, the branch name, and one line pointing at `CLAUDE.md` for the protocol. The implementer runs `gh issue view N` itself. The protocol lives in `CLAUDE.md` so it sits in every subagent's cached prefix instead of being repeated.
+- **Read narrowly.** Start from the files and lines cited in the issue. Grep before Read. Read ranges, not whole files, in `generate.ts`, `appStore.ts`, and `simhost/index.ts`.
+- **Test narrowly, then once fully.** Run the touched test files while iterating. Run `npm run typecheck && npm run lint && npm test` once before the PR and once after rebase. Cross-platform runs happen only in CI. E2E runs locally only for E2E tasks.
+- **One agent per file cluster.** Serial tasks in the same files go to the same agent, continued, so it does not reload the files: M1 then M2 then M3 then M7 in the macromodel libraries; V2 then V3 then V7 in the viewport; R3 then R4 in the main process; U6 with U9, and U7 with U8 and U10, in the panels; D1, D3, and D4 as one docs task.
+- **Reviewers review the diff.** A reviewer reads the issue, the PR diff, and only the surrounding code it needs to judge the change. It returns the verdict object and nothing else.
+- **No speculative work.** No refactor beyond the issue, no cleanup in passing, no new abstraction without a second caller. Scope creep is a REQUEST_CHANGES.
+- **Stop cleanly at a limit.** On a usage-limit message: launch nothing new, let in-flight reviews finish, update the ledger, and stop. Resume from the ledger in the next window. If usage credits are enabled, the human set the cap; do not ask to raise it.
 
 ## 2. Wave plan
 
@@ -58,10 +77,10 @@ Four tracks. F0.1, F0.2, F0.3 start together. F0.4 starts after the golden decks
 
 | Track | Issues | Deliverable | Model / effort |
 |---|---|---|---|
-| F0.1 Conventions and CI hygiene | #31, #54, #80 | LICENSE file; `npm run lint` with eslint fixed to zero errors and a CI step; CI runs the integration suite once per leg and uploads coverage; `CLAUDE.md` (content in section 9), `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/bug.md`, `.github/PULL_REQUEST_TEMPLATE.md` | Opus 5.5 / high |
-| F0.2 Oracles | #24, #22, #23, #63, #21, #67, #48 | Sample boards and schematics load in `kicad-cli`; `scripts/fetch-corpus.mjs` with a manifest (url, sha256, license, KiCad version) and `npm run test:corpus` that parses, extracts, cross-checks pad-to-net connectivity against `kicad-cli pcb export netlist`, generates the deck, and runs the op through the real-ngspice harness; a synthetic board generator `scripts/gen-synthetic-board.mjs` (rotated parts on both sides, zones, 6/8/9/10 syntax variants); private-board tests keyed on `CIRCSIM_PRIVATE_BOARDS_DIR` with a visible skip message; `resources/models/characterization.json` plus `src/simhost/__tests__/characterization.integration.test.ts` (entry, circuit, quantity, datasheet value, tolerance, source) seeded with every library entry, with `knownFailing: "#N"` entries for what lane M will fix; whole-deck goldens for the 555 sample; property tests for `sexpr/parse.ts` and `values/parseValue.ts`; critic fixtures with rotation, zones, and B.Cu | Fable 5.1 / high; three agents by file group (kicad-cli fixtures, corpus and generator, characterization and goldens) |
-| F0.3 Geometry | #3 | Correct pad transform in `src/core/critic/geom.ts`, `src/renderer/src/viewport/copperGeometry.ts`, `componentGeometry.ts`, `scene.ts` (one shared helper, three call sites); the geometry oracle test in the corpus suite: for every corpus board, every pad center lies within half the pad size plus 0.1 mm of a same-net track endpoint or via, on both sides, at all rotations | Fable 5.1 / xhigh |
-| F0.4 Solve seam | #53 | `src/core/solve/` with `buildSolveInputs(board, circuit, resolutions, instruments, groundNetId, overrides): SolveInputs`, `runSolvePlan(inputs, engine: SolveEngine): Promise<SolveResult>` (two-pass rail sensing lives here), and `interface SolveEngine { loadCircuit(deckLines: string[]): Promise<void>; runOp(): Promise<OpResult>; runTran(tstep: number, tstop: number): Promise<TranResult> }` with two implementations: the SimHost client (renderer) and a direct in-process ngspice engine (tests and the CLI). `appStore.powerOn` becomes a thin caller. The three deck-assembly sites collapse to one. Golden decks from #67 must be byte-identical before and after. | Fable 5.1 / xhigh, serial |
+| F0.1 Conventions and CI hygiene | #31, #54, #80 | LICENSE file; `npm run lint` with eslint fixed to zero errors and a CI step; CI runs the integration suite once per leg and uploads coverage; `CLAUDE.md` (content in section 10), `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/bug.md`, `.github/PULL_REQUEST_TEMPLATE.md` | sonnet / medium |
+| F0.2 Oracles | #24, #22, #23, #63, #21, #67, #48 | Sample boards and schematics load in `kicad-cli`; `scripts/fetch-corpus.mjs` with a manifest (url, sha256, license, KiCad version) and `npm run test:corpus` that parses, extracts, cross-checks pad-to-net connectivity against `kicad-cli pcb export netlist`, generates the deck, and runs the op through the real-ngspice harness; a synthetic board generator `scripts/gen-synthetic-board.mjs` (rotated parts on both sides, zones, 6/8/9/10 syntax variants); private-board tests keyed on `CIRCSIM_PRIVATE_BOARDS_DIR` with a visible skip message; `resources/models/characterization.json` plus `src/simhost/__tests__/characterization.integration.test.ts` (entry, circuit, quantity, datasheet value, tolerance, source) seeded with every library entry, with `knownFailing: "#N"` entries for what lane M will fix; whole-deck goldens for the 555 sample; property tests for `sexpr/parse.ts` and `values/parseValue.ts`; critic fixtures with rotation, zones, and B.Cu | sonnet / high; three agents by file group (kicad-cli fixtures, corpus and generator, characterization and goldens) |
+| F0.3 Geometry | #3 | Correct pad transform in `src/core/critic/geom.ts`, `src/renderer/src/viewport/copperGeometry.ts`, `componentGeometry.ts`, `scene.ts` (one shared helper, three call sites); the geometry oracle test in the corpus suite: for every corpus board, every pad center lies within half the pad size plus 0.1 mm of a same-net track endpoint or via, on both sides, at all rotations | sonnet / high, two reviewers |
+| F0.4 Solve seam | #53 | `src/core/solve/` with `buildSolveInputs(board, circuit, resolutions, instruments, groundNetId, overrides): SolveInputs`, `runSolvePlan(inputs, engine: SolveEngine): Promise<SolveResult>` (two-pass rail sensing lives here), and `interface SolveEngine { loadCircuit(deckLines: string[]): Promise<void>; runOp(): Promise<OpResult>; runTran(tstep: number, tstop: number): Promise<TranResult> }` with two implementations: the SimHost client (renderer) and a direct in-process ngspice engine (tests and the CLI). `appStore.powerOn` becomes a thin caller. The three deck-assembly sites collapse to one. Golden decks from #67 must be byte-identical before and after. | opus / xhigh, serial |
 
 Wave 0 exit: corpus, characterization, goldens, and geometry oracle run in CI; `#3` and `#53` merged; every later PR is gated on them.
 
@@ -175,15 +194,15 @@ Starts when wave 0 and lanes C, P, S1, U1, U2 are merged.
 
 | Task | Issue | Deliverable | Model / effort |
 |---|---|---|---|
-| W2.1 | #20 phase 1 | `src/core/copper/` with `buildCopperNetwork(board, circuit, opts): CopperNetwork` (nodes, edges, `padNode(ref, pad)`), `emitCopperCards(network): string[]`; power and ground nets emitted as resistor networks behind `copperAware: true`; per-pad SPICE nodes; the critic's IR-drop and ampacity consume the same solve and the private solver is deleted; overlay shows per-pad voltages with an ideal-nets toggle; docs and fidelity page updated. Two agents with the interface above fixed first: core plus critic, and renderer overlay. Corpus assertion: copper-aware op matches the critic on the pour-only fixture. | Fable 5.1 / xhigh |
-| W2.2 | #20 phase 2 | Kron-reduce each net's resistive network onto its pad terminals for the transient deck; all nets once the graph builder passes the corpus. | Fable 5.1 / xhigh |
-| W2.3 | #25 (closure) | Live bench measured at 1x on the 555 sample and a lantern-class board with copper-aware DC; numbers recorded in the issue. | Fable 5.1 / high |
+| W2.1 | #20 phase 1 | `src/core/copper/` with `buildCopperNetwork(board, circuit, opts): CopperNetwork` (nodes, edges, `padNode(ref, pad)`), `emitCopperCards(network): string[]`; power and ground nets emitted as resistor networks behind `copperAware: true`; per-pad SPICE nodes; the critic's IR-drop and ampacity consume the same solve and the private solver is deleted; overlay shows per-pad voltages with an ideal-nets toggle; docs and fidelity page updated. Two agents with the interface above fixed first: core plus critic, and renderer overlay. Corpus assertion: copper-aware op matches the critic on the pour-only fixture. | opus / xhigh |
+| W2.2 | #20 phase 2 | Kron-reduce each net's resistive network onto its pad terminals for the transient deck; all nets once the graph builder passes the corpus. | opus / xhigh |
+| W2.3 | #25 (closure) | Live bench measured at 1x on the 555 sample and a lantern-class board with copper-aware DC; numbers recorded in the issue. | sonnet / high |
 
 ### Wave 3: re-audit, harden, release
 
 | Task | Deliverable |
 |---|---|
-| W3.1 | Mini council: rerun the nine lenses of the original council over master, restricted to two questions per closed issue: is it fixed as filed, and did it regress anything. Findings verified adversarially and filed as new issues; fixed with the same protocol. |
+| W3.1 | Mini council: four lenses (analog EE, copper physics, bug hunter, security and release) over master, restricted to two questions per closed issue: is it fixed as filed, and did it regress anything. Findings verified adversarially and filed as new issues; fixed with the same protocol. |
 | W3.2 | Full matrix green: corpus, characterization, unit, integration, E2E, packaged smoke on every leg; `npm audit` shows zero runtime-reachable high or critical. |
 | W3.3 | Docs truth pass: one agent walks every claim in README and the website with a checklist and cites the code or test that makes it true; anything unprovable is rewritten. |
 | W3.4 | Release v0.3.0: CHANGELOG grouped by council theme, version bump, tag, installers, SHA256SUMS, release notes linking #81. Signed and notarized if the human supplied certificates; otherwise unsigned with the install docs saying so plainly. |
@@ -217,9 +236,9 @@ Every task, no exceptions.
 - [ ] **Step 6: Docs in the same PR** when behavior or a claim changed.
 - [ ] **Step 7: Commit and push.** Small conventional commits, `fix(scope): ...` or `feat(scope): ...`, with the trailer.
 - [ ] **Step 8: Open the PR.** Title `<type>(<scope>): <summary> (fixes #N)`. Body sections: What, Why (link the issue), How verified (commands and output excerpts), Out of scope, Risk.
-- [ ] **Step 9: Reviewer A, the adversary.** Fresh Fable 5.1 xhigh context. Reads the issue and the diff, tries to break the fix, reruns the reproduction, and performs the mutation check: in a scratch worktree, reverts the source change while keeping the test and confirms the test fails. Returns the structured verdict in section 5.
-- [ ] **Step 10: Reviewer B, fidelity and quality.** Fresh Fable 5.1 xhigh context. Confirms the root cause named in the issue is addressed, no unrelated changes, docs updated, no emojis or em-dashes, no new lint errors, no corpus performance regression. Returns the structured verdict.
-- [ ] **Step 11: Fix loop.** Only the requesting reviewer re-reviews. Maximum three rounds, then section 6.
+- [ ] **Step 9: Reviewer A, the adversary.** Fresh context, model per section 1. On medium and low severity issues this reviewer also performs step 10, and step 10 is skipped. Reads the issue and the diff, tries to break the fix, reruns the reproduction, and performs the mutation check: in a scratch worktree, reverts the source change while keeping the test and confirms the test fails. Returns the structured verdict in section 5.
+- [ ] **Step 10: Reviewer B, fidelity and quality.** Critical and high severity issues and design-heavy tasks only. Fresh context, model per section 1. Confirms the root cause named in the issue is addressed, no unrelated changes, docs updated, no emojis or em-dashes, no new lint errors, no corpus performance regression. Returns the structured verdict.
+- [ ] **Step 11: Fix loop.** Only the requesting reviewer re-reviews. Two failed rounds trigger the ladder in section 6.
 - [ ] **Step 12: Master merges.** Implementer rebases on master and re-runs step 5. Master waits for CI green on every leg, squash-merges, closes the issue via the PR, posts a one-line issue comment with the PR link and the verification evidence, updates the ledger.
 - [ ] **Step 13: Canary.** On master after every merge: `npm run typecheck && npm test && npm run test:corpus && npm run test:characterization`. Any failure: immediate revert PR, issue reopened, task reassigned with the failure attached.
 
@@ -239,12 +258,12 @@ Both reviewers return exactly this object.
 }
 ```
 
-A PR merges only with two APPROVE verdicts, `repro_rerun` not FAIL, and `mutation_check.test_failed_without_fix` true where a test was added.
+A PR merges only with an APPROVE from every reviewer its tier requires, `repro_rerun` not FAIL, and `mutation_check.test_failed_without_fix` true where a test was added.
 
 ## 6. Escalation and retry
 
-- Three failed review rounds: the master spawns a new implementer at xhigh with the prior diff, both review histories, and the issue; the old branch is kept for reference.
-- A second failure: the master splits the issue into sub-issues (filed on GitHub, linked to the parent) or marks it `blocked` with a rationale comment and moves on. Never merge on REQUEST_CHANGES.
+- Two failed review rounds: the master replaces the implementer one rung up the ladder in section 1, with the prior diff, the review histories, and the issue; the old branch is kept for reference.
+- Failure at the top rung: the master splits the issue into sub-issues (filed on GitHub, linked to the parent) or marks it `blocked` with a rationale comment and moves on. Never merge on REQUEST_CHANGES.
 - Canary failure that the revert does not clear: the master stops the lane, runs `git bisect` between the last green canary and HEAD, and files the finding.
 - An implementer that stops early, claims completion without pasted verification output, or modifies files outside its lane is replaced, not argued with.
 
@@ -298,8 +317,17 @@ circsim is a validation bench for routed KiCad boards: Electron + TypeScript + R
 - No network calls at runtime. No vendor SPICE model text in the repo.
 - No third-party board files committed; the corpus is fetched at test time.
 - Every behavior change updates `website/docs` in the same PR.
-- Branch per task: `fix/<issue>-<slug>`; squash-merge; commit trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
+- Branch per task: `fix/<issue>-<slug>`; squash-merge; commit trailer is the `Co-Authored-By` line for the model that wrote the change.
 - Reproduce first, write the failing test, then fix. Paste verification output in the PR.
+
+## Task protocol (every task)
+1. `gh issue view N`; run the reproduction. If it no longer reproduces on master, report with evidence and stop.
+2. Write a test that encodes the reproduction; confirm it fails for the stated reason.
+3. Fix the root cause named in the issue. If the direction in the issue is wrong on contact with the code, do the right thing and say why in the PR.
+4. Iterate on the touched test files. Then run `npm run typecheck && npm run lint && npm test` once, plus the corpus and characterization suites.
+5. Update docs in the same PR when behavior or a claim changed.
+6. Open the PR: title `<type>(<scope>): <summary> (fixes #N)`; body sections What, Why, How verified, Out of scope, Risk.
+7. Stay inside the files your lane owns. No refactors beyond the issue. Grep before Read; read ranges in the large files.
 
 ## Where things are
 - KiCad parsing: `src/core/kicad`, `src/core/sexpr`. Netlist: `src/core/netlist`. Models: `src/core/models`, `resources/models`. Deck: `src/core/spicegen`. Solve pipeline: `src/core/solve`. Critic: `src/core/critic`. Copper network: `src/core/copper`.
