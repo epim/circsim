@@ -29,6 +29,7 @@ Surfaces connectivity gaps found while [rebuilding the circuit](../concepts/boar
 
 - **Unconnected named pad** *(warn)*: a numbered pad on no net. Could be a missing/unrouted connection, or an intentional no-connect. *Suggestion: confirm it's intentionally a no-connect.*
 - **Unconnected unnumbered pad** *(warn)*: often a QFN/DFN exposed thermal pad, which usually should tie to ground for heat-sinking and a solid reference. *Suggestion: if it's an exposed thermal pad, connect it to GND.*
+- **No-connect pads** are skipped. A pad whose pin type in the board file carries KiCad's `no_connect` flag (written as `(pintype "...+no_connect")` by KiCad 8 and newer when the board is updated from the schematic) is open on purpose, so the check stays quiet about it. Boards saved by older KiCad versions carry no such flag and will still list those pads.
 - **Single-pad net** *(info)*: a net that reaches only one pad goes nowhere; often a stub, a test point, or a missing connection worth a glance.
 
 KiCad's intentional `unconnected-(...)` nets are deliberately ignored. Reporting them would just be noise.

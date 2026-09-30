@@ -333,11 +333,13 @@ describe('stitchOutline — area sign normalization', () => {
 // ─── edge cases ───────────────────────────────────────────────────────────────
 
 describe('stitchOutline — edge cases', () => {
-  it('empty input → empty outer, no holes, bounding-box warning', () => {
+  it('empty input → empty outer, no holes, and a warning saying why (#50)', () => {
     const result = stitchOutline([])
     expect(result.outer).toHaveLength(0)
     expect(result.holes).toHaveLength(0)
-    // No primitives = no meaningful outline
+    // No primitives = no meaningful outline, and the user is told.
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toMatch(/no board outline/i)
   })
 
   it('custom tolerance parameter is respected', () => {

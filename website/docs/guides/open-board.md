@@ -14,6 +14,11 @@ With no board loaded, the viewport offers:
 
 The **Open…** button in the top bar opens a file picker at any time. Opening a new board replaces the current one.
 
+## If the board does not load cleanly
+
+- A **KiCad 5 or older** file is refused with a message to save it from KiCad 6 or newer first.
+- A missing or broken **board outline** does not stop the board from opening. The 3D view then shows no substrate or a bounding-box substrate, and a warning row above the viewport says why. See [supported files](../reference/file-formats#kicad-pcb-the-routed-board-required).
+
 ## By drag and drop
 
 Drag a `.kicad_pcb` from your file manager straight onto the circsim window. (You can also drop a `.kicad_sch` this way to [attach a schematic](./attach-schematic) to an already-open board.)

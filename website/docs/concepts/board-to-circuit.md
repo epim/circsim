@@ -6,7 +6,7 @@ A `.kicad_pcb` file looks like a physical artifact: footprints, tracks, vias, co
 
 A KiCad board file carries full net connectivity. Every connected pad is tagged with the net it belongs to, and tracks, vias, and zones carry net references too. So the circuit (which component pin connects to which net) is fully reconstructable from the board file alone. You do not need a schematic or a separate netlist file for connectivity.
 
-circsim parses the board into a structured model: the net table, every footprint (reference, value, library id, layer, position, pads, and any properties like an MPN), the tracks, vias, zones, board outline, and silkscreen. From the footprints and their net-tagged pads it builds a **circuit**: a list of nets and a list of parts, where each part knows which of its pads lands on which net.
+circsim parses the board into a structured model: the net table, every footprint (reference, value, library id, layer, position, pads, and any properties like an MPN), the tracks, vias, zones, board outline, and silkscreen. The outline is stitched from `Edge.Cuts` lines, arcs, circles, rectangles and polygons, whether drawn on the board or inside a footprint (a slot or cutout in a mechanical footprint counts). From the footprints and their net-tagged pads it builds a **circuit**: a list of nets and a list of parts, where each part knows which of its pads lands on which net.
 
 ::: info Two net formats, one pipeline
 KiCad 6 to 8 boards carry a numeric net table (for example, `(net 3 "VCC")`) and tag pads by id. KiCad 9 (and the 2026 format) dropped the numeric ids entirely: nets are referenced by **name only**. circsim reads both. For name-only boards it synthesizes a stable internal id per distinct net name, so everything downstream is identical regardless of which KiCad version routed the board. It also handles the older `F.SilkS` and newer `F.Silkscreen` layer spellings.
@@ -33,7 +33,7 @@ Connectivity comes from the board, but a matching `.kicad_sch` schematic adds th
 
 - **KiCad `Sim.*` fields**: if you (or KiCad) set `Sim.Device`, `Sim.Type`, `Sim.Params`, `Sim.Library`, `Sim.Name`, or `Sim.Pins` on a symbol, that's the highest-fidelity model source circsim has. It's the first thing [model resolution](./models) tries.
 - **Symbol pin names**: a diode symbol names its pins `A` (anode) and `K` (cathode). That's ground truth for polarity, and circsim uses it to override footprint-convention guesses (see [pin-map precedence](../reference/pin-maps)).
-- **No-connect markers**: pins the designer explicitly marked as intentionally unconnected.
+- **No-connect markers**: KiCad writes each one as a bare position on the sheet, so circsim matches it to the pin sitting at that position (after the symbol's rotation, mirror and unit are applied). The Board Critic does not depend on this: it reads the no-connect flag that KiCad already copies onto each pad of the routed board, so pins marked no-connect are not reported as unconnected even with no schematic attached.
 
 ::: warning Hierarchical schematics
 In this version circsim flat-scans only the **top-level** symbols of a schematic. If your design uses hierarchical sheets, symbols on sub-sheets aren't seen yet. Connectivity is unaffected (that always comes from the board); you just won't get `Sim.*` fields or pin names for parts that live on sub-sheets.

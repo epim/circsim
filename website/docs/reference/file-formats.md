@@ -18,6 +18,10 @@ Both net formats are supported transparently:
 
 Older (`F.SilkS`) and newer (`F.Silkscreen`) layer names are both handled.
 
+**Board outline.** The outline is stitched from `Edge.Cuts` lines, arcs, circles, rectangles and polygons (`gr_poly`), including the same shapes drawn inside a footprint (`fp_line`, `fp_arc`, `fp_circle`, `fp_rect`, `fp_poly`), which are placed using the footprint's position and rotation. If the outline cannot be built, circsim says why in a warning row above the viewport: no `Edge.Cuts` geometry found, a gap in the outline (it falls back to a bounding box), or an unsupported item such as a Bezier curve (`gr_curve`).
+
+**Files that are refused.** A KiCad 5 or older board (`(module ...)` footprints, or a `(version ...)` before 20211014) is rejected with a message asking you to open and save it in KiCad 6 or newer. A leading UTF-8 byte order mark is ignored.
+
 ::: tip Quilter users
 Quilter returns your routed layout in the same native format it received. For KiCad projects that's a `.kicad_pcb`, exactly circsim's input. Quilter does **not** emit a BOM, netlist, or Gerbers; the board file alone is enough for circsim to rebuild the circuit.
 :::
@@ -28,7 +32,7 @@ Connectivity comes entirely from the board, so the schematic is optional, but it
 
 - the six **KiCad `Sim.*` fields** (`Sim.Device`, `Sim.Type`, `Sim.Params`, `Sim.Pins`, `Sim.Library`, `Sim.Name`): the highest-priority [model source](../concepts/models#how-a-part-finds-its-model);
 - each symbol's **Value** and its **pin list** (number, name, electrical type);
-- **no-connect** markers.
+- **no-connect** markers: the sheet-level `(no_connect (at x y))` markers, matched to the pin at that position. The Board Critic's unconnected-pad check takes its no-connect flag from the board's `(pintype "...+no_connect")` instead, so it works without a schematic.
 
 The pin names are what let circsim resolve [diode/LED polarity](./pin-maps#diode-polarity) from the design instead of guessing from the footprint.
 

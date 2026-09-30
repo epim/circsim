@@ -234,7 +234,7 @@
     "stubbedPct": 66,
     "islands": 17,
     "deckLines": 362,
-    "outlineWarnings": 1,
+    "outlineWarnings": 0,
     "supplyNode": "_3v3",
     "supplyVolts": 4.26
   },
@@ -291,7 +291,7 @@
     "stubbedPct": 100,
     "islands": null,
     "deckLines": null,
-    "outlineWarnings": 1,
+    "outlineWarnings": 0,
     "supplyNode": null,
     "supplyVolts": null
   }

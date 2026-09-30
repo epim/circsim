@@ -406,6 +406,10 @@ export function stitchOutline(
   const warnings: string[] = []
 
   if (primitives.length === 0) {
+    warnings.push(
+      'outline: no board outline found on the Edge.Cuts layer, so the board substrate cannot be drawn. ' +
+        'Draw a closed outline on Edge.Cuts (lines, arcs, circles, rectangles or polygons).',
+    )
     return { outer: [], holes: [], warnings }
   }
 

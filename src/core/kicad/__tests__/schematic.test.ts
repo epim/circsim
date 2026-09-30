@@ -145,24 +145,82 @@ describe('parseSchematicSimData — pin list from lib_symbols', () => {
 // ─── no-connect ───────────────────────────────────────────────────────────────
 
 describe('parseSchematicSimData — no-connects', () => {
-  it('a no-connect nested in a symbol appears in the noConnects array (tolerance case)', () => {
-    // KiCad itself never writes this form (it emits a top-level
-    // (no_connect (at x y) (uuid ...)) and kicad-cli rejects the nested one),
-    // so it lives here as an inline snippet, not in a shipped fixture.
+  // KiCad writes a no-connect as a sheet-level (no_connect (at x y) (uuid ...))
+  // with coordinates only (issue #49). The parser matches each marker against
+  // the placed pin positions, so the tests use that shape and nothing else.
+  const LIB = `(lib_symbols
+    (symbol "Test:CHIP" (in_bom yes) (on_board yes)
+      (symbol "CHIP_1_1"
+        (pin input line (at 2 1 0) (length 2.54) (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+        (pin input line (at -2 -1 180) (length 2.54) (name "B" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))
+      )
+      (symbol "CHIP_2_1"
+        (pin input line (at 0 4 0) (length 2.54) (name "C" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
+      )
+    )
+  )`
+  function sch(rot: string, extra: string, markers: Array<[number, number]>, unit = 1): string {
+    const nc = markers.map(([x, y]) => `(no_connect (at ${x} ${y}) (uuid "n"))`).join('\n  ')
+    return `(kicad_sch (version 20231120) (generator eeschema)
+  ${LIB}
+  (symbol (lib_id "Test:CHIP") (at 50 50 ${rot}) ${extra} (unit ${unit})
+    (property "Reference" "U9" (at 50 50 0))
+    (property "Value" "CHIP" (at 50 50 0))
+  )
+  ${nc}
+)`
+  }
+
+  it('the KiCad-form root no_connect in the fixture lands on U1 pin 5', () => {
+    const data = parseSchematicSimData(fixture555SchText)
+    expect(data.get('U1')!.noConnects).toEqual(['5'])
+    expect(data.has('R1')).toBe(true)
+  })
+
+  it('an unrotated marker is matched to the pin with Y flipped into sheet coordinates', () => {
+    // Pin 1 is at lib (2, 1): sheet (52, 49). Pin 2 is at lib (-2, -1): sheet (48, 51).
+    const r = parseSchematicSimData(sch('0', '', [[52, 49]])).get('U9')!
+    expect(r.noConnects).toEqual(['1'])
+  })
+
+  it('both pins can be marked, and order follows the library pin order', () => {
+    const r = parseSchematicSimData(sch('0', '', [[48, 51], [52, 49]])).get('U9')!
+    expect(r.noConnects).toEqual(['1', '2'])
+  })
+
+  it('applies the instance rotation (counter-clockwise)', () => {
+    // Rotate 90: lib (2, 1) -> (-1, 2) -> sheet (49, 48).
+    const r = parseSchematicSimData(sch('90', '', [[49, 48]])).get('U9')!
+    expect(r.noConnects).toEqual(['1'])
+    // The unrotated position no longer matches.
+    expect(parseSchematicSimData(sch('90', '', [[52, 49]])).get('U9')!.noConnects).toEqual([])
+  })
+
+  it('applies (mirror x) and (mirror y)', () => {
+    // mirror x flips Y: pin 1 lib (2, -1) -> sheet (52, 51).
+    expect(parseSchematicSimData(sch('0', '(mirror x)', [[52, 51]])).get('U9')!.noConnects).toEqual(['1'])
+    // mirror y flips X: pin 1 lib (-2, 1) -> sheet (48, 49).
+    expect(parseSchematicSimData(sch('0', '(mirror y)', [[48, 49]])).get('U9')!.noConnects).toEqual(['1'])
+  })
+
+  it('only considers pins of the placed unit', () => {
+    // Unit 2's pin 3 is at lib (0, 4): sheet (50, 46). Placed as unit 1 it does not exist.
+    expect(parseSchematicSimData(sch('0', '', [[50, 46]], 1)).get('U9')!.noConnects).toEqual([])
+    expect(parseSchematicSimData(sch('0', '', [[50, 46]], 2)).get('U9')!.noConnects).toEqual(['3'])
+  })
+
+  it('a marker that touches no pin is ignored', () => {
+    expect(parseSchematicSimData(sch('0', '', [[10, 10]])).get('U9')!.noConnects).toEqual([])
+  })
+
+  it('a nested (no_connect (pin "N")) shape KiCad never writes is not read', () => {
     const nested = `(kicad_sch (version 20211123) (generator eeschema)
   (symbol (lib_id "Device:R") (at 100 100 0) (unit 1)
     (property "Reference" "R9" (at 100 100 0))
     (no_connect (at 87.62 77.46) (pin "5") (uuid "nc000001-0000-0000-0000-000000000000"))
   )
 )`
-    const r9 = parseSchematicSimData(nested).get('R9')!
-    expect(r9.noConnects).toEqual(['5'])
-  })
-
-  it('the KiCad-form top-level no_connect in the fixture does not disturb parsing', () => {
-    const data = parseSchematicSimData(fixture555SchText)
-    expect(data.get('U1')!.noConnects).toBeInstanceOf(Array)
-    expect(data.has('R1')).toBe(true)
+    expect(parseSchematicSimData(nested).get('R9')!.noConnects).toEqual([])
   })
 })
 

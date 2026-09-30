@@ -11,6 +11,10 @@
  *   - Op fallback caveat: persistent + non-dismissable while the latest
  *     operating point came from a fallback rung (gmin/source/transient-op) —
  *     its voltages, especially 0.000 V readings, may be unreliable (F1).
+ *   - Board outline warnings (#50): load-time diagnostics from the Edge.Cuts
+ *     stitcher (no outline found, open chain, unsupported primitive). Persistent
+ *     for the loaded board; without them the 3D view just shows copper floating
+ *     in space or a bounding-box substrate with no explanation.
  *   - Bench-restart toast: brief "bench restarted" notice (window/memory), with
  *     the sequential-logic caveat when digital parts are present. Dismissable.
  *   - Crash toast: SimHost crashed — auto-recovering. Dismissable.
@@ -49,6 +53,9 @@ export function _applyRailOverride(
   void store.getState().powerOn()
 }
 
+/** Stable empty list so the no-board case does not allocate per render. */
+const NO_WARNINGS: readonly string[] = []
+
 export default function WarningsBar(): React.ReactElement | null {
   const store = useAppStoreApi()
   const resolutions = useApp(s => s.resolutions)
@@ -58,6 +65,8 @@ export default function WarningsBar(): React.ReactElement | null {
   const opCaveat = useApp(s => s.opCaveat)
   const railNotes = useApp(s => s.railNotes)
   const fidelityMinimizedSig = useApp(s => s.fidelityMinimizedSig)
+  const board = useApp(s => s.board)
+  const outlineWarnings = board ? board.outline.warnings : NO_WARNINGS
 
   const fidelity = fidelityBannerItems(resolutions)
   const fidelityMinimized = isFidelityMinimized(fidelity, fidelityMinimizedSig)
@@ -93,7 +102,8 @@ export default function WarningsBar(): React.ReactElement | null {
     crashNotice ||
     opCaveat ||
     railNotes.length > 0 ||
-    schematicPinNotes.length > 0
+    schematicPinNotes.length > 0 ||
+    outlineWarnings.length > 0
   if (!anything) return null
 
   return (
@@ -241,6 +251,13 @@ export default function WarningsBar(): React.ReactElement | null {
       {/* ── Gated-off rail notes (op-informed rail sensing, tier 4 fallback) ── */}
       {railNotes.map(note => (
         <RailNoteRow key={`${note.ref}:${note.kicadName}`} note={note} store={store} />
+      ))}
+
+      {/* ── Board outline warnings (#50): why the substrate looks wrong ───── */}
+      {outlineWarnings.map((w, i) => (
+        <div key={`${i}:${w}`} style={outlineWarningStyle} data-testid="outline-warning">
+          <strong>Board outline.</strong> {w.replace(/^outline:\s*/, '')}
+        </div>
       ))}
 
       {/* ── Schematic pin-map corrections (informational, spec 2026-07-15) ── */}
@@ -401,6 +418,13 @@ const railBtnStyle: React.CSSProperties = {
   padding: '4px 8px',
   fontSize: 12,
   cursor: 'pointer',
+}
+// Outline warnings: same amber caveat tone as the op fallback.
+const outlineWarningStyle: React.CSSProperties = {
+  ...baseRow,
+  background: '#3a2a10',
+  color: '#ffd9a0',
+  borderTop: '1px solid #5a4418',
 }
 const schematicPinNoteStyle: React.CSSProperties = {
   ...baseRow,
