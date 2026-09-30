@@ -693,7 +693,11 @@ export class SimHost {
     if (this.deckLoaded) {
       await this.engine.command('destroy all', false) // Spec §7.4 gotcha 5
     }
-    this.currentDeck = [...deckLines]
+    // ngSpice_Circ treats every array entry as exactly ONE card and never splits
+    // on embedded newlines, so a multi-line entry (a pasted .subckt block, a
+    // joined run of resistors) would reach the parser as a single malformed
+    // card. Split here so no caller can regress it (issue #18).
+    this.currentDeck = deckLines.flatMap((line) => line.split(/\r?\n/))
     this.engine.loadCircuit(this.currentDeck)
     this.deckLoaded = true
   }

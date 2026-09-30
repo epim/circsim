@@ -790,6 +790,12 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
    * replayAfterCrash() ops still commit via ingestEvent normally.
    */
   let powerOnOpInFlight = false
+  /**
+   * True while validateSubckt's probe deck owns the engine. Same idea as
+   * powerOnOpInFlight: the probe's opResult / convergenceFailure describe a
+   * dummy circuit and must not reach the board readouts or the convergence card.
+   */
+  let subcktProbeInFlight = false
   /** Snapshot of the instruments the in-flight (or last) op was solved for. */
   let lastSolvedInstruments: Instrument[] | null = null
   let reopSettledResolvers: Array<() => void> = []
@@ -1681,23 +1687,25 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     // ── Task 25: LLM-assist + user .lib import ───────────────────────────────
 
     async validateSubckt(subcktText, subcktName, nodeCount) {
-      // Build a minimal test deck: the pasted subckt + one dummy instance +
-      // enough dummy sources/ground so ngspice can parse it without error.
-      // We don't care about simulation convergence — only that ngspice PARSES
-      // the subckt definition without emitting a fatal error (loadCircuit).
-      // We use nodeCount dummy nodes (n1, n2, ...) tied to ground via 1G resistors
-      // so the deck has a DC path and won't hit the "no DC path to ground" trap.
+      // Build a minimal probe deck: the pasted subckt + one dummy instance +
+      // enough dummy bleeds/ground so ngspice can parse it without error.
+      // We don't care about simulation convergence, only that ngspice PARSES
+      // the subckt definition without emitting an error. The dummy nodes
+      // (_tst1, _tst2, ...) are tied to ground via 1G resistors so the deck has
+      // a DC path and won't hit the "no DC path to ground" trap.
+      //
+      // ngSpice_Circ takes exactly one card per entry and never splits on
+      // newlines, so the pasted block goes in one entry per line (issue #18;
+      // SimHost.loadCircuit guards the same way).
       const dummyNodes = Array.from({ length: nodeCount }, (_, i) => `_tst${i + 1}`)
       const dummyNodeStr = dummyNodes.join(' ')
-      const dummyRs = dummyNodes
-        .map((n, i) => `r_chk_${i + 1} ${n} 0 1000meg`)
-        .join('\n')
+      const dummyRs = dummyNodes.map((n, i) => `r_chk_${i + 1} ${n} 0 1000meg`)
 
       const testDeck = [
         `* circsim subckt validation test for ${subcktName}`,
-        subcktText.trim(),
+        ...subcktText.trim().split(/\r?\n/),
         `x_test ${dummyNodeStr} ${subcktName}`,
-        dummyRs,
+        ...dummyRs,
         `v_test _tst1 0 dc 0`,
         `.op`,
         `.end`,
@@ -1705,43 +1713,35 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
       // Collect log lines during the load to detect errors.
       const errorLines: string[] = []
-      let errorDetected = false
 
       const unsub = simClient.onEvent(event => {
         if (event.type === 'log' && event.level === 'error') {
           errorLines.push(event.text)
-          errorDetected = true
         }
       })
 
+      // The probe replaces the board deck in the live engine, and the op behind
+      // it is not the board's: keep ingestEvent from painting it onto the board
+      // or raising a convergence card for a dummy circuit.
+      subcktProbeInFlight = true
       try {
+        // A runOp right behind the load is the load-complete signal: SimHost
+        // applies commands in order and always answers an op with an opResult,
+        // even when the load failed (load errors arrive as log events before
+        // it). Waiting on it, not a fixed timer, keeps a valid paste from
+        // costing the whole timeout. The timeout only backstops a dead host.
+        const done = simClient.waitFor('opResult', 8000).catch(() => undefined)
         simClient.send({ type: 'loadCircuit', deckLines: testDeck })
-        // Give SimHost up to 8 seconds to respond with opResult or an error.
-        // If it loads cleanly we get an opResult (even a failed .op produces
-        // one; what matters is that ngspice accepted the deck structure).
-        // A parse/load error produces log{level:'error'} lines.
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 8000)
-          const innerUnsub = simClient.onEvent(evt => {
-            if (evt.type === 'opResult' || evt.type === 'convergenceFailure') {
-              clearTimeout(timer)
-              innerUnsub()
-              resolve()
-            }
-          })
-          // Also resolve immediately if we already detected a hard error
-          // (some errors fire before opResult).
-          if (errorDetected) {
-            clearTimeout(timer)
-            innerUnsub()
-            resolve()
-          }
-        })
+        simClient.send({ type: 'runOp' })
+        await done
       } finally {
         unsub()
+        subcktProbeInFlight = false
+        // The engine now holds the probe deck, not the board's.
+        get().markDeckDirty()
       }
 
-      if (errorDetected) {
+      if (errorLines.length > 0) {
         return { ok: false, error: errorLines.join('\n') }
       }
       return { ok: true }
@@ -1772,7 +1772,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         case 'opResult': {
           // powerOn is the sole committer for its own ops — skip the interim
           // pass-1 (family-default) result it is about to correct in pass 2 (FIX 2).
-          if (powerOnOpInFlight) break
+          if (powerOnOpInFlight || subcktProbeInFlight) break
           const { circuit, resolutions, instruments, groundNetId } = get()
           if (!circuit) break
           const opVoltages = mapOpResultToNetVoltages(event.values, circuit)
@@ -1826,6 +1826,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           })
           break
         case 'convergenceFailure':
+          if (subcktProbeInFlight) break
           set({
             simState: 'idle',
             convergenceCard: {

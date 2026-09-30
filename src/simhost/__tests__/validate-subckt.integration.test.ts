@@ -1,0 +1,208 @@
+/**
+ * src/simhost/__tests__/validate-subckt.integration.test.ts (issue #18)
+ *
+ * The Ask-your-LLM paste path against the REAL bundled libngspice. The Model
+ * Doctor hands a pasted multi-line `.subckt ... .ends` block to the store's
+ * `validateSubckt`, which builds a probe deck and loads it through SimHost. The
+ * pasted block and the dummy bleed resistors are multi-line strings, and
+ * ngSpice_Circ treats every array entry as exactly ONE card, so before the fix
+ * ngspice saw a `.subckt`/`.ends` mismatch and every real model was rejected.
+ *
+ * Two layers:
+ *   - SimHost.loadCircuit accepts entries with embedded newlines (the guard that
+ *     keeps any future caller from regressing this);
+ *   - the store's validateSubckt, driven through a SimClient backed by a real
+ *     SimHost (the exact probe deck the UI builds), accepts a valid paste,
+ *     rejects a broken one, resolves on load completion (not the 8 s timer),
+ *     leaves the displayed board results alone, and dirties the board deck.
+ *
+ * Skipped automatically when resources/ngspice/<platform> is missing.
+ */
+
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+import { afterEach, describe, expect, it } from 'vitest'
+
+import { SimHost } from '../index'
+import { ngspiceResourcesAvailable } from '../ngspiceFfi'
+import type { SimCommand, SimEvent } from '../protocol'
+
+const haveNgspice = ngspiceResourcesAvailable()
+
+// The store lives in the renderer project, which the node tsconfig (this
+// folder's project) does not include, so it is loaded dynamically and described
+// by the narrow shape this test uses instead of a static import.
+type SimEventListener = (event: SimEvent) => void
+interface SimClientLike {
+  send(command: SimCommand): void
+  onEvent(listener: SimEventListener): () => void
+  waitFor(type: SimEvent['type'], timeoutMs?: number): Promise<SimEvent>
+}
+interface StoreLike {
+  getState(): {
+    openBoardFromText(text: string, fileName: string): void
+    validateSubckt(
+      subcktText: string,
+      subcktName: string,
+      nodeCount: number
+    ): Promise<{ ok: true } | { ok: false; error: string }>
+    opVoltages: Map<number, number> | null
+    deckDirty: boolean
+  }
+  setState(partial: Record<string, unknown>): void
+}
+const STORE_MODULE = '../../renderer/src/store/appStore'
+async function createAppStore(opts: { simClient: SimClientLike }): Promise<StoreLike> {
+  const mod = (await import(/* @vite-ignore */ STORE_MODULE)) as {
+    createAppStore(o: { simClient: SimClientLike }): StoreLike
+  }
+  return mod.createAppStore(opts)
+}
+
+const VALID_SUBCKT = [
+  '* a hand-written two-pin part',
+  '.subckt tsub a b',
+  'r1 a b 1000',
+  'c1 a b 1p',
+  '.ends tsub',
+  '',
+].join('\n')
+
+// Missing .ends: a genuinely broken paste that must still be rejected.
+const BROKEN_SUBCKT = ['.subckt tbad a b', 'r1 a b 1000', ''].join('\n')
+
+/** A SimClient over a real in-process SimHost (what the utility process runs). */
+function createHostClient(): {
+  client: SimClientLike
+  host: SimHost
+  events: SimEvent[]
+  start(): Promise<void>
+} {
+  const listeners = new Set<SimEventListener>()
+  const events: SimEvent[] = []
+  const host = new SimHost({
+    emit: (e) => {
+      events.push(e)
+      for (const l of [...listeners]) l(e)
+    },
+    disableWatchdog: true,
+    disableTimers: true,
+  })
+  const client: SimClientLike = {
+    send(cmd: SimCommand) {
+      host.handleCommand(cmd)
+    },
+    onEvent(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    waitFor(type, timeoutMs) {
+      return new Promise((resolve, reject) => {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const off = client.onEvent((e) => {
+          if (e.type === type) {
+            if (timer) clearTimeout(timer)
+            off()
+            resolve(e as never)
+          }
+        })
+        if (timeoutMs !== undefined) {
+          timer = setTimeout(() => {
+            off()
+            reject(new Error(`waitFor('${type}') timed out`))
+          }, timeoutMs)
+        }
+      })
+    },
+  }
+  return { client, host, events, start: () => host.start() }
+}
+
+describe.skipIf(!haveNgspice)('issue #18: multi-line subckt through real ngspice', () => {
+  let disposeHost: (() => Promise<void>) | null = null
+  afterEach(async () => {
+    await disposeHost?.()
+    disposeHost = null
+  })
+
+  it('SimHost.loadCircuit splits entries with embedded newlines into separate cards', async () => {
+    const { host, events, start } = createHostClient()
+    disposeHost = () => host.dispose()
+    await start()
+
+    await host.loadCircuit([
+      '* t',
+      '.subckt tsub a b\nr1 a b 1000\n.ends',
+      'x_test _tst1 _tst2 tsub',
+      'r_chk_1 _tst1 0 1000meg\r\nr_chk_2 _tst2 0 1000meg',
+      'v_test _tst1 0 dc 0',
+      '.op',
+      '.end',
+    ])
+    const op = await host.runOp()
+
+    const errors = events.filter((e) => e.type === 'log' && e.level === 'error')
+    expect(errors).toEqual([])
+    expect(op['_tst1']).toBeCloseTo(0, 9)
+    expect(op['_tst2']).toBeCloseTo(0, 9)
+  })
+
+  describe('store.validateSubckt (the exact probe deck the UI builds)', () => {
+    const sample = readFileSync(
+      join(process.cwd(), 'resources', 'sample', 'first-light.kicad_pcb'),
+      'utf-8'
+    )
+
+    it('accepts a valid multi-line subckt, promptly, without touching the board readout', async () => {
+      const { client, host, start } = createHostClient()
+      disposeHost = () => host.dispose()
+      await start()
+      const store = await createAppStore({ simClient: client })
+      store.getState().openBoardFromText(sample, 'first-light.kicad_pcb')
+      // A displayed board result the probe must not overwrite.
+      const shown = new Map<number, number>([[1, 3.3]])
+      store.setState({ opVoltages: shown, deckDirty: false })
+
+      const t0 = Date.now()
+      const res = await store.getState().validateSubckt(VALID_SUBCKT, 'tsub', 2)
+      const elapsed = Date.now() - t0
+
+      expect(res).toEqual({ ok: true })
+      // Resolves on load completion, not the 8 s fallback timer.
+      expect(elapsed).toBeLessThan(5000)
+      expect(store.getState().opVoltages).toBe(shown)
+      // The probe deck replaced the board deck in the live engine.
+      expect(store.getState().deckDirty).toBe(true)
+    })
+
+    it('rejects a broken paste and reports the ngspice error', async () => {
+      const { client, host, start } = createHostClient()
+      disposeHost = () => host.dispose()
+      await start()
+      const store = await createAppStore({ simClient: client })
+      store.getState().openBoardFromText(sample, 'first-light.kicad_pcb')
+      store.setState({ deckDirty: false })
+
+      const t0 = Date.now()
+      const res = await store.getState().validateSubckt(BROKEN_SUBCKT, 'tbad', 2)
+
+      expect(res.ok).toBe(false)
+      expect(res.ok === false && res.error).toMatch(/subckt/i)
+      expect(Date.now() - t0).toBeLessThan(5000)
+      expect(store.getState().deckDirty).toBe(true)
+    })
+
+    it('a valid paste validates again after a rejected one (engine not wedged)', async () => {
+      const { client, host, start } = createHostClient()
+      disposeHost = () => host.dispose()
+      await start()
+      const store = await createAppStore({ simClient: client })
+
+      const bad = await store.getState().validateSubckt(BROKEN_SUBCKT, 'tbad', 2)
+      expect(bad.ok).toBe(false)
+      const good = await store.getState().validateSubckt(VALID_SUBCKT, 'tsub', 2)
+      expect(good).toEqual({ ok: true })
+    })
+  })
+})

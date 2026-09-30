@@ -27,7 +27,7 @@ No model file? Click **Ask your LLM** (in the **⋮** overflow menu). circsim gi
 
 1. **Copy the prompt** and paste it into your LLM of choice.
 2. **Paste the `.subckt` response** back into circsim.
-3. **Validate with ngspice**: circsim loads the model into the real engine and tells you whether it accepted it. If ngspice rejects it, nothing is saved; revise and retry.
+3. **Validate with ngspice**: circsim loads the model into the real engine and tells you whether it accepted it. If ngspice rejects it, nothing is saved; revise and retry. Multi-line models are fine: the whole pasted block is loaded, and the error text shown is ngspice's own. Validation runs a throwaway test circuit in the engine, so your board's current readings stay on screen untouched, and the next run reloads the board into the engine.
 4. **Save** to your library, which opens the pin-map editor so you can verify the terminal mapping (the LLM's suggested map is a suggestion, not gospel).
 
 This keeps a fully-offline, no-API workflow honest: the model only counts once *ngspice itself* accepts it.
