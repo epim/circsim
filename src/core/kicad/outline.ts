@@ -118,9 +118,9 @@ function tessellateArc(
   const r = dist(center, start)
 
   // Angles from center
-  let startAngle = Math.atan2(start.y - center.y, start.x - center.x)
-  let midAngle = Math.atan2(mid.y - center.y, mid.x - center.x)
-  let endAngle = Math.atan2(end.y - center.y, end.x - center.x)
+  const startAngle = Math.atan2(start.y - center.y, start.x - center.x)
+  const midAngle = Math.atan2(mid.y - center.y, mid.x - center.x)
+  const endAngle = Math.atan2(end.y - center.y, end.x - center.x)
 
   // Determine sweep direction.
   // The midpoint of the arc must lie on the arc between start and end.

@@ -1088,7 +1088,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Convert in-memory user models → LibraryEntry objects for tier 3/4 matching.
       // These are injected ahead of the bundled library so user models win.
       const userModelEntries: LibraryEntry[] = []
-      for (const [_ref, um] of userModels) {
+      for (const um of userModels.values()) {
         userModelEntries.push({
           id: `user-model-${um.mpn}`,
           match: { mpn: [um.mpn] },
