@@ -1,6 +1,7 @@
 'use strict'
 
 module.exports = {
+  root: true,
   extends: [
     'eslint:recommended',
     'plugin:@typescript-eslint/recommended'
@@ -17,6 +18,13 @@ module.exports = {
     sourceType: 'module'
   },
   overrides: [
+    {
+      // Test doubles legitimately cast through any
+      files: ['**/__tests__/**/*.ts', '**/__tests__/**/*.tsx'],
+      rules: {
+        '@typescript-eslint/no-explicit-any': 'off'
+      }
+    },
     {
       // Forbid electron, react, and three in core modules (must stay pure TS)
       files: ['src/core/**/*.ts', 'src/core/**/*.tsx'],

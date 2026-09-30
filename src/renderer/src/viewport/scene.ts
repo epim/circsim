@@ -35,6 +35,7 @@ import { createMarkerController, type MarkerController, type AnnotationLabel, ty
 import { createLedGlowController, isLed, ledColorFor, ledIntensity, type LedGlowController } from './ledGlow'
 import { createCriticOverlayController, MARKER_Z_LIFT, type CriticOverlayController } from './criticOverlay'
 import type { Finding } from '../../../core/critic/types'
+import { padWorldPos } from '../../../core/critic/geom'
 import { projectAnchorSet, type Pt } from '../bench/leadGeometry'
 
 // ─── E2E LED-glow hook (First Light, L5) ─────────────────────────────────────────
@@ -537,7 +538,8 @@ export function createSceneManager(): SceneManager {
         for (const pad of fp.pads) {
           if (pad.netId === undefined || pad.netId === 0) continue
           if (!netPositionsMap.has(pad.netId)) {
-            const world = kicadToWorld(fp.at.x + pad.at.x, fp.at.y + pad.at.y)
+            const pos = padWorldPos(fp, pad)
+            const world = kicadToWorld(pos.x, pos.y)
             // Apply the same board-centering offset used for the copper group
             netPositionsMap.set(pad.netId, new THREE.Vector3(world.x - cx, world.y - cy, copperZ))
           }
