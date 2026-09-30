@@ -9,10 +9,8 @@
  * so this is an independent oracle for the transform rather than a check of the
  * renderer against itself.
  *
- * KNOWN DEFECT #3: padWorldPos rotates with the wrong handedness. While
- * KNOWN_BUG_3_OPEN is true the test is written with `it.fails` (passes while the
- * defect exists, FAILS once it is fixed so the fixer flips the flag). With the
- * flag false this is the geometry oracle for the fix on real boards.
+ * Issue #3 (padWorldPos rotated with the wrong handedness) is fixed, so this is
+ * an ordinary test: the geometry oracle for the fix on real boards.
  *
  * Needs kicad-cli (skipped with a visible warning otherwise). The pad positions
  * are not committed because they derive from third-party boards.
@@ -26,10 +24,6 @@ import { padWorldPos } from '../../src/core/critic/geom'
 import { corpusBoards, readCorpusBoard } from './helpers/corpus'
 import { ambiguousRefPredicate, findKicadCli, oraclePadsCached } from './helpers/kicadOracle'
 
-/** Flip to false when #3 (pad rotation handedness) is fixed. */
-const KNOWN_BUG_3_OPEN = true
-const itBug3 = KNOWN_BUG_3_OPEN ? it.fails : it
-
 const kicad = findKicadCli()
 if (!kicad) console.warn('[corpus] kicad-cli not found: the pad-centre oracle suite is SKIPPED (set CIRCSIM_KICAD_CLI)')
 
@@ -40,8 +34,8 @@ describe.skipIf(!kicad)('corpus pad centres equal KiCad', () => {
   // One test over the whole corpus: a board whose rotations happen to be
   // symmetric (0 or 180 degrees) agrees under both conventions, so the defect is
   // only visible in aggregate.
-  itBug3(
-    'padWorldPos matches KiCad for every uniquely named pad on every corpus board (known bug #3)',
+  it(
+    'padWorldPos matches KiCad for every uniquely named pad on every corpus board',
     () => {
       const off: string[] = []
       let compared = 0

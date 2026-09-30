@@ -27,7 +27,8 @@
     "test:e2e": "playwright test --config playwright.config.ts",
     "license:check": "node scripts/license-hygiene.mjs",
     "package": "npm run build && electron-builder",
-    "package:dir": "npm run build && electron-builder --dir"
+    "package:dir": "npm run build && electron-builder --dir",
+    "check:markers": "node scripts/check-known-bug-markers.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
