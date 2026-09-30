@@ -70,6 +70,7 @@ import { parseBom } from '../../../core/bom/parseBom'
 import type { BoardModel } from '../../../core/kicad/types'
 import { runCritic } from '../../../core/critic/run'
 import type { CriticReport, Finding, OpResult } from '../../../core/critic/types'
+import { deriveSolvedCurrents, type SolvedCurrents } from '../../../core/critic/solvedCurrents'
 
 import type { SimClient } from '../ipc/simClient'
 import { splitPath, type ReadFileFn } from '../ipc/fileOpen'
@@ -416,6 +417,14 @@ export interface AppState {
    * viewport's per-LED emissive intensity. Reset on board change.
    */
   currentsByRef: Map<string, number>
+  /**
+   * Branch currents of every part from the latest op solve (LEDs, resistors and
+   * bench sources measured, other parts by KCL at the nets), for the Board
+   * Critic's ampacity and IR-drop checks (issues #9 and #45). Unlike
+   * currentsByRef it is not LED-only. null before the first solve. Reset on
+   * board change.
+   */
+  criticCurrents: SolvedCurrents | null
   /**
    * Plain-language "why isn't my LED glowing?" coach notes (First Light, L3).
    * Rebuilt after every op solve from diagnoseDarkLeds(buildCoachInput(...)).
@@ -893,6 +902,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     opVoltagesStale: false,
     voltageRange: null,
     currentsByRef: new Map(),
+    criticCurrents: null,
     coachNotes: [],
     measuredRails: null,
     railNotes: [],
@@ -928,6 +938,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         opVoltagesStale: false,
         voltageRange: null,
         currentsByRef: new Map(),
+        criticCurrents: null,
         coachNotes: [],
         measuredRails: null,
         railNotes: [],
@@ -1227,7 +1238,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     // ── Board Critic (Spec §7) ─────────────────────────────────────────────────
     runCriticAudit() {
-      const { board, circuit, opVoltages, currentsByRef } = get()
+      const { board, circuit, opVoltages, currentsByRef, criticCurrents } = get()
       if (!board || !circuit) {
         set({ criticReport: null, selectedFindingId: null })
         boardHooks?.clearCriticFindings?.()
@@ -1236,7 +1247,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Build the critic OpResult from the live op state ONLY when energized (an
       // op result is present). Without it runCritic SKIPS ampacity/thermal — which
       // is fine: opening re-audits no-sim checks, the post-op re-audit feeds reals.
-      const opResult = buildCriticOpResult(circuit, opVoltages, currentsByRef)
+      const opResult = buildCriticOpResult(circuit, opVoltages, currentsByRef, criticCurrents)
       const report = runCritic(board, circuit, opResult)
       set({ criticReport: report })
       // Drop a stale selection if the finding no longer exists.
@@ -1486,6 +1497,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
         const voltageRange = computeVoltageRange(opVoltages)
         const currentsByRef = applyOpCurrents(boardHooks, op.values, resolutions, circuit)
+        const criticCurrents = deriveCriticCurrents(inputs, solved)
 
         // Coach: explain any dark LEDs in plain language (First Light, L3).
         const coachNotes = diagnoseDarkLeds(
@@ -1503,6 +1515,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           opVoltagesStale: false, // fresh result — no longer showing old numbers
           voltageRange,
           currentsByRef,
+          criticCurrents,
           coachNotes,
           railNotes,
           // Honesty surface (F1): powerOn is now the sole committer for its own op,
@@ -1778,6 +1791,12 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           const opVoltages = mapOpResultToNetVoltages(event.values, circuit)
           const voltageRange = computeVoltageRange(opVoltages)
           const currentsByRef = applyOpCurrents(boardHooks, event.values, resolutions, circuit)
+          // The deck only supplies element names for the current derivation (LED
+          // sense lines, bench resistors), which do not depend on measured rails.
+          const replayInputs = currentSolveInputs()
+          const criticCurrents = replayInputs
+            ? deriveCriticCurrents(replayInputs, { op: { values: event.values }, deck: buildDeck(replayInputs) })
+            : null
           // Coach: rebuild the plain-language dark-LED notes for this op too.
           const coachNotes = diagnoseDarkLeds(
             buildCoachInput(
@@ -1797,7 +1816,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
               ? { method: event.method, at: Date.now() }
               : null
           // A fresh result also retires any staleness flag (M7 review fix).
-          set({ opVoltages, opVoltagesStale: false, voltageRange, currentsByRef, coachNotes, opCaveat })
+          set({ opVoltages, opVoltagesStale: false, voltageRange, currentsByRef, criticCurrents, coachNotes, opCaveat })
           // Keep the board in sync after a replayed/standalone op too.
           applyOpToBoard(boardHooks, opVoltages, voltageRange)
           // Re-audit with the fresh op result (ampacity/thermal get real data).
@@ -1995,6 +2014,7 @@ export function buildCriticOpResult(
   circuit: Circuit,
   opVoltages: Map<number, number> | null,
   currentsByRef: Map<string, number>,
+  solvedCurrents?: SolvedCurrents | null,
 ): OpResult | undefined {
   if (!opVoltages || opVoltages.size === 0) return undefined
 
@@ -2005,6 +2025,17 @@ export function buildCriticOpResult(
   for (const [netId, volts] of opVoltages) {
     const node = netToNode.get(netId)
     if (node !== undefined) nodeVoltages[node] = volts
+  }
+
+  // Branch currents of every part from the solve, when it was derived; else the
+  // LED-only map (the critic then sees LED currents and nothing else).
+  if (solvedCurrents) {
+    return {
+      nodeVoltages,
+      partCurrents: solvedCurrents.partCurrents,
+      padCurrents: solvedCurrents.padCurrents,
+      unresolvedRefs: solvedCurrents.unresolvedRefs,
+    }
   }
 
   const partCurrents: Record<string, number> = {}
@@ -2235,6 +2266,22 @@ function applyOpCurrents(
   const currentsByRef = mapOpResultToCurrents(values, ledSpiceNames)
   hooks?.applyLedCurrents?.(currentsByRef)
   return currentsByRef
+}
+
+/**
+ * Every part's branch currents from a solve, for the Board Critic. Never throws:
+ * a derivation failure leaves the critic on the LED-only map rather than
+ * breaking the solve that just landed.
+ */
+function deriveCriticCurrents(
+  inputs: SolveInputs,
+  solve: Pick<SolveResult, 'op' | 'deck'>,
+): SolvedCurrents | null {
+  try {
+    return deriveSolvedCurrents(inputs, solve)
+  } catch {
+    return null
+  }
 }
 
 /**

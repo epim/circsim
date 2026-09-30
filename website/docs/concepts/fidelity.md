@@ -43,7 +43,7 @@ It is *not* enough to check timing relationships between firmware-driven signals
 
 circsim does not model:
 
-- **Trace resistance and inductance**: a 5 cm, 0.25 mm trace on 1 oz copper is about 0.1 Ω, negligible at DC but real at RF. *(Note: the [Board Critic](./board-critic) does estimate copper resistance for its IR-drop check, but the SPICE simulation itself treats nets as ideal nodes.)*
+- **Trace resistance and inductance**: a 5 cm, 0.25 mm trace on 1 oz copper is about 0.1 Ω, negligible at DC but real at RF. *(Note: the [Board Critic](./board-critic) does estimate copper resistance for its IR-drop check, including copper pours and the ground return, but the SPICE simulation itself treats nets as ideal nodes; the critic reads each part's current from that ideal-net solve and then solves the copper with those currents.)*
 - **Via inductance**: ~0.5 to 1 nH each, invisible to the simulation.
 - **Pad and lead-frame capacitance**: picofarads that matter for high-speed signals.
 - **Coupling between traces**: crosstalk, EMI pickup, differential-pair imbalance.
