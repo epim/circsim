@@ -19,6 +19,7 @@ circsim is a validation bench for routed KiCad boards: Electron + TypeScript + R
 - Every behavior change updates `website/docs` in the same PR.
 - Branch per task: `fix/<issue>-<slug>`; squash-merge; commit trailer is the `Co-Authored-By` line for the model that wrote the change.
 - Reproduce first, write the failing test, then fix. Paste verification output in the PR.
+- When a PR closes an issue, flip every known-bug marker for it (`KNOWN_BUG_<n>_OPEN`, `it.fails`, `knownFailing`) in the same PR; `npm run check:markers` lists the stale ones.
 
 ## Task protocol (every task)
 1. `gh issue view N`; run the reproduction. If it no longer reproduces on master, report with evidence and stop.
