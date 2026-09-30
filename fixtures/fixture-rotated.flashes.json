@@ -1,0 +1,15 @@
+{
+  "_comment": "Pad centers plotted by kicad-cli 10.0.3 (pcb export gerbers, F.Cu and B.Cu, X2 pad attributes) from fixture-rotated.kicad_pcb. KiCad Y-down board mm. Regenerate only if the fixture changes.",
+  "flashes": [
+    { "ref": "R1", "pad": "1", "net": "VIN", "x": 20, "y": 19.0875 },
+    { "ref": "R1", "pad": "2", "net": "MID", "x": 20, "y": 20.9125 },
+    { "ref": "Q1", "pad": "1", "net": "SIG", "x": 30.95, "y": 20.9375 },
+    { "ref": "Q1", "pad": "2", "net": "GND", "x": 29.05, "y": 20.9375 },
+    { "ref": "Q1", "pad": "3", "net": "MID", "x": 30, "y": 19.0625 },
+    { "ref": "R2", "pad": "1", "net": "MID", "x": 20, "y": 35.9125 },
+    { "ref": "R2", "pad": "2", "net": "GND", "x": 20, "y": 34.0875 },
+    { "ref": "Q2", "pad": "1", "net": "SIG", "x": 30.95, "y": 34.0625 },
+    { "ref": "Q2", "pad": "2", "net": "GND", "x": 29.05, "y": 34.0625 },
+    { "ref": "Q2", "pad": "3", "net": "MID", "x": 30, "y": 35.9375 }
+  ]
+}
