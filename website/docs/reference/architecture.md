@@ -6,7 +6,7 @@ How circsim is built, for the curious and for anyone who might contribute. You d
 
 circsim is a desktop application built on **Electron** with **TypeScript** throughout. The UI is **React** for the panels and chrome, with an imperative **Three.js** (WebGL2) renderer for the 3D board. State lives in a **zustand** store. The whole app is offline: no servers, no telemetry, no network calls.
 
-The pure logic (parsing KiCad files, rebuilding the circuit, resolving models, generating SPICE decks, running the Board Critic) lives in a framework-free `core` layer that's unit-tested without Electron. That separation is why the behavior is testable and why this documentation could be verified against the code so precisely.
+The pure logic (parsing KiCad files, rebuilding the circuit, resolving models, generating SPICE decks, planning the operating-point solve, running the Board Critic) lives in a framework-free `core` layer that's unit-tested without Electron. That separation is why the behavior is testable and why this documentation could be verified against the code so precisely.
 
 ## The simulation engine
 
@@ -22,7 +22,7 @@ The SPICE deck is loaded into ngspice **from memory**: every model definition is
 
 ## What happens when you press Energize
 
-1. circsim generates a **SPICE deck** from the current circuit and your wired bench instruments.
+1. circsim generates a **SPICE deck** from the current circuit and your wired bench instruments. Energize, Run, and the automatic replay after an engine restart all build their deck through the same code from a snapshot of the bench, so they can't disagree about what's on it.
 2. The deck is loaded into the isolated ngspice process.
 3. ngspice solves the **operating point** (a DC steady-state solve) with a convergence **retry ladder**: a plain solve first, then with *gmin-stepping* (temporarily adding a tiny conductance across every node to give the solver a path, then removing it), then with *source-stepping* (ramping the supplies up from zero). Both are standard numerical aids for circuits that won't converge directly.
 4. The result comes back tagged with the **method** it succeeded by. A `direct` solve is trustworthy; a `gmin`, `source`, or transient fallback means the numbers may be unreliable, and circsim shows you a caveat rather than presenting shaky voltages as fact.
@@ -40,7 +40,7 @@ When you turn a knob on the bench, circsim doesn't restart the simulation. A *va
 
 ## Rail sensing {#rail-sensing}
 
-Digital logic needs to know its supply voltage to place its thresholds, but a chip's VDD rail is sometimes derived or switched rather than fed directly. So for boards with digital logic, circsim can solve in two passes: the first with the family-default rail, then, if the measured rail would actually change the result, a second pass using the rail voltage it read from the first solve. A rail sitting near 0 V is reported as "gated off" (with a coach note) rather than silently used. You can always override a rail manually.
+Digital logic needs to know its supply voltage to place its thresholds, but a chip's VDD rail is sometimes derived or switched rather than fed directly. So for boards with digital logic, circsim can solve in two passes: the first with the family-default rail, then, if the measured rail would actually change the result, a second pass using the rail voltage it read from the first solve. A rail sitting near 0 V is reported as "gated off" (with a coach note) rather than silently used. You can always override a rail manually. The two-pass plan lives in the framework-free core, so the code that runs when you press Energize is the same code circsim's tests run against a real ngspice.
 
 This is resolved **per chip, from that chip's own VDD net**, so a board that mixes families (74HC parts at 5 V and CD4000 parts at 12 V, say) senses each one independently. The precedence for a chip's high level: a DC supply directly on its VDD net wins; then your manual override; then the op-measured rail; then the family default (5 V for 74HC, 12 V for CD4000).
 
@@ -52,8 +52,8 @@ circsim is **MIT-licensed** and fully offline. It bundles ngspice (BSD-style) an
 
 circsim is open source at [github.com/epim/circsim](https://github.com/epim/circsim). The high-level layout:
 
-- `src/core/` is framework-free logic: KiCad parsing, netlist extraction, model resolution, SPICE-deck generation, the Board Critic. Fully unit-tested.
-- `src/simhost/` is the isolated ngspice process and its koffi FFI bindings.
+- `src/core/` is framework-free logic: KiCad parsing, netlist extraction, model resolution, SPICE-deck generation, the solve pipeline (`src/core/solve`: the one place every deck's inputs are assembled, and the two-pass operating-point plan), the Board Critic. Fully unit-tested.
+- `src/simhost/` is the isolated ngspice process and its koffi FFI bindings, plus an in-process engine that runs the solve pipeline without Electron.
 - `src/renderer/` is the React UI, the zustand store, the Three.js viewport, and the bench.
 - `src/main/` is the Electron main process.
 - `resources/models/` is the bundled SPICE model library and its index.

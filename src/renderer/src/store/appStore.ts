@@ -4,7 +4,9 @@
  * The single zustand store for the renderer. Holds project / circuit /
  * resolutions / instruments / simState / probes, and the orchestration actions
  * that connect the pure domain pipeline (parse → extract → resolve → spicegen)
- * to the SimHost via an INJECTED `SimClient`.
+ * to the SimHost via an INJECTED `SimClient`. Deck assembly and the two-pass
+ * operating-point solve live in src/core/solve; the store snapshots its bench
+ * state into that seam and commits what comes back.
  *
  * Architecture rules (from the phase brief / Spec §6, §8.6, §11, §12):
  *   - Instrument + probe + pin-map + stub-override state lives HERE, so it
@@ -35,13 +37,22 @@ import {
 } from '../../../core/models/resolve'
 import type { LibraryEntry, PinMap, Resolution } from '../../../core/models/types'
 import {
-  generateDeck,
   alterPlan,
   buildLedSpiceNames,
   isLedPart,
   ledSenseName,
-  deriveMeasuredRailVHigh,
 } from '../../../core/spicegen/generate'
+import {
+  buildDeck,
+  buildSolveInputs,
+  createSimClientEngine,
+  mapOpResultToNetVoltages,
+  railOverridesByNetId,
+  runSolvePlan,
+  SolveFailedError,
+  type SolveInputs,
+  type SolveResult,
+} from '../../../core/solve'
 import {
   wiredInstruments, isFullyWired, type Instrument,
 } from '../../../core/spicegen/instruments'
@@ -360,8 +371,8 @@ export interface AppState {
   pinMapOverrides: Map<string, PinMap>
   /**
    * Manual per-net rail-voltage overrides, keyed by net kicadName (e.g. `/VGATED`).
-   * Tier 2 of the digital rail precedence — bridged to the netId→volts map
-   * generateDeck consumes via `railOverrideNetMap()`. Set/cleared by the user
+   * Tier 2 of the digital rail precedence, resolved to the netId→volts map the
+   * deck consumes by buildSolveInputs (src/core/solve). Set/cleared by the user
    * from a gated-off warning or the net context (Spec: op-informed rail sensing).
    */
   railOverrides: Map<string, number>
@@ -565,7 +576,7 @@ export interface AppState {
   setRailOverride(kicadName: string, volts: number): void
   /** Clear a net's manual rail-voltage override. */
   clearRailOverride(kicadName: string): void
-  /** Resolve the kicadName-keyed railOverrides to the netId→volts map generateDeck consumes. */
+  /** Resolve the kicadName-keyed railOverrides to the netId→volts map the deck consumes. */
   railOverrideNetMap(): Map<number, number>
 
   // selection
@@ -751,6 +762,8 @@ export type AppStore = StoreApi<AppState>
 
 export function createAppStore(options: CreateAppStoreOptions): AppStore {
   const { simClient } = options
+  /** The solve seam's engine over this store's SimHost client (src/core/solve). */
+  const solveEngine = createSimClientEngine(simClient)
 
   // ── non-reactive closure state ───────────────────────────────────────────────
   // Board hooks (viewport seam) + per-probe ring buffers live OUTSIDE the reactive
@@ -837,6 +850,23 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   function resetRingBuffers(instruments: Instrument[]): void {
     ringBuffers.clear()
     syncRingBuffers(instruments)
+  }
+
+  /**
+   * Snapshot the current bench as SolveInputs: the ONE place this store gathers
+   * deck inputs (powerOn, run and replayAfterCrash all load a deck built from
+   * it). null when there is no circuit or no ground to solve against.
+   */
+  function currentSolveInputs(): SolveInputs | null {
+    const s = store.getState()
+    if (!s.circuit || s.groundNetId === null) return null
+    return buildSolveInputs(s.board, s.circuit, s.resolutions, s.instruments, s.groundNetId, {
+      title: s.project.boardFileName ?? undefined,
+      modelTexts: s.modelTexts,
+      userModels: s.userModels.values(),
+      railOverrides: s.railOverrides,
+      measuredRails: s.measuredRails,
+    })
   }
 
   const store = createStore<AppState>((set, get) => ({
@@ -1178,13 +1208,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     railOverrideNetMap() {
       const { circuit, railOverrides } = get()
-      const map = new Map<number, number>()
-      if (!circuit) return map
-      for (const net of circuit.nets) {
-        const v = railOverrides.get(net.kicadName)
-        if (v !== undefined) map.set(net.id, v)
-      }
-      return map
+      return circuit ? railOverridesByNetId(circuit, railOverrides) : new Map()
     },
 
     // ── selection ──────────────────────────────────────────────────────────
@@ -1418,20 +1442,11 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       )
       if (!hasSource) return null
 
-      // Snapshot the resolved rail overrides ONCE per powerOn so the pass-1 deck,
-      // the sensing skip-list, and the pass-2 deck all agree even if the user
-      // edits an override mid-solve (FIX 3).
-      const railOverrides = get().railOverrideNetMap()
-
-      const deckLines = generateDeck({
-        circuit,
-        resolutions,
-        instruments: wiredInstruments(instruments),
-        groundNetId,
-        title: get().project.boardFileName ?? undefined,
-        modelTexts: buildDeckModelTexts(get()),
-        railOverrides,
-      })
+      // Snapshot every deck input ONCE per powerOn so the pass-1 deck, the
+      // sensing skip-list, and the pass-2 deck all agree even if the user edits
+      // an override mid-solve (FIX 3).
+      const inputs = currentSolveInputs()
+      if (!inputs) return null
 
       // Retained voltages from a previous run are STALE until the new solve
       // lands — readouts dim/caption them instead of presenting them as truth
@@ -1450,70 +1465,27 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // timeout.
       powerOnOpInFlight = true
       try {
-        simClient.send({ type: 'loadCircuit', deckLines })
-        simClient.send({ type: 'runOp' })
-
-        let result: Extract<SimEvent, { type: 'opResult' }>
+        // The two-pass op with tier-3 rail sensing (src/core/solve/plan.ts). Pass
+        // 1's load and op go out synchronously, inside this gate; pass 2 runs
+        // only if a measured rail changed the deck, and a pass-2 failure keeps
+        // pass 1's op.
+        let solved: SolveResult
         try {
-          result = await simClient.waitFor('opResult', 30_000)
-        } catch {
-          // A timeout drops us back to idle; a convergenceFailure event (ingested
-          // separately) already surfaces the plain-language card.
+          solved = await runSolvePlan(inputs, solveEngine)
+        } catch (err) {
+          // A pass-1 timeout drops us back to idle; a convergenceFailure event
+          // (ingested separately) already surfaces the plain-language card.
           if (get().simState === 'op') set({ simState: 'idle' })
-          return null
+          if (err instanceof SolveFailedError) return null
+          throw err
         }
+        const { op, netVoltages: opVoltages } = solved
 
-        // ── Op-informed rail sensing (tier 3): sense switched rails, re-solve once ──
-        // Pass 1's deck knew only tiers 1/2/4 (family default for any switched or
-        // derived rail with no attached supply). Sense those rails from the op
-        // result; if a measured rail would actually change a chip's vHigh, rebuild
-        // the deck with the measured rails and re-solve EXACTLY once. `deckLines` is
-        // the family-default baseline (powerOn never seeds measuredRailVHigh into
-        // its own first pass), so comparing the regenerated deck to it — ignoring
-        // provenance comment lines — is precisely "did the measured rail change the
-        // circuit vs the family default?" A measured rail equal to the family
-        // default leaves the deck identical → no wasted second solve.
-        const { rails, gatedOff } = deriveMeasuredRailVHigh({
-          opValues: result.values,
-          circuit,
-          resolutions,
-          instruments,
-          groundNetId,
-          railOverrides,
-          modelTexts: buildDeckModelTexts(get()),
-        })
-        if (rails.size > 0) {
-          const deck2 = generateDeck({
-            circuit,
-            resolutions,
-            instruments: wiredInstruments(instruments),
-            groundNetId,
-            title: get().project.boardFileName ?? undefined,
-            modelTexts: buildDeckModelTexts(get()),
-            railOverrides,
-            measuredRailVHigh: rails,
-          })
-          // Compare only the circuit lines (drop `*` comments — the measured-rail
-          // provenance note differs even when the numeric rail matches the default).
-          const circuitLines = (deck: string[]): string =>
-            deck.filter(line => !line.trimStart().startsWith('*')).join('\n')
-          if (circuitLines(deck2) !== circuitLines(deckLines)) {
-            simClient.send({ type: 'loadCircuit', deckLines: deck2 })
-            simClient.send({ type: 'runOp' })
-            try {
-              result = await simClient.waitFor('opResult', 30_000) // pass 2 (single re-run)
-            } catch {
-              // Pass-2 failure/timeout: keep the pass-1 `result` already in hand.
-            }
-          }
-        }
-        set({ measuredRails: rails })
-        const railNotes: RailNote[] = gatedOff.map(g => ({ ref: g.ref, kicadName: g.kicadName }))
+        set({ measuredRails: solved.measuredRails })
+        const railNotes: RailNote[] = solved.gatedOff.map(g => ({ ref: g.ref, kicadName: g.kicadName }))
 
-        // Map opResult.values (bare lowercase node names) → netId voltages.
-        const opVoltages = mapOpResultToNetVoltages(result.values, circuit)
         const voltageRange = computeVoltageRange(opVoltages)
-        const currentsByRef = applyOpCurrents(boardHooks, result.values, resolutions, circuit)
+        const currentsByRef = applyOpCurrents(boardHooks, op.values, resolutions, circuit)
 
         // Coach: explain any dark LEDs in plain language (First Light, L3).
         const coachNotes = diagnoseDarkLeds(
@@ -1537,8 +1509,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           // so it carries ingestEvent's caveat logic — an op that converged only
           // via a fallback rung gets the persistent caveat (absent method ⇒ direct).
           opCaveat:
-            result.method && result.method !== 'direct'
-              ? { method: result.method, at: Date.now() }
+            op.method && op.method !== 'direct'
+              ? { method: op.method, at: Date.now() }
               : null,
           deckDirty: false,
           simState: 'idle',
@@ -1598,7 +1570,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     },
 
     run() {
-      const { circuit, resolutions, instruments, groundNetId, simState, deckDirty } = get()
+      const { circuit, instruments, groundNetId, simState, deckDirty } = get()
       if (!circuit || groundNetId === null) {
         // Guided empty-state (Spec §12): no ground → Run is a no-op, not a dead button.
         return
@@ -1617,17 +1589,11 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       }
 
       // Fresh start (or restart after a deck-dirtying edit): reload the deck +
-      // reset ring buffers so the scope starts clean.
-      const deckLines = generateDeck({
-        circuit,
-        resolutions,
-        instruments: wiredInstruments(instruments),
-        groundNetId,
-        title: get().project.boardFileName ?? undefined,
-        modelTexts: buildDeckModelTexts(get()),
-        railOverrides: get().railOverrideNetMap(),
-        measuredRailVHigh: get().measuredRails ?? undefined,
-      })
+      // reset ring buffers so the scope starts clean. The deck reuses the rails
+      // the last powerOn sensed (tier 3) rather than re-sensing.
+      const inputs = currentSolveInputs()
+      if (!inputs) return
+      const deckLines = buildDeck(inputs)
       resetRingBuffers(instruments)
 
       const tstepSeconds = computeTstep(instruments)
@@ -1685,23 +1651,14 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     },
 
     replayAfterCrash() {
-      const { circuit, resolutions, instruments, groundNetId, simState, paceFactor } = get()
-      if (!circuit || groundNetId === null) return
+      const { instruments, simState, paceFactor } = get()
+      const inputs = currentSolveInputs()
+      if (!inputs) return
 
       // Re-send the full deck. All instrument state (including live-altered supply
       // voltages) lives in the store, so the regenerated deck already reflects it
       // — nothing extra to re-apply (Spec §6.1).
-      const deckLines = generateDeck({
-        circuit,
-        resolutions,
-        instruments: wiredInstruments(instruments),
-        groundNetId,
-        title: get().project.boardFileName ?? undefined,
-        modelTexts: buildDeckModelTexts(get()),
-        railOverrides: get().railOverrideNetMap(),
-        measuredRailVHigh: get().measuredRails ?? undefined,
-      })
-      simClient.send({ type: 'loadCircuit', deckLines })
+      simClient.send({ type: 'loadCircuit', deckLines: buildDeck(inputs) })
 
       // Re-establish the run state on the fresh process.
       if (simState === 'running') {
@@ -1921,23 +1878,6 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   return store
 }
 
-// ─── deck model-texts assembly ──────────────────────────────────────────────────
-
-/**
- * Build the filename → contents map the deck generator inlines definitions from.
- * Merges the bundled model texts (loaded at boot via getModelLibrary) with the
- * in-memory user models, which the spicegen library entries reference under the
- * virtual path `__user_model__:<mpn>` (see reResolve). User entries win on key
- * collision (they are added last).
- */
-export function buildDeckModelTexts(state: AppState): Record<string, string> {
-  const texts: Record<string, string> = { ...state.modelTexts }
-  for (const [, um] of state.userModels) {
-    texts[`__user_model__:${um.mpn}`] = um.subcktText
-  }
-  return texts
-}
-
 // ─── alter command parsing ─────────────────────────────────────────────────────
 
 /**
@@ -1964,32 +1904,7 @@ export function parseAlterCommand(cmdStr: string): Extract<SimCommand, { type: '
 }
 
 // ─── op-result mapping helpers ─────────────────────────────────────────────────
-
-/**
- * Map opResult.values (keyed by bare lowercase SPICE node name) onto netId →
- * volts using the circuit's spiceNode mapping. Currents (i(...)) are skipped.
- */
-export function mapOpResultToNetVoltages(
-  values: Record<string, number>,
-  circuit: Circuit,
-): Map<number, number> {
-  const out = new Map<number, number>()
-  // Build spiceNode → netId. Ground node "0" → its net (0 V) too.
-  const nodeToNet = new Map<string, number>()
-  for (const net of circuit.nets) {
-    nodeToNet.set(net.spiceNode, net.id)
-  }
-  for (const [key, volts] of Object.entries(values)) {
-    if (key.startsWith('i(')) continue // current, not a node voltage
-    const netId = nodeToNet.get(key)
-    if (netId !== undefined) out.set(netId, volts)
-  }
-  // Ground nets read 0 V even if ngspice omits node "0".
-  for (const net of circuit.nets) {
-    if (net.spiceNode === '0' && !out.has(net.id)) out.set(net.id, 0)
-  }
-  return out
-}
+// (net voltages: mapOpResultToNetVoltages lives in src/core/solve/plan.ts)
 
 /**
  * Map an op result's LED-ammeter branch currents onto part refs.

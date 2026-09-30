@@ -18,6 +18,7 @@ import { createAppStore, type AppStore, type BoardHooks } from '../appStore'
 import { createMockSimClient, type MockSimClient } from '../../ipc/simClient'
 import type { Circuit } from '../../../../core/netlist/extract'
 import type { Resolution } from '../../../../core/models/types'
+import { buildDeck, buildSolveInputs } from '../../../../core/solve'
 
 /** Board-hook spy: records every net-voltage set applied to the 3D board. */
 function makeBoardHooks(): {
@@ -353,5 +354,41 @@ describe('powerOn is the sole committer for its own ops (FIX 2)', () => {
     await store.getState().powerOn()
 
     expect(store.getState().opCaveat?.method).toBe('gmin')
+  })
+})
+
+// ─── Issue #53: one deck-assembly site ─────────────────────────────────────────
+
+describe('powerOn, run and replayAfterCrash load decks from one assembly site (#53)', () => {
+  it('run() and replay load the deck the solve seam builds from the same bench state', async () => {
+    const mock = createMockSimClient()
+    const store = createAppStore({ simClient: mock })
+    seedSwitchedRailBoard(store)
+    const { decks } = autoRespond(mock, () => ({ vgated: 12.6, a: 5, b: 0 }))
+    await store.getState().powerOn()
+
+    const s = store.getState()
+    const expected = buildDeck(
+      buildSolveInputs(s.board, s.circuit!, s.resolutions, s.instruments, s.groundNetId!, {
+        title: s.project.boardFileName ?? undefined,
+        modelTexts: s.modelTexts,
+        userModels: s.userModels.values(),
+        railOverrides: s.railOverrides,
+        measuredRails: s.measuredRails,
+      }),
+    )
+    // powerOn's committed pass-2 deck is that deck: the sensed 12.6 V rail is now cached.
+    expect(decks[1]).toEqual(expected)
+
+    const loaded = (): string[] | undefined =>
+      (mock.sent.find(c => c.type === 'loadCircuit') as { deckLines: string[] } | undefined)?.deckLines
+
+    mock.clearSent()
+    store.getState().run()
+    expect(loaded()).toEqual(expected)
+
+    mock.clearSent()
+    store.getState().replayAfterCrash()
+    expect(loaded()).toEqual(expected)
   })
 })
