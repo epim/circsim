@@ -13,11 +13,12 @@
  * centres, so the assertions here are against KiCad, not against circsim's
  * renderer.
  *
- * KNOWN DEFECTS. Two assertions encode behavior circsim gets wrong today and are
- * written with `it.fails` (they pass while the defect exists, and FAIL the moment
+ * KNOWN DEFECT. One assertion encodes behavior circsim gets wrong today and is
+ * written with `it.fails` (it passes while the defect exists, and FAILS the moment
  * it is fixed, telling the fixer to flip the flag below):
- *   - #3  pad rotation has the wrong handedness (geom.ts padWorldPos);
  *   - #11 the clearance check compares centerlines and ignores track width.
+ * Issue #3 (pad rotation handedness in geom.ts padWorldPos) is fixed; its
+ * assertions below are ordinary tests against the KiCad-derived pad centres.
  */
 
 import { readFileSync } from 'node:fs'
@@ -32,12 +33,9 @@ import { extract } from '../../netlist/extract'
 import { padWorldPos, segPointDistanceMm, trackResistanceOhms } from '../geom'
 import { runCritic } from '../run'
 
-/** Flip to false when #3 (pad rotation handedness) is fixed. */
-const KNOWN_BUG_3_OPEN = true
 /** Flip to false when #11 (clearance ignores track width) is fixed. */
 const KNOWN_BUG_11_OPEN = true
 
-const itBug3 = KNOWN_BUG_3_OPEN ? it.fails : it
 const itBug11 = KNOWN_BUG_11_OPEN ? it.fails : it
 
 const FIXTURE_DIR = join(__dirname, '../../../../fixtures/synthetic')
@@ -128,7 +126,7 @@ describe('pad geometry against KiCad-derived positions', () => {
     expect(missing, 'pads with no same-net copper at their KiCad centre').toEqual([])
   })
 
-  itBug3('padWorldPos equals KiCad pad centres on rotated and back-side footprints (known bug #3)', () => {
+  it('padWorldPos equals KiCad pad centres on rotated and back-side footprints', () => {
     const wrong: string[] = []
     for (const g of golden) {
       const fp = fpByRef.get(g.ref)!
@@ -139,7 +137,7 @@ describe('pad geometry against KiCad-derived positions', () => {
     expect(wrong, 'pads whose critic position differs from KiCad').toEqual([])
   })
 
-  itBug3('every netted pad has same-net copper under the position the critic computes (known bug #3)', () => {
+  it('every netted pad has same-net copper under the position the critic computes', () => {
     const missing: string[] = []
     for (const { fp, pad, netId } of nettedPads()) {
       if (!copperUnder(board, pad, netId, padWorldPos(fp, pad))) missing.push(`${fp.ref}.${pad.number}`)
@@ -157,7 +155,7 @@ describe('critic on the routed-rotated board', () => {
     expect(report.ranBy).toEqual(expect.arrayContaining(['floating', 'clearance', 'decoupling', 'loop-area']))
   })
 
-  itBug3('IR drop on VIN is attributed to the R1 sink at the value the KiCad geometry gives (known bug #3)', () => {
+  it('IR drop on VIN is attributed to the R1 sink at the value the KiCad geometry gives', () => {
     const circuit = extract(board)
     const vin = circuit.nets.find((n) => n.kicadName === 'VIN')!
     const report = runCritic(board, circuit, { nodeVoltages: { [vin.spiceNode]: 5 }, partCurrents: { R1: 10 } })
