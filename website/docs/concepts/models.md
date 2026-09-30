@@ -31,7 +31,7 @@ Not all models are equal, and circsim is explicit about which kind each part get
 
 ### Primitive-level models
 
-Diodes, LEDs, bipolar transistors, and discrete MOSFETs are modeled as **ngspice primitives**: real `.model` cards whose parameters (saturation current, forward voltage, transistor gain, MOSFET turn-on thresholds) come straight from the part's datasheet using SPICE's standard device equations. These are as good as SPICE gets at the hobbyist level. (The exact equation sets have names: *Gummel-Poon* for bipolar transistors, *VDMOS* for power MOSFETs, which you'll see in the [model library reference](../reference/model-library); you don't need them to use the models.)
+Diodes, LEDs, bipolar transistors, and discrete MOSFETs are modeled as **ngspice primitives**: real `.model` cards whose parameters (saturation current, forward voltage, transistor gain, MOSFET turn-on thresholds) are derived from the part's datasheet operating points using SPICE's standard device equations (the fitting script is in the repository, and CI rejects any card that reproduces a known third-party library card). These are as good as SPICE gets at the hobbyist level. (The exact equation sets have names: *Gummel-Poon* for bipolar transistors, *VDMOS* for power MOSFETs, which you'll see in the [model library reference](../reference/model-library); you don't need them to use the models.)
 
 ### Behavioral macromodels
 
