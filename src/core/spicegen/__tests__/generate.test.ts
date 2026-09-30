@@ -324,6 +324,43 @@ describe('Function-gen pulse source', () => {
   })
 })
 
+describe('Function-gen triangle source', () => {
+  test('triangle wave -> exact PULSE ramp (rise = fall = T/2, negligible width), not SIN', () => {
+    const circuit = makeRcCircuit(3)
+    const resolutions = makeRcResolutions()
+    const instruments: Instrument[] = [
+      { kind: 'ground-ref', netId: 3 },
+      {
+        kind: 'function-gen', id: '2', netId: 1,
+        wave: 'triangle', freqHz: 1000, amplitudeV: 1, offsetV: 0,
+        outputOhms: 50,
+      },
+    ]
+    const deck = generateDeck({ circuit, resolutions, instruments, groundNetId: 3 })
+    const card = deck.find((l) => l.startsWith('vfgen_2 '))
+    expect(card).toBeDefined()
+    expect(card).not.toMatch(/SIN\(/)
+    // lo hi delay rise fall width period : T = 1 ms, rise = fall = 0.5 ms
+    expect(card).toContain('PULSE(-1 1 0 5e-04 5e-04 1e-12 0.001)')
+  })
+
+  test('triangle with offset: lo/hi follow offset -/+ amplitude', () => {
+    const circuit = makeRcCircuit(3)
+    const resolutions = makeRcResolutions()
+    const instruments: Instrument[] = [
+      { kind: 'ground-ref', netId: 3 },
+      {
+        kind: 'function-gen', id: '2', netId: 1,
+        wave: 'triangle', freqHz: 500, amplitudeV: 2.5, offsetV: 2.5,
+        outputOhms: 50,
+      },
+    ]
+    const deck = generateDeck({ circuit, resolutions, instruments, groundNetId: 3 })
+    const card = deck.find((l) => l.startsWith('vfgen_2 '))
+    expect(card).toContain('PULSE(0 5 0 0.001 0.001 1e-12 0.002)')
+  })
+})
+
 // ─── Logic-input ──────────────────────────────────────────────────────────────
 
 describe('Logic-input', () => {
@@ -2328,6 +2365,43 @@ describe('alterPlan — function-gen freq/amp/offset', () => {
     if (result.kind === 'alter') {
       expect(result.commands[0]).toContain('alter @vfgen_2[pulse] [')
       expect(result.commands[0]).toContain(']')
+    }
+  })
+})
+
+describe('alterPlan — triangle uses the PULSE vector form', () => {
+  test('triangle freq change -> alter @vfgen_2[pulse] with rise = fall = T/2', () => {
+    const prev: Instrument = {
+      kind: 'function-gen', id: '2', netId: 1,
+      wave: 'triangle', freqHz: 1000, amplitudeV: 1, offsetV: 0, outputOhms: 50,
+    }
+    const next: Instrument = {
+      kind: 'function-gen', id: '2', netId: 1,
+      wave: 'triangle', freqHz: 2000, amplitudeV: 1, offsetV: 0, outputOhms: 50,
+    }
+    const result = alterPlan(prev, next)
+    expect(result.kind).toBe('alter')
+    if (result.kind === 'alter') {
+      expect(result.commands[0]).toBe('alter @vfgen_2[pulse] [ -1 1 0 2.5e-04 2.5e-04 1e-12 5e-04 ]')
+    }
+  })
+
+  test('triangle alter agrees with the triangle deck card parameters', () => {
+    const inst: Instrument = {
+      kind: 'function-gen', id: '2', netId: 1,
+      wave: 'triangle', freqHz: 1000, amplitudeV: 1, offsetV: 0, outputOhms: 50,
+    }
+    const circuit = makeRcCircuit(3)
+    const deck = generateDeck({
+      circuit, resolutions: makeRcResolutions(),
+      instruments: [{ kind: 'ground-ref', netId: 3 }, inst], groundNetId: 3,
+    })
+    const card = deck.find((l) => l.startsWith('vfgen_2 '))!
+    const cardParams = /PULSE\(([^)]*)\)/.exec(card)![1]
+    const result = alterPlan({ ...inst, freqHz: 500 }, inst)
+    expect(result.kind).toBe('alter')
+    if (result.kind === 'alter') {
+      expect(result.commands[0]).toBe(`alter @vfgen_2[pulse] [ ${cardParams} ]`)
     }
   })
 })
