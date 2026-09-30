@@ -1,0 +1,171 @@
+{
+  "description": "Pinned real-board regression corpus. Files are fetched at test time (never committed); see scripts/fetch-corpus.mjs. Every file is KiCad-written (KiCad source demo boards at fixed release tags). License none-declared means the demo directory carries no LICENSE file: those boards are fetch-only test inputs and are never redistributed by this repository.",
+  "boards": [
+    {
+      "id": "k6-ecc83-pp",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/6.0.11/demos/ecc83/ecc83-pp.kicad_pcb",
+      "sha256": "4bbb4b38487b7272abf48fadf11b9fe4d4a19da8e79cd9555ed29bf27b100367",
+      "bytes": 173463,
+      "license": "none-declared",
+      "kicadMajor": 6,
+      "formatVersion": 20211014,
+      "source": "KiCad 6.0.11 demos/ecc83/ecc83-pp.kicad_pcb"
+    },
+    {
+      "id": "k6-pic-programmer",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/6.0.11/demos/pic_programmer/pic_programmer.kicad_pcb",
+      "sha256": "bf3c800bae856020de099d3ddc94535a127af4edef4e4c22d41d8c8eb7f1eb31",
+      "bytes": 845309,
+      "license": "none-declared",
+      "kicadMajor": 6,
+      "formatVersion": 20211014,
+      "source": "KiCad 6.0.11 demos/pic_programmer/pic_programmer.kicad_pcb"
+    },
+    {
+      "id": "k6-sonde-xilinx",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/6.0.11/demos/sonde%20xilinx/sonde%20xilinx.kicad_pcb",
+      "sha256": "636a3d06277d28c7a837cba1c56c7e1a4b7aaa669965142f76abb510a60ef961",
+      "bytes": 409914,
+      "license": "none-declared",
+      "kicadMajor": 6,
+      "formatVersion": 20211014,
+      "source": "KiCad 6.0.11 demos/sonde xilinx/sonde xilinx.kicad_pcb"
+    },
+    {
+      "id": "k7-interf-u",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/7.0.11/demos/interf_u/interf_u.kicad_pcb",
+      "sha256": "03f868b28dad6757afbddc184210f8958bc3d4cb2816084c3d5925843fc6c533",
+      "bytes": 720945,
+      "license": "none-declared",
+      "kicadMajor": 7,
+      "formatVersion": 20221018,
+      "source": "KiCad 7.0.11 demos/interf_u/interf_u.kicad_pcb"
+    },
+    {
+      "id": "k7-sonde-xilinx",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/7.0.11/demos/sonde%20xilinx/sonde%20xilinx.kicad_pcb",
+      "sha256": "983c88b023f4a3105f7361cd65594b4d6e969c984c7beaac42825fbb3631a5d6",
+      "bytes": 416984,
+      "license": "none-declared",
+      "kicadMajor": 7,
+      "formatVersion": 20221018,
+      "source": "KiCad 7.0.11 demos/sonde xilinx/sonde xilinx.kicad_pcb"
+    },
+    {
+      "id": "k7-complex-hierarchy",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/7.0.11/demos/complex_hierarchy/complex_hierarchy.kicad_pcb",
+      "sha256": "5277092d82486ee9848c9f9e7ffe9add719d62daa2505c7834efcfd6ff4e40d4",
+      "bytes": 790989,
+      "license": "none-declared",
+      "kicadMajor": 7,
+      "formatVersion": 20221018,
+      "source": "KiCad 7.0.11 demos/complex_hierarchy/complex_hierarchy.kicad_pcb"
+    },
+    {
+      "id": "k8-pic-programmer",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/8.0.9/demos/pic_programmer/pic_programmer.kicad_pcb",
+      "sha256": "b9d90e6184a1e4873d50be65da1faefaf7d003638ed16cef8e0212f247e64da7",
+      "bytes": 684981,
+      "license": "none-declared",
+      "kicadMajor": 8,
+      "formatVersion": 20240108,
+      "source": "KiCad 8.0.9 demos/pic_programmer/pic_programmer.kicad_pcb"
+    },
+    {
+      "id": "k8-sonde-xilinx",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/8.0.9/demos/sonde%20xilinx/sonde%20xilinx.kicad_pcb",
+      "sha256": "46964f329e7dce3fb78c1942a06efb2494b8526eb835a0edc5308c8920d69ab6",
+      "bytes": 342434,
+      "license": "none-declared",
+      "kicadMajor": 8,
+      "formatVersion": 20240108,
+      "source": "KiCad 8.0.9 demos/sonde xilinx/sonde xilinx.kicad_pcb"
+    },
+    {
+      "id": "k8-tiny-tapeout",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/8.0.9/demos/tiny_tapeout/tinytapeout-demo.kicad_pcb",
+      "sha256": "98d685976a8f1726b6719bfd9833eecb6e4b97819ef3eede075e779f73439513",
+      "bytes": 4592138,
+      "license": "Apache-2.0",
+      "kicadMajor": 8,
+      "formatVersion": 20240108,
+      "source": "KiCad 8.0.9 demos/tiny_tapeout/tinytapeout-demo.kicad_pcb"
+    },
+    {
+      "id": "k9-multichannel-mixer",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/9.0.9/demos/multichannel/multichannel_mixer.kicad_pcb",
+      "sha256": "44b7c119a0d05c98e9f294659879184038a5f6c30073c04d9536990429ca413e",
+      "bytes": 2000139,
+      "license": "none-declared",
+      "kicadMajor": 9,
+      "formatVersion": 20241229,
+      "source": "KiCad 9.0.9 demos/multichannel/multichannel_mixer.kicad_pcb"
+    },
+    {
+      "id": "k9-complex-hierarchy",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/9.0.9/demos/complex_hierarchy/complex_hierarchy.kicad_pcb",
+      "sha256": "d5f4162d4c766448832723d139f9e0fcb88a17c82340f10f6f6dc6c2042f0d69",
+      "bytes": 883812,
+      "license": "none-declared",
+      "kicadMajor": 9,
+      "formatVersion": 20241229,
+      "source": "KiCad 9.0.9 demos/complex_hierarchy/complex_hierarchy.kicad_pcb"
+    },
+    {
+      "id": "k9-royalblue-nfc",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/9.0.9/demos/royalblue54L_feather/nfc_antenna/RoyalBlue54L-NFC-Antenna/RoyalBlue54L-NFC-Antenna.kicad_pcb",
+      "sha256": "cd87e6d1b20fe0d129d9a9c807af3118c67749eff44b1f032d85c047a814c6dc",
+      "bytes": 147777,
+      "license": "CERN-OHL-P-2.0",
+      "kicadMajor": 9,
+      "formatVersion": 20241229,
+      "source": "KiCad 9.0.9 demos/royalblue54L_feather/nfc_antenna/RoyalBlue54L-NFC-Antenna/RoyalBlue54L-NFC-Antenna.kicad_pcb"
+    },
+    {
+      "id": "k9-royalblue-feather",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/9.0.9/demos/royalblue54L_feather/RoyalBlue54L-Feather.kicad_pcb",
+      "sha256": "8a435448b5ecace39581fadc5476ab0b428662d222a3d6ea3dc7ee56bdd7e9bb",
+      "bytes": 3549305,
+      "license": "CERN-OHL-P-2.0",
+      "kicadMajor": 9,
+      "formatVersion": 20241229,
+      "source": "KiCad 9.0.9 demos/royalblue54L_feather/RoyalBlue54L-Feather.kicad_pcb",
+      "knownFailing": {
+        "stage": "parse",
+        "issue": "#22",
+        "match": "Unexpected ')'",
+        "reason": "The shipped file has a missing open paren at line 602 ((curved_edges no)filter_ratio 0.9)). KiCad tolerates it, circsim rejects it. Spec section 12 promises an open-anyway path; tracked by #22 item 6."
+      }
+    },
+    {
+      "id": "k10-pic-programmer",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/10.0.3/demos/pic_programmer/pic_programmer.kicad_pcb",
+      "sha256": "1ca70b620506818eb0227e2863bbd573d1fec1672072dc43d0dbe8475e69c8fb",
+      "bytes": 643403,
+      "license": "none-declared",
+      "kicadMajor": 10,
+      "formatVersion": 20260206,
+      "source": "KiCad 10.0.3 demos/pic_programmer/pic_programmer.kicad_pcb"
+    },
+    {
+      "id": "k10-cm5-minima",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/10.0.3/demos/cm5_minima/CM5_MINIMA_3.kicad_pcb",
+      "sha256": "123e209e6245cbcc344c1c70b425dcb44a12cd0a2d05f00a39d3f2e7ff307ffa",
+      "bytes": 3382011,
+      "license": "CERN-OHL-S-2.0",
+      "kicadMajor": 10,
+      "formatVersion": 20250513,
+      "source": "KiCad 10.0.3 demos/cm5_minima/CM5_MINIMA_3.kicad_pcb"
+    },
+    {
+      "id": "k10-openair-max",
+      "url": "https://raw.githubusercontent.com/KiCad/kicad-source-mirror/10.0.3/demos/openair-max/One-Air-Max.kicad_pcb",
+      "sha256": "a577ba5e2b337c9b827f3c30256161a1893da8303d278fb7db10dba4f02ea810",
+      "bytes": 2433726,
+      "license": "CC-BY-SA-4.0",
+      "kicadMajor": 10,
+      "formatVersion": 20241229,
+      "source": "KiCad 10.0.3 demos/openair-max/One-Air-Max.kicad_pcb"
+    }
+  ]
+}

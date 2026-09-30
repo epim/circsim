@@ -1,0 +1,77 @@
+{
+  "k10-cm5-minima": {
+    "pads": 599,
+    "digest": "f80eea67f37f6809e65f746f91028960e74ec02909dba9fa8f1b2f8ca401c9ac",
+    "kicadCli": "10.0.3"
+  },
+  "k10-openair-max": {
+    "pads": 647,
+    "digest": "a22848bec52fa837acd3af022939a5bdabcfb7fc46ef43752e62ad456f69cfec",
+    "kicadCli": "10.0.3"
+  },
+  "k10-pic-programmer": {
+    "pads": 236,
+    "digest": "afd39994e7c0bb3e8660a8faf7760e5f14eb37119a224a58e4d9e8b5249f5a74",
+    "kicadCli": "10.0.3"
+  },
+  "k6-ecc83-pp": {
+    "pads": 29,
+    "digest": "91eb812a56c81da73db865c0cbc1691473b934bd1c0ea22558192349be4601c8",
+    "kicadCli": "10.0.3"
+  },
+  "k6-pic-programmer": {
+    "pads": 236,
+    "digest": "afd39994e7c0bb3e8660a8faf7760e5f14eb37119a224a58e4d9e8b5249f5a74",
+    "kicadCli": "10.0.3"
+  },
+  "k6-sonde-xilinx": {
+    "pads": 108,
+    "digest": "426f815aa8c285ad16f165fba95496d73f871e62e373ceefe1256ba86b9bc716",
+    "kicadCli": "10.0.3"
+  },
+  "k7-complex-hierarchy": {
+    "pads": 164,
+    "digest": "c1bd4b472999390c52d76a8f8b9545a2dd117890c994f164d29075dfbd68a400",
+    "kicadCli": "10.0.3"
+  },
+  "k7-interf-u": {
+    "pads": 373,
+    "digest": "c0487fac81f3364042fed4ab0e0f0def50ae18a9a8c327c2cbe1096d7310996a",
+    "kicadCli": "10.0.3"
+  },
+  "k7-sonde-xilinx": {
+    "pads": 108,
+    "digest": "426f815aa8c285ad16f165fba95496d73f871e62e373ceefe1256ba86b9bc716",
+    "kicadCli": "10.0.3"
+  },
+  "k8-pic-programmer": {
+    "pads": 236,
+    "digest": "afd39994e7c0bb3e8660a8faf7760e5f14eb37119a224a58e4d9e8b5249f5a74",
+    "kicadCli": "10.0.3"
+  },
+  "k8-sonde-xilinx": {
+    "pads": 108,
+    "digest": "426f815aa8c285ad16f165fba95496d73f871e62e373ceefe1256ba86b9bc716",
+    "kicadCli": "10.0.3"
+  },
+  "k8-tiny-tapeout": {
+    "pads": 600,
+    "digest": "4f5d1a1d0ab63d7993f0e3d7995cb0778c2a7c798c29e9222264e657e7d09992",
+    "kicadCli": "10.0.3"
+  },
+  "k9-complex-hierarchy": {
+    "pads": 164,
+    "digest": "3f46868729863bcce9a5cdc021e31da88fed7214ae88f2d3b041b30e82c47001",
+    "kicadCli": "10.0.3"
+  },
+  "k9-multichannel-mixer": {
+    "pads": 280,
+    "digest": "a26cbf799cad86a0e2072d849ba9863236f9e4ad9af21eb42a110d530c6660f4",
+    "kicadCli": "10.0.3"
+  },
+  "k9-royalblue-nfc": {
+    "pads": 2,
+    "digest": "9ec88bfa32268cf0e32205cef4f67f167cbce8c2dcfae536da30503e9260c4ca",
+    "kicadCli": "10.0.3"
+  }
+}

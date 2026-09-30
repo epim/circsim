@@ -19,3 +19,6 @@ website/node_modules/
 website/docs/.vitepress/cache/
 website/docs/.vitepress/dist/
 website/.ralph-state.md
+
+# real-board corpus cache (scripts/fetch-corpus.mjs)
+.corpus-cache/

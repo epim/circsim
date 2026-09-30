@@ -13,8 +13,9 @@
  * run to completion.
  *
  * Skipped automatically when resources/ngspice/<platform> is missing (same
- * guard as library-ic.integration.test.ts). The real-board section additionally
- * skips when the lantern board file is absent on this machine.
+ * guard as library-ic.integration.test.ts). The real-board section is keyed on
+ * CIRCSIM_PRIVATE_BOARDS_DIR: skipped with a logged warning when unset, failing
+ * when set to a directory without the lantern board.
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
@@ -37,10 +38,18 @@ import type { SimEvent } from '../protocol'
 
 const haveNgspice = ngspiceResourcesAvailable()
 
-// Real routed board from the diagnosis (headers-only lantern variant). The test
-// skips when the file is not present on this machine.
-const LANTERN_BOARD = 'C:\\Users\\bear\\lantern\\hardware\\Routed\\revb-handtuned-complete\\led_lantern-revb-headers-only-handtuned.kicad_pcb'
-const LANTERN_SCH = 'C:\\Users\\bear\\lantern\\hardware\\led_lantern.kicad_sch'
+// Real routed board from the diagnosis (headers-only lantern variant). It is the
+// maintainer's private design and is NOT in the repository. Point
+// CIRCSIM_PRIVATE_BOARDS_DIR at a directory holding
+//   led_lantern-revb-headers-only-handtuned.kicad_pcb   (required)
+//   led_lantern.kicad_sch                               (optional, tier-1 Sim fields)
+// to run the real-board block. Unset: the block is skipped and a warning says so.
+// Set but the board is missing: a test FAILS (a misconfigured run must not look
+// green). The same invariants run everywhere, CI included, on a synthetic
+// lantern-shaped board, see lantern-shape.integration.test.ts in this directory.
+const PRIVATE_DIR = process.env.CIRCSIM_PRIVATE_BOARDS_DIR
+const LANTERN_BOARD = join(PRIVATE_DIR ?? '', 'led_lantern-revb-headers-only-handtuned.kicad_pcb')
+const LANTERN_SCH = join(PRIVATE_DIR ?? '', 'led_lantern.kicad_sch')
 const MODELS = join(process.cwd(), 'resources', 'models')
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -243,7 +252,24 @@ describe.skipIf(!haveNgspice)('M12 — dangling comparator-input net in real ngs
 
 // ─── real lantern board (headers-only variant) ────────────────────────────────
 
-const haveLantern = haveNgspice && existsSync(LANTERN_BOARD)
+const haveLantern = haveNgspice && PRIVATE_DIR !== undefined && existsSync(LANTERN_BOARD)
+
+if (PRIVATE_DIR === undefined) {
+  console.warn(
+    '[private-boards] CIRCSIM_PRIVATE_BOARDS_DIR is not set: the 4 real lantern board tests ' +
+      '(bleed set, CD4000 12 V default, x_u5 arity, full-board tran-uic) are SKIPPED on this machine.'
+  )
+}
+
+// A set-but-wrong directory must fail loudly instead of skipping the block.
+describe.skipIf(PRIVATE_DIR === undefined || !haveNgspice)('CIRCSIM_PRIVATE_BOARDS_DIR is honoured', () => {
+  it('the lantern board named by CIRCSIM_PRIVATE_BOARDS_DIR exists', () => {
+    expect(
+      existsSync(LANTERN_BOARD),
+      `CIRCSIM_PRIVATE_BOARDS_DIR is set to "${PRIVATE_DIR}" but ${LANTERN_BOARD} does not exist`
+    ).toBe(true)
+  })
+})
 
 describe.skipIf(!haveLantern)('M8 — real lantern board (headers-only) deck conditioning', () => {
   /** Parsed lantern board + resolutions + model texts, without instruments. */

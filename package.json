@@ -20,7 +20,10 @@
     "coverage": "vitest run --coverage",
     "fetch:ngspice": "node scripts/fetch-ngspice.mjs",
     "test:integration": "vitest run --reporter=verbose .integration.test",
-    "test:e2e": "playwright test --config playwright.config.ts",
+    "fetch:corpus": "node scripts/fetch-corpus.mjs",
+    "test:corpus": "node scripts/fetch-corpus.mjs && vitest run --config vitest.corpus.config.ts && node scripts/corpus-metrics.mjs",
+    "corpus:baseline": "node scripts/corpus-metrics.mjs --update",
+    "test:e2e":"playwright test --config playwright.config.ts",
     "license:check": "node scripts/license-hygiene.mjs",
     "package": "npm run build && electron-builder",
     "package:dir": "npm run build && electron-builder --dir"
