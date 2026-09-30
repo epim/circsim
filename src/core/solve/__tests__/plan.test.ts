@@ -181,6 +181,43 @@ describe('runSolvePlan: two-pass rail sensing', () => {
   })
 })
 
+describe('runSolvePlan: undriven islands (issue #43)', () => {
+  /** The switched-rail fixture with R3 removed: IN reaches only U1's sense-only input pad. */
+  function undrivenInputInputs(): SolveInputs {
+    const f = switchedRailFixture()
+    const resolutions = f.resolutions.filter(r => r.ref !== 'R3')
+    const circuit = { ...f.circuit, parts: f.circuit.parts.filter(p => p.ref !== 'R3') }
+    return buildSolveInputs(null, circuit, resolutions, f.instruments, f.groundNetId, {
+      title: 'plan-test',
+      modelTexts: { 'logic4000.json': LOGIC4000 },
+    })
+  }
+
+  const okOp = (): OpResult => ({ values: { vin: 12, vgated: 5, in: 0, out: 5 }, method: 'direct' })
+
+  it('reports a net with no path to ground, by KiCad name, with its bleed', async () => {
+    const engine = scriptedEngine(() => okOp())
+    const result = await runSolvePlan(undrivenInputInputs(), engine)
+
+    expect(result.undrivenNets).toEqual([{ netId: 3, kicadName: 'IN', spiceNode: 'in' }])
+    // The deck really bled it, so the 0 V reading is a bleed and not a measurement.
+    expect(text(result.deck)).toContain('r_float_1 in 0 1e9')
+  })
+
+  it('reports nothing when every net has a path to ground', async () => {
+    const engine = scriptedEngine(() => okOp())
+    const result = await runSolvePlan(inputs(), engine)
+    expect(result.undrivenNets).toEqual([])
+  })
+
+  it('reports the islands of the deck that produced the committed op', async () => {
+    const engine = scriptedEngine(pass => (pass === 1 ? okOp() : { ...okOp(), values: { ...okOp().values, out: 4.9 } }))
+    const result = await runSolvePlan(undrivenInputInputs(), engine)
+    expect(result.pass2).toBe('solved')
+    expect(result.undrivenNets.map(n => n.kicadName)).toEqual(['IN'])
+  })
+})
+
 describe('mapOpResultToNetVoltages', () => {
   it('skips currents and unknown nodes', () => {
     const { circuit } = switchedRailFixture()

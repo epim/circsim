@@ -17,8 +17,8 @@
 
 import type { Circuit } from '../netlist/extract'
 import { deriveMeasuredRailVHigh } from '../spicegen/generate'
-import { buildDeck } from './inputs'
-import type { OpResult, SolveEngine, SolveInputs, SolveResult } from './types'
+import { buildDeckWithUndriven } from './inputs'
+import type { OpResult, SolveEngine, SolveInputs, SolveResult, UndrivenNet } from './types'
 
 /**
  * Pass 1 did not produce an op (engine timeout, lost transport). Nothing was
@@ -35,7 +35,10 @@ export class SolveFailedError extends Error {
 }
 
 export async function runSolvePlan(inputs: SolveInputs, engine: SolveEngine): Promise<SolveResult> {
-  const pass1Deck = buildDeck({ ...inputs, measuredRails: undefined })
+  const { deck: pass1Deck, undrivenNets: pass1Undriven } = buildDeckWithUndriven({
+    ...inputs,
+    measuredRails: undefined,
+  })
   let op: OpResult
   try {
     op = await loadAndRunOp(engine, pass1Deck)
@@ -54,15 +57,20 @@ export async function runSolvePlan(inputs: SolveInputs, engine: SolveEngine): Pr
   })
 
   let deck = pass1Deck
+  let undrivenNets: UndrivenNet[] = pass1Undriven
   let pass2Deck: string[] | undefined
   let pass2: SolveResult['pass2'] = 'not-needed'
   if (rails.size > 0) {
-    const candidate = buildDeck({ ...inputs, measuredRails: rails })
+    const { deck: candidate, undrivenNets: pass2Undriven } = buildDeckWithUndriven({
+      ...inputs,
+      measuredRails: rails,
+    })
     if (circuitText(candidate) !== circuitText(pass1Deck)) {
       pass2Deck = candidate
       try {
         op = await loadAndRunOp(engine, candidate)
         deck = candidate
+        undrivenNets = pass2Undriven
         pass2 = 'solved'
       } catch {
         pass2 = 'failed' // keep pass 1's op, which is still a valid solve of pass1Deck
@@ -79,6 +87,7 @@ export async function runSolvePlan(inputs: SolveInputs, engine: SolveEngine): Pr
     pass2,
     measuredRails: rails,
     gatedOff,
+    undrivenNets,
   }
 }
 

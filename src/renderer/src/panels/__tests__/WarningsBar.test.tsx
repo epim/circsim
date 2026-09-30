@@ -291,3 +291,44 @@ describe('schematic pin-map notes — informational row per corrected ref', () =
     expect(html).not.toContain('approximate')
   })
 })
+
+// ─── Undriven nets bled to 0 V (issue #43) ─────────────────────────────────────
+
+describe('WarningsBar: undriven nets (issue #43)', () => {
+  function renderWithUndriven(names: string[]): string {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    store.setState({
+      undrivenNets: names.map((kicadName, i) => ({
+        netId: i + 1,
+        kicadName,
+        spiceNode: kicadName.toLowerCase(),
+      })),
+    })
+    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+      store.getState()
+    return renderToStaticMarkup(
+      <AppStoreProvider store={store}>
+        <WarningsBar />
+      </AppStoreProvider>,
+    )
+  }
+
+  it('lists every bled net by KiCad name and says the 0 V is not a measurement', () => {
+    const html = renderWithUndriven(['/EN', '/MODE', 'Net-(U1-2A)'])
+    expect(html).toContain('data-testid="undriven-nets"')
+    expect(html).toContain('Undriven nets held at 0 V')
+    for (const name of ['/EN', '/MODE', 'Net-(U1-2A)']) expect(html).toContain(name)
+    expect(html).toMatch(/1 GOhm/)
+    expect(html).toMatch(/floats?/)
+  })
+
+  it('uses the singular form for one net', () => {
+    const html = renderWithUndriven(['/EN'])
+    expect(html).toContain('Nothing on the board drives this net')
+  })
+
+  it('no undriven nets: no surface', () => {
+    const html = renderWithUndriven([])
+    expect(html).not.toContain('undriven-nets')
+  })
+})

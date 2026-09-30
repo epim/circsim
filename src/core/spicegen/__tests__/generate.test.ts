@@ -23,7 +23,7 @@
 import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { describe, test, expect } from 'vitest'
-import { generateDeck, formatSpiceValue, alterPlan, instrumentSpiceName, buildLedSpiceNames, isLedPart, subcktTerminalConductivity, digitalVddNet } from '../generate'
+import { generateDeck, generateDeckWithDiagnostics, formatSpiceValue, alterPlan, instrumentSpiceName, buildLedSpiceNames, isLedPart, subcktTerminalConductivity, digitalVddNet } from '../generate'
 import type { Circuit, CircuitNet, Part } from '../../netlist/extract'
 import type { Resolution } from '../../models/types'
 import type { Instrument } from '../instruments'
@@ -1991,6 +1991,35 @@ describe('generateDeck — floating-island bleed resistors (M8)', () => {
     const commentIdx = deck.indexOf('* floating-island bleed resistors (no DC path to ground)')
     expect(commentIdx).toBeGreaterThan(-1)
     expect(deck[commentIdx + 1]).toBe(bleeds[0])
+  })
+
+  test('diagnostics return the bled islands by spice node, without changing the deck (issue #43)', () => {
+    const opts = {
+      circuit: makeIslandCircuit(),
+      resolutions: makeIslandResolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 2 },
+        { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.1 },
+      ] as Instrument[],
+      groundNetId: 2,
+    }
+    const { lines, diagnostics } = generateDeckWithDiagnostics(opts)
+    expect(lines).toEqual(generateDeck(opts))
+    expect(diagnostics.floatingIslands).toEqual([['_led3_k', '_gauge_c3']])
+    expect(diagnostics.undrivenIslands).toEqual([['_led3_k', '_gauge_c3']])
+  })
+
+  test('a grounded deck reports no islands (issue #43)', () => {
+    const { diagnostics } = generateDeckWithDiagnostics({
+      circuit: makeRcCircuit(3),
+      resolutions: makeRcResolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 3 },
+        { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 3,
+    })
+    expect(diagnostics).toEqual({ floatingIslands: [], undrivenIslands: [] })
   })
 
   test('grounded fixture gains no bleed lines', () => {

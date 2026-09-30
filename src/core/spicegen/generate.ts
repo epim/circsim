@@ -1006,7 +1006,7 @@ function expandXspiceDigital(
   instruments: Instrument[],
   railOverrides: Map<number, number> | undefined,
   measuredRailVHigh: Map<number, number> | undefined,
-): { lines: string[]; expanded: boolean; analogNodes: string[] } {
+): { lines: string[]; expanded: boolean; analogNodes: string[]; drivenNodes: string[] } {
   const logic = templateFile ? parseLogic74(idx, templateFile) : null
   const tpl = logic?.templates?.[model.templateId]
   if (!logic || !tpl) {
@@ -1018,6 +1018,7 @@ function expandXspiceDigital(
       ],
       expanded: false,
       analogNodes: [],
+      drivenNodes: [],
     }
   }
 
@@ -1083,6 +1084,7 @@ function expandXspiceDigital(
   if (tpl.schmitt) {
     const mid = (vHigh / 2).toFixed(4)
     const analogNodes: string[] = []
+    const drivenNodes: string[] = []
     let gi = 0
     for (const g of tpl.gates) {
       gi++
@@ -1095,8 +1097,9 @@ function expandXspiceDigital(
       // Both the input and output analog nodes are single-node island terminals
       // (matches the old adc-input + dac-output push exactly).
       analogNodes.push(inN, outN)
+      drivenNodes.push(outN)
     }
-    return { lines, expanded: true, analogNodes }
+    return { lines, expanded: true, analogNodes, drivenNodes }
   }
 
   const rd = `${tpl.delaysNs}n`
@@ -1114,6 +1117,9 @@ function expandXspiceDigital(
   // bridges do NOT conduct across the chip, so the nodes are reported
   // individually, never unioned with each other.
   const analogNodes: string[] = []
+  // The analog nodes the expansion drives (the dac_bridge outputs). They are
+  // bled like any island, but they are not "undriven": the chip drives them.
+  const drivenNodes: string[] = []
 
   // One adc_bridge per input signal: analog board node → digital event node.
   for (const sig of tpl.inputs) {
@@ -1155,9 +1161,10 @@ function expandXspiceDigital(
   for (const sig of tpl.outputs) {
     lines.push(`abr_${refLc}_out_${sig.toLowerCase()} [${dNode(sig)}] [${aNode(sig)}] ${dacModel}`)
     analogNodes.push(aNode(sig))
+    drivenNodes.push(aNode(sig))
   }
 
-  return { lines, expanded: true, analogNodes }
+  return { lines, expanded: true, analogNodes, drivenNodes }
 }
 
 // ─── Main deck generator ──────────────────────────────────────────────────────
@@ -1172,6 +1179,37 @@ function expandXspiceDigital(
  * No .tran/.op card is included — the SimHost issues the analysis command.
  */
 export function generateDeck(opts: GenerateOptions): string[] {
+  return generateDeckWithDiagnostics(opts).lines
+}
+
+/**
+ * What the generator learned while building a deck that the deck text alone
+ * does not carry to a caller (issue #43).
+ */
+export interface DeckDiagnostics {
+  /**
+   * Floating islands: connected components of the emitted element cards with no
+   * path to node "0", as ordered lists of spice node names. Every node listed
+   * was bled to ground through a 1 GOhm `r_float_<i>` card, so it reads 0 V
+   * because of the bleed and not because anything drives it there. Empty when
+   * every node reaches ground.
+   */
+  floatingIslands: string[][]
+  /**
+   * The subset of `floatingIslands` that nothing drives: no expanded digital
+   * chip output sits in the island, so its nodes read 0 V only because of the
+   * bleed. These are what the app surfaces to the user (issue #43). A gate's
+   * output net with no DC path to ground is bled too, but it is driven, so it
+   * is not listed here.
+   */
+  undrivenIslands: string[][]
+}
+
+/** generateDeck plus its diagnostics; `lines` is exactly what generateDeck returns. */
+export function generateDeckWithDiagnostics(opts: GenerateOptions): {
+  lines: string[]
+  diagnostics: DeckDiagnostics
+} {
   const { circuit, resolutions, instruments, title, modelTexts } = opts
   // groundNetId is used by the caller to build the circuit (node "0" assignment);
   // the deck generator relies on circuit.nets[].spiceNode already being "0" for ground.
@@ -1184,6 +1222,9 @@ export function generateDeck(opts: GenerateOptions): string[] {
   // nodes here; after all elements are out, any connected component that never
   // reaches node "0" gets a 1 GΩ bleed per net (see NodeUnionFind).
   const islandNodes = new NodeUnionFind()
+  // Analog nodes an expanded digital chip drives (issue #43). An island holding
+  // one of these is bled for matrix conditioning but is not reported undriven.
+  const drivenNodes = new Set<string>()
 
   // Model-definition inlining (only when lib texts are supplied). Definitions are
   // collected per-deck and deduplicated, then appended once before .save (ngspice
@@ -1555,6 +1596,7 @@ export function generateDeck(opts: GenerateOptions): string[] {
       // an adc input has no DC conductance, so a net touched ONLY by bridges is
       // itself a floating island and needs a bleed.
       for (const n of xspice.analogNodes) islandNodes.link([n])
+      for (const n of xspice.drivenNodes) drivenNodes.add(n)
       continue
     }
   }
@@ -1570,8 +1612,8 @@ export function generateDeck(opts: GenerateOptions): string[] {
   // convergence-culprit parser maps `<prefix>_<ref>`-shaped instance names back
   // to parts, and a spice node embedded in the name (r_float__gauge_c3) would
   // false-positive onto a refdes-like net segment (C3).
+  const islands = islandNodes.floatingIslands()
   {
-    const islands = islandNodes.floatingIslands()
     if (islands.length > 0) {
       lines.push('* floating-island bleed resistors (no DC path to ground)')
       let bleedIdx = 0
@@ -1641,7 +1683,13 @@ export function generateDeck(opts: GenerateOptions): string[] {
 
   lines.push('.end')
 
-  return lines
+  return {
+    lines,
+    diagnostics: {
+      floatingIslands: islands,
+      undrivenIslands: islands.filter(island => !island.some(n => drivenNodes.has(n))),
+    },
+  }
 }
 
 // ─── Subckt node list builders ────────────────────────────────────────────────

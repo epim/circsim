@@ -209,6 +209,26 @@ describe.skipIf(!haveNgspice)('op-informed rail sensing (real ngspice)', () => {
     expect(result.deck.join('\n')).toContain('(v(out) > 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000')
   }, 90_000)
 
+  it('an input that reaches only the chip is reported undriven, not silently 0 V (issue #43)', async () => {
+    // Remove R3: IN (1A) now touches only U1's sense-only input. The deck bleeds
+    // it to ground so the matrix solves, and the solve must say so.
+    const f = buildFixture(12)
+    const resolutions = f.resolutions.filter(r => r.ref !== 'R3')
+    const circuit: Circuit = { ...f.circuit, parts: f.circuit.parts.filter(p => p.ref !== 'R3') }
+    const inputs = buildSolveInputs(null, circuit, resolutions, f.instruments, f.groundNetId, {
+      title: 'rail-sensing-undriven', modelTexts,
+    })
+
+    const { errs, result } = await solve(inputs)
+    expect(errs).toEqual([])
+    // The op reads IN as a tidy 0 V and the chip output as a confident level...
+    expect(result.op.values.in).toBeCloseTo(0, 3)
+    // ...and the solve names IN as undriven. OUT is driven by the gate and the
+    // rail nets by the supply, so only IN is listed.
+    expect(result.undrivenNets).toEqual([{ netId: 3, kicadName: 'IN', spiceNode: 'in' }])
+    expect(result.deck.join('\n')).toContain('r_float_1 in 0 1e9')
+  }, 90_000)
+
   it('a manual override pins the voltage regardless of the measured op', async () => {
     // Full 12 V supply → the op still measures ~5 V on /VGATED, but a tier-2
     // override of 3.3 V (with a CONFLICTING tier-3 measured 5 V) must win.

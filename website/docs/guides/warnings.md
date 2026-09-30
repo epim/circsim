@@ -27,6 +27,12 @@ You can **minimize** it (the **»** button) to a compact header badge (**⚠ N a
 
 *(amber)* A digital chip's VDD net measured near 0 V at the operating point, so circsim used the family-default logic swing instead, which means logic thresholds may be wrong if that rail is actually powered during a transient. Type the real rail voltage into the inline field and click **Set rail voltage** to fix it. See [rail sensing](../reference/architecture#rail-sensing).
 
+## "Undriven nets held at 0 V"
+
+*(amber)* One or more nets have no path to ground and nothing that drives them, for example a CMOS input wired only to an unused or unmodeled part, or an enable line with no pull-down. To keep the solve numerically stable, circsim ties each such net to ground through a 1 GOhm resistor, so the net reads **0 V in the simulation**. That 0 V is an artifact of the tie, not a measurement: on the real board the net floats, and whatever it feeds (a logic input, a comparator, a gate) can read any level. The banner lists every affected net by its KiCad name. A chip output that has no DC path to ground is **not** listed, because the chip drives it.
+
+Fix it by giving the net a real source: add the missing pull-up or pull-down, connect the unused input, or attach the part that drives it. The note clears on the next solve once every net has a driver or a path to ground.
+
 ## "Pin map corrected from schematic"
 
 *(grey, informational)* circsim found a diode/LED whose schematic pin names (A/K) disagreed with its footprint's pad convention, and trusted the schematic, which caught a would-be-reversed part. If your *schematic* is the stale one, override in the [Model Doctor](./model-doctor#pin-map). This is the system working; no action needed unless the schematic is wrong. See [the diode-polarity trap](../reference/pin-maps#diode-polarity).
