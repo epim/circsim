@@ -151,6 +151,78 @@ jobs:
           path: coverage/
           if-no-files-found: ignore
 
+      # A known-bug marker (an it.fails, a KNOWN_BUG_<n>_OPEN flag, a knownFailing
+      # row) must be flipped in the PR that closes its issue. This fails when a
+      # marker references a closed issue. It reads issue state through gh with the
+      # workflow token; it skips with a message when no credentials are available.
+      - name: Check stale known-bug markers
+        if: runner.os == 'Linux'
+        run: npm run check:markers
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Real-board corpus: KiCad-written boards fetched at test time against the
+      # hashes in scripts/corpus-manifest.json (never committed). The cache key is
+      # the manifest, so a corpus change refetches and nothing else does. No
+      # kicad-cli on these legs: pad-to-net checks use test/corpus/oracle.json.
+      - name: Cache corpus boards
+        uses: actions/cache@v4
+        with:
+          path: .corpus-cache
+          key: corpus-${{ hashFiles('scripts/corpus-manifest.json') }}
+
+      - name: Corpus suite
+        run: npm run test:corpus
+
+      - name: Upload corpus metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-metrics-${{ matrix.os }}
+          path: test-results/corpus/metrics.json
+          if-no-files-found: ignore
+
+      - name: Model characterization (datasheet values, real ngspice)
+        run: npm run test:characterization
+
+  # ===========================================================================
+  # KiCad load job: every fixture and bundled sample must load in a real KiCad
+  # (issue #24). The fixtures use board format version 20260206, which KiCad 9
+  # cannot read, so this installs KiCad 10 from the KiCad PPA (Ubuntu 24.04).
+  # CIRCSIM_REQUIRE_KICAD_CLI=1 turns a missing kicad-cli into a failure, so the
+  # gate cannot silently skip. No ngspice is needed.
+  # ===========================================================================
+  kicad-load:
+    name: KiCad 10 load
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install KiCad 10
+        run: |
+          sudo add-apt-repository -y ppa:kicad/kicad-10.0-releases
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends kicad
+          kicad-cli version
+
+      - name: Fixtures and samples load in kicad-cli
+        run: npx vitest run --reporter=verbose src/core/__tests__/kicadCliLoad.test.ts
+        env:
+          CIRCSIM_REQUIRE_KICAD_CLI: '1'
+
   # ===========================================================================
   # E2E job — Playwright drives the BUILT app (out/) via _electron.launch with
   # real ngspice underneath (same binary caches as the test job).
