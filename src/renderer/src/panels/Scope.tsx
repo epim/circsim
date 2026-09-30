@@ -324,7 +324,6 @@ const Scope: React.FC = () => {
       }
     }
     return result
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [probes]) // re-compute when probes change; each frame measurement happens in RAF
 
   // ── Cursor handlers ────────────────────────────────────────────────────────

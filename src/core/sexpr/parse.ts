@@ -54,7 +54,7 @@ function maybeNumber(raw: string): string | number {
   // Number('') === 0 (false positive), Number('   ') === 0 (false positive)
   // All bare tokens we receive are trimmed and non-empty from the tokeniser, so
   // only check isNaN and that the string actually looks numeric.
-  if (!Number.isNaN(n) && /^[+\-]?(\d+\.?\d*|\.\d+)([eE][+\-]?\d+)?$/.test(raw)) {
+  if (!Number.isNaN(n) && /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(raw)) {
     return n
   }
   return raw
@@ -192,7 +192,7 @@ function parseTokens(tokens: Token[]): SExpr {
     const open = consume() // LParen — already verified by caller
     const items: SExpr[] = []
 
-    while (true) {
+    for (;;) {
       const t = peek()
       if (t.kind === TKind.EOF) {
         throw new SexprError(
