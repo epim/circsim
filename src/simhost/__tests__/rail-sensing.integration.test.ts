@@ -1,30 +1,32 @@
 /**
  * src/simhost/__tests__/rail-sensing.integration.test.ts
  *
- * Op-informed rail-sensing proof against REAL bundled ngspice-46 (koffi 3.1.1).
+ * Op-informed rail-sensing proof against REAL bundled ngspice-46.
  *
- * Exercises the CORE pipeline (`generateDeck` + `deriveMeasuredRailVHigh` from
- * src/core/spicegen/generate.ts) end-to-end for a CD40106 whose VDD sits on a
- * SWITCHED/DERIVED rail (`/VGATED`) — a resistor divider from a 12 V bench
- * supply that biases `/VGATED` to a deterministic ~5 V at the operating point.
- * The chip has NO direct bench supply on its VDD net, so tier-1 cannot own it;
- * the family default is 12 V. This is the exact gap tier-3 (op-measured rail)
- * closes.
+ * Runs the production two-pass plan (`runSolvePlan` from src/core/solve) through
+ * the in-process SolveEngine (src/simhost/solveEngine.ts) for a CD40106 whose
+ * VDD sits on a SWITCHED/DERIVED rail (`/VGATED`): a resistor divider from a
+ * 12 V bench supply that biases `/VGATED` to a deterministic ~5 V at the
+ * operating point. The chip has NO direct bench supply on its VDD net, so tier-1
+ * cannot own it; the family default is 12 V. This is the exact gap tier-3
+ * (op-measured rail) closes. Before issue #53 this file re-implemented the loop
+ * by hand because the orchestration was reachable only through the renderer
+ * store; it now runs the same code the store runs.
  *
  * Runs the real libngspice via koffi against the bundled resources for this
  * platform; skipped automatically when resources/ngspice/<platform> is missing.
  *
  * Three cases (the plan's Task 8):
- *   1. Two-pass derives the measured swing — pass-1 deck uses the 12 V family
- *      default; a REAL op measures ~5 V on `/VGATED`; deriveMeasuredRailVHigh
- *      returns that rail; regenerating with it swaps the B-source to the 5 V
- *      swing (2.5/3.0/2.0 thresholds, 5.0 rail) and drops the 12 V default.
- *   2. Gated-off — the divider top driven to ~0 → `/VGATED` ≈ 0 V at the op →
- *      the rail is withheld (kept out of `rails`) and named in `gatedOff`; the
- *      pass-1 (12 V default) deck is what a caller keeps.
- *   3. Manual override pins the voltage — a tier-2 railOverride of 3.3 V beats
- *      even a conflicting tier-3 measuredRailVHigh of 5 V; the deck uses the
- *      3.3 V swing (1.65/1.98/1.32 thresholds, 3.3 rail) though the op measures 5.
+ *   1. Two-pass derives the measured swing: the pass-1 deck uses the 12 V family
+ *      default; a REAL op measures ~5 V on `/VGATED`; the plan senses that rail,
+ *      regenerates the deck with the 5 V swing (2.5/3.0/2.0 thresholds, 5.0
+ *      rail), drops the 12 V default, and re-solves once in real ngspice.
+ *   2. Gated-off: the divider top driven to ~0 leaves `/VGATED` at ~0 V, so the
+ *      rail is withheld (kept out of `measuredRails`), named in `gatedOff`, and
+ *      the pass-1 (12 V default) deck is the one the result reports.
+ *   3. Manual override pins the voltage: a tier-2 railOverride of 3.3 V beats
+ *      even a conflicting tier-3 measured rail of 5 V; the deck uses the 3.3 V
+ *      swing (1.65/1.98/1.32 thresholds, 3.3 rail) though the op measures 5.
  */
 
 import { readFileSync } from 'node:fs'
@@ -34,33 +36,56 @@ import { describe, expect, it } from 'vitest'
 
 import type { Resolution } from '../../core/models/types'
 import type { Circuit, CircuitNet, Part } from '../../core/netlist/extract'
-import { deriveMeasuredRailVHigh, generateDeck } from '../../core/spicegen/generate'
 import type { Instrument } from '../../core/spicegen/instruments'
-import { SimHost } from '../index'
+import {
+  buildDeck,
+  buildSolveInputs,
+  runSolvePlan,
+  type SolveInputs,
+  type SolveResult,
+} from '../../core/solve'
 import { ngspiceResourcesAvailable } from '../ngspiceFfi'
 import type { SimEvent } from '../protocol'
+import { createInProcessSolveEngine } from '../solveEngine'
 
 const haveNgspice = ngspiceResourcesAvailable()
 const MODELS = join(process.cwd(), 'resources', 'models')
 const LOGIC4000 = haveNgspice ? readFileSync(join(MODELS, 'logic4000.json'), 'utf8') : ''
 
-// ─── real-ngspice op harness (copied from library-ic.integration.test.ts) ──────
+// ─── real-ngspice harness ─────────────────────────────────────────────────────
 
-async function runOp(deck: string[]): Promise<{ errs: string[]; v: Record<string, number> }> {
-  const events: SimEvent[] = []
-  const host = new SimHost({ emit: (e) => events.push(e), disableWatchdog: true })
+/** Collects ngspice error lines from the in-process engine's event stream. */
+function errorSink(): { errs: string[]; onEvent: (e: SimEvent) => void } {
+  const errs: string[] = []
+  return {
+    errs,
+    onEvent: (e) => {
+      if (e.type === 'log' && e.level === 'error') errs.push(e.text)
+    },
+  }
+}
+
+/** Run the production solve plan through the in-process engine. */
+async function solve(inputs: SolveInputs): Promise<{ errs: string[]; result: SolveResult }> {
+  const sink = errorSink()
+  const engine = await createInProcessSolveEngine({ onEvent: sink.onEvent })
   try {
-    await host.start()
-    host.handleCommand({ type: 'loadCircuit', deckLines: deck })
-    await host.whenIdle()
-    const v = await host.runOp()
-    const errs = (events.filter((e) => e.type === 'log' && e.level === 'error') as Extract<
-      SimEvent,
-      { type: 'log' }
-    >[]).map((e) => e.text)
-    return { errs, v }
+    return { errs: sink.errs, result: await runSolvePlan(inputs, engine) }
   } finally {
-    await host.dispose()
+    await engine.dispose()
+  }
+}
+
+/** Load one deck and run one op through the in-process engine. */
+async function runOp(deck: string[]): Promise<{ errs: string[]; v: Record<string, number> }> {
+  const sink = errorSink()
+  const engine = await createInProcessSolveEngine({ onEvent: sink.onEvent })
+  try {
+    await engine.loadCircuit(deck)
+    const { values } = await engine.runOp()
+    return { errs: sink.errs, v: values }
+  } finally {
+    await engine.dispose()
   }
 }
 
@@ -133,70 +158,55 @@ const modelTexts = { 'logic4000.json': LOGIC4000 }
 describe.skipIf(!haveNgspice)('op-informed rail sensing (real ngspice)', () => {
   it('two-pass derives the measured 5 V swing where a single pass used 12 V', async () => {
     const { circuit, resolutions, instruments, groundNetId, vgatedNetId } = buildFixture(12)
-
-    // Pass 1: no measuredRailVHigh → the CD40106 uses the 12 V family default.
-    const pass1 = generateDeck({
-      circuit, resolutions, instruments, groundNetId,
-      title: 'rail-sensing-pass1', modelTexts,
+    const inputs = buildSolveInputs(null, circuit, resolutions, instruments, groundNetId, {
+      title: 'rail-sensing', modelTexts,
     })
-    const pass1Text = pass1.join('\n')
-    // Pass-1 carries the 12 V family-default swing (mid 6.0 / V_T+ 7.2 / rail 12).
-    expect(pass1Text).toContain('(v(out) > 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000')
 
-    // Run the REAL op and read the divider-biased /VGATED node voltage.
-    const r = await runOp(pass1)
+    const { errs, result } = await solve(inputs)
     // eslint-disable-next-line no-console
-    console.log(`\n[rail-sensing pass1] v(/VGATED)=${r.v['vgated']?.toFixed(4)}V (expect ~5) errs=[${r.errs.join('|')}]\n`)
-    expect(r.errs).toEqual([])
-    expect(r.v['vgated']).toBeCloseTo(5, 1)
+    console.log(`\n[rail-sensing] pass1 v(/VGATED)=${result.measuredRails.get(vgatedNetId)?.toFixed(4)}V (expect ~5) pass2=${result.pass2} errs=[${errs.join('|')}]\n`)
+    expect(errs).toEqual([])
 
-    // Tier-3 sensing derives the measured rail on the VDD net.
-    const { rails, gatedOff } = deriveMeasuredRailVHigh({
-      opValues: r.v, circuit, resolutions, instruments, groundNetId, modelTexts,
-    })
-    expect(rails.get(vgatedNetId)).toBeCloseTo(5, 1)
-    expect(gatedOff).toEqual([])
+    // Pass 1: no measured rail yet, so the CD40106 used the 12 V family default
+    // swing (mid 6.0 / V_T+ 7.2 / rail 12).
+    expect(result.pass1Deck.join('\n')).toContain('(v(out) > 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000')
 
-    // Pass 2: regenerate with the measured rail → the B-source now carries the
-    // 5 V-derived swing (mid 2.5 / V_T+ 3.0 / V_T- 2.0 / rail 5.0), NOT 12 V.
-    const pass2 = generateDeck({
-      circuit, resolutions, instruments, groundNetId,
-      title: 'rail-sensing-pass2', modelTexts, measuredRailVHigh: rails,
-    })
-    const pass2Text = pass2.join('\n')
+    // Tier-3 sensing read the divider-biased rail off the REAL pass-1 op.
+    expect(result.measuredRails.get(vgatedNetId)).toBeCloseTo(5, 1)
+    expect(result.gatedOff).toEqual([])
+
+    // Pass 2 ran on the 5 V-derived swing (mid 2.5 / V_T+ 3.0 / V_T- 2.0 / rail
+    // 5.0), NOT 12 V, and its op is the one the result commits.
+    expect(result.pass2).toBe('solved')
+    expect(result.deck).toBe(result.pass2Deck)
+    const pass2Text = result.deck.join('\n')
     expect(pass2Text).toContain('(v(out) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000')
     expect(pass2Text).not.toContain('12.0000')
     // Provenance names the tier (the raw vHigh is the un-rounded ~4.99996 V op).
     expect(pass2Text).toContain('(op-measured rail; family default 12)')
-
-    // The regenerated deck also solves in real ngspice.
-    const r2 = await runOp(pass2)
-    expect(r2.errs).toEqual([])
+    // The pass-2 op still measures the divider's ~5 V, now mapped onto the net.
+    expect(result.netVoltages.get(vgatedNetId)).toBeCloseTo(5, 1)
   }, 90_000)
 
   it('gated-off rail (~0 V) keeps the family default and reports gatedOff', async () => {
     // Drive the divider top to ~0 (0 V bench supply) → /VGATED collapses to ~0.
     const { circuit, resolutions, instruments, groundNetId, vgatedNetId } = buildFixture(0)
-
-    // Pass-1 deck a caller would keep: still the 12 V family default swing.
-    const pass1 = generateDeck({
-      circuit, resolutions, instruments, groundNetId,
+    const inputs = buildSolveInputs(null, circuit, resolutions, instruments, groundNetId, {
       title: 'rail-sensing-gatedoff', modelTexts,
     })
-    expect(pass1.join('\n')).toContain('(v(out) > 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000')
 
-    const r = await runOp(pass1)
+    const { errs, result } = await solve(inputs)
     // eslint-disable-next-line no-console
-    console.log(`\n[rail-sensing gated-off] v(/VGATED)=${r.v['vgated']?.toFixed(4)}V (expect ~0) errs=[${r.errs.join('|')}]\n`)
-    expect(r.errs).toEqual([])
-    expect(r.v['vgated']).toBeLessThan(2)
+    console.log(`\n[rail-sensing gated-off] v(/VGATED)=${result.netVoltages.get(vgatedNetId)?.toFixed(4)}V (expect ~0) errs=[${errs.join('|')}]\n`)
+    expect(errs).toEqual([])
+    expect(result.netVoltages.get(vgatedNetId)).toBeLessThan(2)
 
-    const { rails, gatedOff } = deriveMeasuredRailVHigh({
-      opValues: r.v, circuit, resolutions, instruments, groundNetId, modelTexts,
-    })
-    // Below the floor → withheld from rails, surfaced as gated-off naming the chip.
-    expect(rails.has(vgatedNetId)).toBe(false)
-    expect(gatedOff).toEqual([{ ref: 'U1', netId: vgatedNetId, kicadName: '/VGATED' }])
+    // Below the floor → withheld from rails, surfaced as gated-off naming the chip,
+    // and no second pass: the kept deck is the 12 V family-default one.
+    expect(result.measuredRails.has(vgatedNetId)).toBe(false)
+    expect(result.gatedOff).toEqual([{ ref: 'U1', netId: vgatedNetId, kicadName: '/VGATED' }])
+    expect(result.pass2).toBe('not-needed')
+    expect(result.deck.join('\n')).toContain('(v(out) > 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000')
   }, 90_000)
 
   it('a manual override pins the voltage regardless of the measured op', async () => {
@@ -204,12 +214,13 @@ describe.skipIf(!haveNgspice)('op-informed rail sensing (real ngspice)', () => {
     // override of 3.3 V (with a CONFLICTING tier-3 measured 5 V) must win.
     const { circuit, resolutions, instruments, groundNetId, vgatedNetId } = buildFixture(12)
 
-    const deck = generateDeck({
-      circuit, resolutions, instruments, groundNetId,
-      title: 'rail-sensing-override', modelTexts,
-      railOverrides: new Map([[vgatedNetId, 3.3]]),
-      measuredRailVHigh: new Map([[vgatedNetId, 5]]),
-    })
+    const deck = buildDeck(
+      buildSolveInputs(null, circuit, resolutions, instruments, groundNetId, {
+        title: 'rail-sensing-override', modelTexts,
+        railOverrides: new Map([['/VGATED', 3.3]]),
+        measuredRails: new Map([[vgatedNetId, 5]]),
+      }),
+    )
     const text = deck.join('\n')
     // 3.3 V swing: mid 1.65 / V_T+ 1.98 / V_T- 1.32 / rail 3.3 — tier-2 beats tier-3.
     expect(text).toContain('(v(out) > 1.6500 ? 1.9800 : 1.3200)) ? 0 : 3.3000')

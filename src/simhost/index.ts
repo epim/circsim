@@ -686,13 +686,61 @@ export class SimHost {
   // ── loadCircuit ──────────────────────────────────────────────────────────
 
   private enqueueLoadCircuit(deckLines: string[]): void {
-    this.enqueue('loadCircuit', async () => {
-      if (this.deckLoaded) {
-        await this.engine.command('destroy all', false) // Spec §7.4 gotcha 5
+    this.enqueue('loadCircuit', () => this.doLoadCircuit(deckLines))
+  }
+
+  private async doLoadCircuit(deckLines: string[]): Promise<void> {
+    if (this.deckLoaded) {
+      await this.engine.command('destroy all', false) // Spec §7.4 gotcha 5
+    }
+    this.currentDeck = [...deckLines]
+    this.engine.loadCircuit(this.currentDeck)
+    this.deckLoaded = true
+  }
+
+  // ── promise API for the in-process SolveEngine (src/simhost/solveEngine.ts) ──
+
+  /** loadCircuit as a promise: settles once the deck is loaded (queued like the command). */
+  loadCircuit(deckLines: string[]): Promise<void> {
+    return this.enqueueAwaitable('loadCircuit', () => this.doLoadCircuit(deckLines))
+  }
+
+  /**
+   * A finite transient in the foreground, to completion: `tran <tstep> <tstop>
+   * uic`, the same initial-condition start the live bench uses. No streaming,
+   * pacing or bench windows; returns every saved vector over the whole run,
+   * keyed like opResult (the scale vector comes back as `time`).
+   */
+  runTran(
+    tstep: number,
+    tstop: number
+  ): Promise<{ time: Float64Array; vectors: Record<string, Float64Array> }> {
+    return this.enqueueAwaitable('runTran', async () => {
+      await this.engine.command(`tran ${formatNum(tstep)} ${formatNum(tstop)} uic`, true)
+      const plot = this.engine.currentPlot()
+      let time: Float64Array = new Float64Array(0)
+      const vectors: Record<string, Float64Array> = {}
+      for (const raw of this.engine.allVectors(plot)) {
+        const data = this.engine.vectorData(raw)
+        if (!data) continue
+        if (isScaleVectorName(raw)) time = data
+        else vectors[normalizeVectorKey(raw)] = data
       }
-      this.currentDeck = [...deckLines]
-      this.engine.loadCircuit(this.currentDeck)
-      this.deckLoaded = true
+      return { time, vectors }
+    })
+  }
+
+  /** Queue `run` like any command; the promise carries its outcome. */
+  private enqueueAwaitable<T>(label: string, run: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.enqueue(label, async () => {
+        try {
+          resolve(await run())
+        } catch (e) {
+          reject(e)
+          throw e // still logged by drain(), like every failed command
+        }
+      })
     })
   }
 
