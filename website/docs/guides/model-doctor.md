@@ -32,6 +32,17 @@ No model file? Click **Ask your LLM** (in the **⋮** overflow menu). circsim gi
 
 This keeps a fully-offline, no-API workflow honest: the model only counts once *ngspice itself* accepts it.
 
+### Imported models are treated as code {#models-are-code}
+
+A SPICE model is not just data. ngspice can run commands embedded in a model, including `shell`, `write`, `source` and `load`, and a model pasted from a forum or written by an LLM would run them with your user's privileges. circsim therefore gates every deck before ngspice sees it, and refuses a model that contains:
+
+- a `.control` / `.endc` block (or the legacy `.exec`, or a `*#` command comment);
+- a file reference: `.include`, `.inc`, `.lib`, `.source`, `.csparam`, or an `input_file` / `state_file` model parameter;
+- any dot card circsim does not recognise as a plain circuit or analysis card;
+- a card that contains a line break (ngspice would split it into several cards).
+
+Models are always inlined into the deck, never loaded by path, so a legitimate model never needs any of these. When the gate refuses a deck you see an error that names the offending card, and the circuit is not loaded. Open the model file, delete the control block or include, and import it again. Only bring in model files you would be willing to read first.
+
 ### Stub it
 
 Sometimes the right answer is "take this part out of the picture":

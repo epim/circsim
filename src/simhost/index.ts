@@ -22,6 +22,7 @@
  *  - the XSPICE `.cm` startup smoke deck (Spec §7.2)
  */
 
+import { DeckRejectedError, sanitizeDeck } from '../core/spicegen/sanitize'
 import { HaltCoordinator } from './haltCoordinator'
 import { NgspiceFfiEngine, ngspiceResourcesAvailable } from './ngspiceFfi'
 import { SampleBatcher } from './sampleBatcher'
@@ -690,6 +691,19 @@ export class SimHost {
   }
 
   private async doLoadCircuit(deckLines: string[]): Promise<void> {
+    // The deck gate (issue #35): ngspice runs .control blocks found anywhere in
+    // a deck, so nothing reaches the engine until sanitizeDeck passes. A refused
+    // deck also drops the previously loaded circuit, so a later runOp/runTransient
+    // cannot silently simulate a stale circuit as if the new one had loaded.
+    const gate = sanitizeDeck(deckLines)
+    if (!gate.ok) {
+      if (this.deckLoaded) {
+        await this.engine.command('destroy all', false)
+        this.deckLoaded = false
+        this.currentDeck = []
+      }
+      throw new DeckRejectedError(gate.violations)
+    }
     if (this.deckLoaded) {
       await this.engine.command('destroy all', false) // Spec §7.4 gotcha 5
     }
