@@ -17,11 +17,14 @@
  *   - The warmest part (highest sampled proxy) gets an 'info' finding; nearby
  *     high-power pairs get 'warn' hot-cluster findings.
  *
- * Needs an operating-point sim (registry `needs:'op'`) for `partPower`. Pure
- * core; deterministic (parts iterated in stable order, fixed sweep count).
+ * Needs an operating-point sim (registry `needs:'op'`) that supplies `partPower`.
+ * Nothing in the app produces `partPower` yet, so when it is absent the check
+ * returns `notAssessed` rather than an empty array: an empty array would be
+ * recorded as "ran" and read as "checked and clean" (issue #46). Pure core;
+ * deterministic (parts iterated in stable order, fixed sweep count).
  */
 
-import type { Finding } from '../types'
+import type { CheckOutput, Finding } from '../types'
 import type { CriticContext } from '../context'
 import type { Footprint, Vec2 } from '../../kicad/types'
 
@@ -91,9 +94,15 @@ function mid(a: Vec2, b: Vec2): Vec2 {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
 }
 
-export function checkThermal(ctx: CriticContext): Finding[] {
+/** Reason surfaced in the report's `skipped` list when no power data exists. */
+export const THERMAL_NOT_ASSESSED =
+  'not assessed (no per-part power data from the simulation yet)'
+
+export function checkThermal(ctx: CriticContext): CheckOutput {
   const powers = ctx.opResult?.partPower
-  if (!powers) return []
+  // No power data at all: the check cannot fire. Say so instead of returning a
+  // bare array, which the runner would count as "ran" (silence read as clean).
+  if (!powers) return { findings: [], notAssessed: THERMAL_NOT_ASSESSED }
 
   // ── powered parts with geometry, in stable (ref-sorted) order ────────────────
   const powered: Powered[] = []

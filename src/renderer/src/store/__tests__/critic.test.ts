@@ -4,8 +4,8 @@
  * Verifies the auto-trigger wiring (no live ngspice — injected mock simClient):
  *   - opening a board populates criticReport with the no-sim findings and SKIPS
  *     the sim-dependent checks (ampacity / thermal)
- *   - after an operating-point solve the report includes (no longer skips)
- *     ampacity / thermal — they run with the real op result
+ *   - after an operating-point solve ampacity runs with the real op result;
+ *     thermal stays not-assessed (no per-part power producer yet, #46)
  *   - selectFinding stores the id and forwards focusFinding to the board hooks
  *   - buildCriticOpResult maps netId voltages → spiceNode + ref currents
  */
@@ -83,10 +83,13 @@ describe('appStore — critic re-audits after an operating-point solve', () => {
 
     const report = store.getState().criticReport!
     expect(report.ranBy).toContain('ampacity')
-    expect(report.ranBy).toContain('thermal')
+    // Nothing in the app produces per-part power yet, so thermal stays
+    // not-assessed (issue #46) instead of reading as run-and-clean.
+    expect(report.ranBy).not.toContain('thermal')
     const skippedChecks = report.skipped.map(s => s.check)
     expect(skippedChecks).not.toContain('ampacity')
-    expect(skippedChecks).not.toContain('thermal')
+    expect(skippedChecks).toContain('thermal')
+    expect(report.skipped.find(s => s.check === 'thermal')!.reason).toContain('not assessed')
   })
 })
 
