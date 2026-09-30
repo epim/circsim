@@ -31,6 +31,18 @@ You can **minimize** it (the **»** button) to a compact header badge (**⚠ N a
 
 *(grey, informational)* circsim found a diode/LED whose schematic pin names (A/K) disagreed with its footprint's pad convention, and trusted the schematic, which caught a would-be-reversed part. If your *schematic* is the stale one, override in the [Model Doctor](./model-doctor#pin-map). This is the system working; no action needed unless the schematic is wrong. See [the diode-polarity trap](../reference/pin-maps#diode-polarity).
 
+## "pinmap-unverified: polarity of ..."
+
+*(a warning on the part's card in the [Model Doctor](./model-doctor))* A diode or LED sits on a JLCPCB / EasyEDA footprint, whose pad numbering follows the part rather than any convention, so circsim cannot tell which pad is the anode from the footprint name. It used KiCad's default (pad 1 = cathode) and flagged it. [Attach the schematic](./attach-schematic) so circsim can read the symbol's `A`/`K` pin names, or set the pin map yourself in the Model Doctor. See [the diode-polarity trap](../reference/pin-maps#diode-polarity).
+
+## A part the simulator dropped or rejected
+
+*(the part turns **no model**, red, after a run)* circsim reads the simulator's log while it loads the deck. If ngspice says it `ignored` a part (`is not a valid ... instance line`), assumed `DC 0` for a source with no value, or `could not find a valid modelname` for a part's card, that part is no longer shown as modeled: it becomes **no model** with ngspice's message on its card, and the next deck leaves it out instead of repeating the bad card. Before this, such a part could read green while missing from the simulation.
+
+## `bom:` notes and `BOM:` log warnings
+
+A `bom:` line on a part's card means a [BOM row](../reference/file-formats#bom-csv-the-bill-of-materials-optional) replaced its value or chose its model. A `BOM:` warning in the sim log means the file could not be read, had a range circsim could not expand, or had rows whose references are not on the board.
+
 ## 💡 Coach notes (dark LEDs)
 
 *(bottom-left overlay)* After a solve, any LED that *should* be lit but isn't gets a plain-language card explaining why: a reversed diode, no current-limit path, too little voltage. A silent dark LED is a beginner's worst moment, so circsim turns it into a lesson. It disappears once every LED is lit.

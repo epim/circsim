@@ -6,12 +6,17 @@
  * Matching precedence (first tier that produces a non-ambiguous single match wins):
  *   1. Exact normalized MPN match against entry.match.mpn[]
  *   2. Value field matches entry.match.valueRegex
- *   3. refdesPrefix + footprintRegex fallback
+ *   3. refdesPrefix + footprintRegex fallback (footprintRegex is required)
+ *
+ * Tiers 1 and 2 only accept an entry whose refdesPrefix (when declared) fits the
+ * part's refdes when the match came from the Value field (issue #51).
  *
  * Ambiguous (2+ entries match at the same tier) → 'ambiguous' result with candidate ids.
  * No match at any tier → 'none'.
  *
  * Pin-map selection:
+ *   - A JLC/EasyEDA-origin footprint on a polarized two-terminal entry → defaultPinMap
+ *     + 'pinmap-unverified' polarity warning (the name cannot tell polarity, issue #5).
  *   - Iterate entry.pinMaps keys (treated as regex patterns) against the part's libId.
  *   - First match → return that pinMap with no warning.
  *   - No match → return entry.defaultPinMap + 'pinmap-unverified' warning.
@@ -143,8 +148,15 @@ export type MatchResult =
 // ─── Part descriptor for matching ────────────────────────────────────────────
 
 export interface PartDescriptor {
-  /** MPN from part.properties['mpn'] or part.properties['MPN'], if present. */
+  /** MPN from a BOM row or part.properties['mpn'] / ['MPN'], if present. */
   mpn: string | undefined
+  /**
+   * True when `mpn` is only the part's Value field standing in for a missing
+   * MPN. Such a guess carries no intent, so an entry that declares refdesPrefix
+   * only accepts it on a matching refdes class (issue #51). An explicit MPN is
+   * never gated.
+   */
+  mpnIsValue?: boolean
   /** Part's libId (e.g. "Diode_SMD:D_SMA_SMA"). Used for footprint matching. */
   libId: string
   /** Part's value field. */
@@ -163,6 +175,20 @@ function refdesPrefix(ref: string): string {
 }
 
 // ─── Single-entry match predicates ────────────────────────────────────────────
+
+/**
+ * True when the entry may apply to a part with this refdes: either the entry
+ * declares no refdesPrefix, or the ref's prefix starts with one of them
+ * (D matches D3 and DZ1; Z matches ZD1; U matches U1; BT1 does not match a D/Z
+ * zener entry). Used to gate value-derived matches (value-as-MPN, valueRegex),
+ * which carry no refdes information of their own.
+ */
+function refdesAllows(entry: LibraryEntry, ref: string): boolean {
+  const prefixes = entry.match.refdesPrefix
+  if (!prefixes || prefixes.length === 0) return true
+  const prefix = refdesPrefix(ref)
+  return prefixes.some(p => prefix.startsWith(p.toUpperCase()))
+}
 
 /**
  * Test if an entry matches by MPN (normalized).
@@ -201,8 +227,11 @@ function matchesByValueRegex(entry: LibraryEntry, value: string): boolean {
 function matchesByFallback(entry: LibraryEntry, part: PartDescriptor): boolean {
   const { refdesPrefix: prefixes, footprintRegex } = entry.match
 
-  // Need at least one fallback criterion
-  if (!prefixes && !footprintRegex) return false
+  // A footprint pattern is required: a refdes prefix alone ("D") describes
+  // every part of that class, which is no basis for picking one model. Entries
+  // that are identified by value only (the colored LEDs) declare refdesPrefix
+  // without footprintRegex to gate their value match and stay out of this tier.
+  if (!footprintRegex) return false
 
   // Check refdesPrefix
   if (prefixes && prefixes.length > 0) {
@@ -253,7 +282,13 @@ export function matchLibraryEntry(
   library: LibraryEntry[],
 ): MatchResult {
   // ── Tier A: MPN ────────────────────────────────────────────────────────────
-  const mpnMatches = preferModeled(library.filter(e => matchesByMpn(e, part.mpn)))
+  // A Value-field stand-in for a missing MPN must also fit the entry's refdes
+  // class (issue #51: "3V0" on BT1 is a battery, not a zener).
+  const mpnMatches = preferModeled(
+    library.filter(
+      e => matchesByMpn(e, part.mpn) && (!part.mpnIsValue || refdesAllows(e, part.ref)),
+    ),
+  )
   if (mpnMatches.length === 1) {
     return { kind: 'match', entry: mpnMatches[0], tier: 'mpn' }
   }
@@ -262,7 +297,9 @@ export function matchLibraryEntry(
   }
 
   // ── Tier B: Value regex ────────────────────────────────────────────────────
-  const valueMatches = preferModeled(library.filter(e => matchesByValueRegex(e, part.value)))
+  const valueMatches = preferModeled(
+    library.filter(e => matchesByValueRegex(e, part.value) && refdesAllows(e, part.ref)),
+  )
   if (valueMatches.length === 1) {
     return { kind: 'match', entry: valueMatches[0], tier: 'valueRegex' }
   }
@@ -289,6 +326,20 @@ export interface PinMapResult {
   warnings: string[]
 }
 
+/** Machine prefix of every unverified-pin-map warning. */
+export const POLARITY_UNVERIFIED_PREFIX = 'pinmap-unverified:'
+
+/**
+ * True for footprint names that come from the JLC/EasyEDA ecosystem: the JLC
+ * library prefix ("JLC-MCP:SMA_...") or the bare dimension-pattern shape
+ * ("SMA_L4.2-W2.6-LS5.0-RD_1"). KiCad-official names never have that shape (their
+ * dimension tokens carry an "mm" suffix). Pad numbering on these footprints
+ * follows the part, not any convention, so the name cannot tell polarity.
+ */
+export function isEasyEdaOriginFootprint(libId: string): boolean {
+  return /^JLC/i.test(libId) || /_L\d+(\.\d+)?-W\d+/i.test(libId)
+}
+
 /**
  * Select the best pin map for a matched entry given the part's footprint (libId).
  *
@@ -300,6 +351,25 @@ export interface PinMapResult {
  */
 export function selectPinMap(entry: LibraryEntry, libId: string): PinMapResult {
   const warnings: string[] = []
+
+  // JLC/EasyEDA-origin footprint on a polarized two-terminal part: the name
+  // says nothing about which pad is the anode (issue #5), so no pinMaps key may
+  // claim it. Hand back the KiCad-convention default, flagged unverified; the
+  // attached schematic's A/K names (pinMapFromSchematicPins) or a Model Doctor
+  // override are what make the polarity known.
+  if (
+    isEasyEdaOriginFootprint(libId) &&
+    isTwoTerminalPolarizedEntry(entry) &&
+    entry.defaultPinMap &&
+    Object.keys(entry.defaultPinMap).length > 0
+  ) {
+    warnings.push(
+      `${POLARITY_UNVERIFIED_PREFIX} polarity of "${libId}" cannot be known from a JLC/EasyEDA footprint name ` +
+      `(pad 1 is the anode on some and the cathode on others); assumed the KiCad convention, pad 1 = cathode. ` +
+      `Attach the schematic or set the pin map in Model Doctor to confirm`
+    )
+    return { pinMap: entry.defaultPinMap, warnings }
+  }
 
   // Try each pinMaps key as a regex
   for (const [pattern, pinMap] of Object.entries(entry.pinMaps)) {

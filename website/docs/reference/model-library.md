@@ -25,7 +25,7 @@ Two-terminal, anode = pin 1, cathode = pin 2. Zeners and the TVS are modeled as 
 
 ## LEDs: primitive
 
-Matched by value (the word "LED" plus a color). Forward voltage is tuned per color. LEDs get a current sense that drives their [3D glow](../guides/energize).
+Matched by value (the word "LED" plus a color, such as `Green`, `LED_green` or `Green LED`). Forward voltage is tuned per color. An LED on an `LED_*` footprint whose value is not one of these colors (`Yellow`, `Amber`, `LED 0805`) resolves to the generic LED with a fallback warning. LEDs get a current sense that drives their [3D glow](../guides/energize).
 
 | Part | Matches | Approx. Vf character |
 | --- | --- | --- |

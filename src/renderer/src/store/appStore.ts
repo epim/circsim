@@ -32,6 +32,8 @@ import { parseSchematicSimData, type SchematicSimData } from '../../../core/kica
 import { extract, suggestGround, suggestSupplies, type Circuit } from '../../../core/netlist/extract'
 import {
   resolveAll,
+  ngspiceLogDiagnostic,
+  applyDeckDiagnostics,
   type UserStubOverride,
   type BomData,
 } from '../../../core/models/resolve'
@@ -66,7 +68,7 @@ import {
   type DarkLedNote,
   type DiagnoseInput,
 } from '../../../core/live/coach'
-import { parseBom } from '../../../core/bom/parseBom'
+import { parseBom, describeBomImport, type BomParseResult } from '../../../core/bom/parseBom'
 import type { BoardModel } from '../../../core/kicad/types'
 import { runCritic } from '../../../core/critic/run'
 import type { CriticReport, Finding, OpResult } from '../../../core/critic/types'
@@ -771,6 +773,18 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   let boardHooks: BoardHooks | null = null
   const ringBuffers = new Map<string /* probe id */, RingBuffer>()
 
+  /** Previous ngspice log line: the "could not find a valid modelname" message does not name its card; the line before it does. */
+  let previousLogText: string | undefined
+
+  /** Put BOM import notes (parse errors, unmatched rows) on the sim log as warnings. */
+  function logBomImport(parsed: BomParseResult, boardRefs: string[]): void {
+    const notes = describeBomImport(parsed, boardRefs)
+    if (notes.length === 0) return
+    store.setState(s => ({
+      logLines: [...s.logLines, ...notes.map(text => ({ level: 'warn' as const, text }))].slice(-2000),
+    }))
+  }
+
   // ── energized re-op coalescing (First Light dimmer — Spec §4) ─────────────────
   // A knob drag fires a flood of updateInstrument() calls. Re-solving the op on
   // every one would (a) overload SimHost and (b) drop the FINAL value when the
@@ -986,9 +1000,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
       // Optional BOM.
       let bom: BomData | null = null
+      let bomParsed: BomParseResult | null = null
       if (opts?.bomText) {
-        const parsed = parseBom(opts.bomText)
-        bom = parsed.rows
+        bomParsed = parseBom(opts.bomText)
+        bom = bomParsed.rows
       }
 
       // Extract once (no ground) to run the ground heuristic, then re-extract
@@ -1035,6 +1050,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
       // Keep ring buffers in sync with the (possibly auto-attached) instruments.
       syncRingBuffers(instruments)
+
+      // A BOM that failed to parse, or whose rows match no board ref, says so in
+      // the log instead of silently doing nothing (issue #4).
+      if (bomParsed) logBomImport(bomParsed, circuit.parts.map(p => p.ref))
 
       // Resolve with current (empty) overrides.
       get().reResolve()
@@ -1091,6 +1110,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     setBomFromText(csvText) {
       const parsed = parseBom(csvText)
       set({ bom: parsed.rows })
+      logBomImport(parsed, (get().circuit?.parts ?? []).map(p => p.ref))
       get().reResolve()
       get().markDeckDirty()
     },
@@ -1764,11 +1784,29 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         case 'ready':
           set({ ngspiceVersion: event.ngspiceVersion })
           break
-        case 'log':
+        case 'log': {
           set(s => ({
             logLines: [...s.logLines, { level: event.level, text: event.text }].slice(-2000),
           }))
+          // ngspice can drop or reject a part while the part still reads "ok" here
+          // (issues #6, #7): promote those log lines to per-part status.
+          const before = previousLogText
+          previousLogText = event.text
+          if (/instance line, ignored|DC 0 assumed|valid modelname/i.test(event.text)) {
+            const { circuit, resolutions } = get()
+            if (circuit) {
+              const diag = ngspiceLogDiagnostic(event.text, before, circuit.parts.map(p => p.ref))
+              if (diag) {
+                const next = applyDeckDiagnostics(resolutions, [diag])
+                if (next !== resolutions) {
+                  set({ resolutions: next })
+                  get().markDeckDirty()
+                }
+              }
+            }
+          }
           break
+        }
         case 'opResult': {
           // powerOn is the sole committer for its own ops — skip the interim
           // pass-1 (family-default) result it is about to correct in pass 2 (FIX 2).
