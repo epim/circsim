@@ -14,6 +14,7 @@
 
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -144,6 +145,82 @@ describe('ngspice resources layout', () => {
       expect(manifest.version).toBe(configVersion)
     }
   )
+
+  // -------------------------------------------------------------------------
+  // Issue #15: libngspice must link only the C/C++ runtime. The .deb, AppImage
+  // and dmgs bundle no third-party libraries, so an extra dependency (libfftw3)
+  // makes the dlopen fail on a clean machine and the simulator never starts.
+  // -------------------------------------------------------------------------
+  describe('dynamic dependencies (issue #15)', () => {
+    const linuxAllowed = new Set([
+      'libc.so.6',
+      'libm.so.6',
+      'libdl.so.2',
+      'libpthread.so.0',
+      'librt.so.1',
+      'libgcc_s.so.1',
+      'libstdc++.so.6',
+      'ld-linux-x86-64.so.2',
+    ])
+    const isAllowed = (dep: string): boolean =>
+      process.platform === 'darwin'
+        ? dep.startsWith('/usr/lib/') || dep.startsWith('/System/Library/')
+        : linuxAllowed.has(dep)
+
+    const libName = process.platform === 'darwin' ? 'libngspice.dylib' : 'libngspice.so'
+    const libPath = path.join(platformDir, libName)
+    const sourceBuilt =
+      resourcesExist &&
+      process.platform !== 'win32' &&
+      (JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { builtFromSource?: boolean })
+        .builtFromSource === true
+
+    // Independent of the build script's own gate: read the produced library.
+    function readDynamicDeps(): string[] | null {
+      try {
+        if (process.platform === 'linux') {
+          const out = execFileSync('readelf', ['-d', libPath], { encoding: 'utf8' })
+          return [...out.matchAll(/\(NEEDED\)\s+Shared library: \[(.+?)\]/g)].map(m => m[1])
+        }
+        const out = execFileSync('otool', ['-L', libPath], { encoding: 'utf8' })
+        const self = execFileSync('otool', ['-D', libPath], { encoding: 'utf8' })
+          .split('\n')[1]
+          ?.trim()
+        return out
+          .split('\n')
+          .slice(1)
+          .map(l => l.trim().replace(/ \(compatibility version.*$/, ''))
+          .filter(l => l.length > 0 && l !== self)
+      } catch {
+        return null // readelf/otool not installed: the build gate already covered it
+      }
+    }
+
+    it('build-ngspice.sh builds without FFTW3 and gates on dynamic dependencies', () => {
+      const script = fs.readFileSync(path.join(PROJECT_ROOT, 'scripts', 'build-ngspice.sh'), 'utf8')
+      expect(script).toMatch(/--with-fftw3=no/)
+      expect(script).toMatch(/readelf -d/)
+      expect(script).toMatch(/otool -L/)
+      expect(script).toMatch(/dynamicDeps/)
+    })
+
+    it.skipIf(!sourceBuilt)('manifest.json records dynamicDeps, all within the C/C++ runtime', () => {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+        dynamicDeps?: string[]
+      }
+      expect(Array.isArray(manifest.dynamicDeps)).toBe(true)
+      expect(manifest.dynamicDeps!.length).toBeGreaterThan(0)
+      const extra = manifest.dynamicDeps!.filter(d => !isAllowed(d))
+      expect(extra).toEqual([])
+    })
+
+    it.skipIf(!sourceBuilt)('the built library itself links only the C/C++ runtime', () => {
+      const deps = readDynamicDeps()
+      if (deps === null) return
+      expect(deps.length).toBeGreaterThan(0)
+      expect(deps.filter(d => !isAllowed(d))).toEqual([])
+    })
+  })
 
   // This test always runs (no skip) — it tests the ABSENCE of resources
   // before the fetch script has been run, to confirm the test framework works.

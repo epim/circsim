@@ -17,7 +17,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -66,6 +66,9 @@ jobs:
       # Cache-key suffix -r2: earlier source builds shipped a manifest whose
       # cmFiles held only the LAST .cm (env-var bug in build-ngspice.sh) —
       # bumped so runners rebuild with the fixed script.
+      # Suffix -r3: libngspice.so used to link libfftw3 (issue #15); the build
+      # now passes --with-fftw3=no and gates on its dynamic dependencies, so
+      # caches from before that change are dropped.
       - name: Cache ngspice binaries (Windows)
         if: runner.os == 'Windows'
         uses: actions/cache@v4
@@ -80,7 +83,7 @@ jobs:
         id: cache-ngspice-darwin-x64
         with:
           path: resources/ngspice/darwin-x64
-          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
+          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}-r3-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Cache ngspice binaries (macOS arm64)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
@@ -88,7 +91,7 @@ jobs:
         id: cache-ngspice-darwin-arm64
         with:
           path: resources/ngspice/darwin-arm64
-          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
+          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}-r3-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Cache ngspice binaries (Linux)
         if: runner.os == 'Linux'
@@ -96,7 +99,7 @@ jobs:
         id: cache-ngspice-linux
         with:
           path: resources/ngspice/linux-x64
-          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
+          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r3-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Install macOS build tools (macOS only)
         if: runner.os == 'macOS' && (steps.cache-ngspice-darwin-x64.outputs.cache-hit != 'true' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true')
@@ -106,7 +109,7 @@ jobs:
         if: runner.os == 'Linux' && steps.cache-ngspice-linux.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y autoconf automake libtool libfftw3-dev bison flex
+          sudo apt-get install -y autoconf automake libtool bison flex
 
       - name: Fetch ngspice DLL (Windows)
         if: runner.os == 'Windows' && steps.cache-ngspice-win.outputs.cache-hit != 'true'
@@ -185,6 +188,23 @@ jobs:
 
       - name: Model characterization (datasheet values, real ngspice)
         run: npm run test:characterization
+
+      # Packaged launch smoke (macOS): package the host-arch .app with
+      # electron-builder --dir and launch it through Playwright, asserting the
+      # bundled libngspice loads and a real op solve completes (packaged-smoke
+      # spec). Before this, no step launched a packaged mac build at all.
+      # CIRCSIM_REQUIRE_PACKAGED=1 makes a missing .app a failure, not a skip.
+      - name: Package unpacked app (macOS, for packaged-smoke spec)
+        if: runner.os == 'macOS'
+        run: |
+          npm run build
+          npx electron-builder --dir
+
+      - name: Packaged app launch smoke (macOS)
+        if: runner.os == 'macOS'
+        run: npx playwright test --config playwright.config.ts e2e/packaged-smoke.spec.ts
+        env:
+          CIRCSIM_REQUIRE_PACKAGED: '1'
 
   # ===========================================================================
   # KiCad load job: every fixture and bundled sample must load in a real KiCad
@@ -291,7 +311,7 @@ jobs:
         id: cache-ngspice-linux
         with:
           path: resources/ngspice/linux-x64
-          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
+          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r3-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Fetch ngspice DLL (Windows)
         if: runner.os == 'Windows' && steps.cache-ngspice-win.outputs.cache-hit != 'true'
@@ -301,7 +321,7 @@ jobs:
         if: runner.os == 'Linux' && steps.cache-ngspice-linux.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y autoconf automake libtool libfftw3-dev bison flex
+          sudo apt-get install -y autoconf automake libtool bison flex
 
       - name: Build ngspice from source (Linux, cache miss only)
         if: runner.os == 'Linux' && steps.cache-ngspice-linux.outputs.cache-hit != 'true'
@@ -315,8 +335,11 @@ jobs:
       - name: Build app bundles
         run: npm run build
 
-      - name: Package unpacked app (Windows, for packaged-smoke spec)
-        if: runner.os == 'Windows'
+      # Windows and Linux both package an unpacked app so the packaged-smoke
+      # spec launches it (dist/win-unpacked, dist/linux-unpacked). On Linux this
+      # is the check that would have caught issue #15: the packaged libngspice.so
+      # must dlopen on the runner with only the declared libraries around.
+      - name: Package unpacked app (Windows and Linux, for packaged-smoke spec)
         run: npx electron-builder --dir
 
       # OMP_*: the Windows ngspice DLL links OpenMP (libomp140); on shared
@@ -327,6 +350,7 @@ jobs:
         if: runner.os == 'Windows'
         run: npm run test:e2e
         env:
+          CIRCSIM_REQUIRE_PACKAGED: '1'
           OMP_NUM_THREADS: '1'
           OMP_WAIT_POLICY: 'PASSIVE'
 
@@ -335,6 +359,7 @@ jobs:
         run: xvfb-run --auto-servernum -- npm run test:e2e
         env:
           ELECTRON_DISABLE_SANDBOX: '1'
+          CIRCSIM_REQUIRE_PACKAGED: '1'
           OMP_NUM_THREADS: '1'
           OMP_WAIT_POLICY: 'PASSIVE'
 
@@ -419,7 +444,7 @@ jobs:
         id: cache-ngspice-darwin-x64
         with:
           path: resources/ngspice/darwin-x64
-          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
+          key: ngspice-darwin-x64-v${{ steps.ngspice-version.outputs.version }}-r3-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Cache ngspice binaries (macOS arm64)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
@@ -427,7 +452,7 @@ jobs:
         id: cache-ngspice-darwin-arm64
         with:
           path: resources/ngspice/darwin-arm64
-          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
+          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}-r3-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Cache ngspice binaries (Linux)
         if: runner.os == 'Linux'
@@ -435,7 +460,7 @@ jobs:
         id: cache-ngspice-linux
         with:
           path: resources/ngspice/linux-x64
-          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
+          key: ngspice-linux-x64-v${{ steps.ngspice-version.outputs.version }}-r3-${{ steps.ngspice-version.outputs.pin-src }}
 
       - name: Install macOS build tools (macOS only)
         if: runner.os == 'macOS' && (steps.cache-ngspice-darwin-x64.outputs.cache-hit != 'true' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true')
@@ -445,7 +470,7 @@ jobs:
         if: runner.os == 'Linux' && steps.cache-ngspice-linux.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y autoconf automake libtool libfftw3-dev bison flex
+          sudo apt-get install -y autoconf automake libtool bison flex
 
       - name: Fetch ngspice DLL (Windows)
         if: runner.os == 'Windows' && steps.cache-ngspice-win.outputs.cache-hit != 'true'
@@ -503,6 +528,29 @@ jobs:
             exit 1
           fi
           echo "ok: $APP bundles ngspice/$WANT and exactly one dmg was built"
+
+      # Issue #15 guard on the REAL .deb: install it into a bare Debian image
+      # with only its declared Depends (apt resolves those, nothing else) and
+      # require every shared library of the bundled libngspice to resolve. A
+      # regression that links a library the deb does not declare (as libfftw3
+      # once did) fails here, before the installer is attached to the release.
+      - name: Verify deb libngspice loads with only declared Depends (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          DEB="$(ls dist/*.deb | head -1)"
+          docker run --rm -e DEB_NAME="$(basename "$DEB")" -v "$PWD/dist:/dist:ro" debian:bookworm-slim bash -euxc '
+            apt-get update -q
+            apt-get install -y --no-install-recommends "/dist/${DEB_NAME}"
+            LIB=/opt/circsim/resources/ngspice/linux-x64/libngspice.so
+            test -f "$LIB"
+            OUT="$(ldd "$LIB")"
+            echo "$OUT"
+            if echo "$OUT" | grep -q "not found"; then
+              echo "::error::libngspice.so has unresolved libraries with only the deb Depends installed"
+              exit 1
+            fi
+          '
 
       - name: Upload build artifacts (CI retention)
         uses: actions/upload-artifact@v4
