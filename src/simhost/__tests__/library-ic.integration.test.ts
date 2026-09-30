@@ -941,7 +941,7 @@ describe.skipIf(!haveNgspice)('M10 — supply-derived digital vHigh (CD40106 RC 
     // Schmitt B-source carries the 5 V-derived thresholds: mid=2.5, V_T+=3.0 (60%),
     // V_T-=2.0 (40%), rail=5.0 — not the 12 V family default.
     expect(text).toContain(
-      'b_u1_1 out 0 V = (v(osc) > (v(out) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000',
+      'b_u1_1 u1_o_1y 0 V = (v(osc) > (v(u1_o_1y) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000',
     )
     // The abandoned adc/dac path and the 12 V default are gone.
     expect(text).not.toContain('adc_bridge')

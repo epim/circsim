@@ -776,13 +776,32 @@ interface Logic74Template {
   outputs: string[]
   /** Power-pin SIGNAL names (e.g. VCC/GND); the pinMap marks which pads carry them. */
   power?: { vcc: string; gnd: string }
+  /**
+   * Input SIGNAL names that are active LOW (PRE_N, CLR_N, MR_N). The XSPICE
+   * d_dff set/reset pins are active HIGH, so the expander inverts these before
+   * they reach a flip-flop's set or reset terminal.
+   */
+  activeLow?: string[]
   delaysNs: number
+}
+/**
+ * Output stage of a logic family: a Thevenin resistance plus a drive-current
+ * limit, both quoted at `atVolts` and scaled with the rail actually in use
+ * (resistance inversely with vHigh, current limit proportionally, so the knee
+ * voltage rOhms * iMaxMa stays constant). Absent in a family file means an
+ * ideal output source (the historic behavior, kept for hand-written fixtures).
+ */
+interface Logic74Output {
+  atVolts: number
+  rOhms: number
+  iMaxMa: number
 }
 interface Logic74File {
   family: {
     vHighDefault: number
     adc: { inLowFrac: number; inHighFrac: number }
     schmittAdc: { inLowFrac: number; inHighFrac: number }
+    output?: Logic74Output
   }
   templates: Record<string, Logic74Template>
 }
@@ -1070,6 +1089,33 @@ function expandXspiceDigital(
   const inLow = (adc.inLowFrac * vHigh).toFixed(4)
   const inHigh = (adc.inHighFrac * vHigh).toFixed(4)
 
+  // Output stage (issue #12). A real logic output is not an ideal source: it is
+  // a finite resistance that saturates at a drive-current limit. The gate (or
+  // dac_bridge) drives an unloaded per-output source node; a behavioral current
+  // source carries it to the pad as I = iMax * tanh(dV / (rOut * iMax)), which
+  // is a rOut resistor for small signals and clamps at +-iMax. The same stage
+  // sources (output high) and sinks (output low). A family without an `output`
+  // block keeps the ideal source.
+  const outCfg = logic.family.output
+  const outScale = outCfg && outCfg.atVolts > 0 ? vHigh / outCfg.atVolts : undefined
+  const stage =
+    outCfg && outScale !== undefined && outCfg.rOhms > 0 && outCfg.iMaxMa > 0
+      ? {
+          card: (sig: string, srcN: string, padN: string): string => {
+            const iMax = (outCfg.iMaxMa * outScale) / 1000
+            const knee = (outCfg.rOhms * outCfg.iMaxMa) / 1000
+            const num = (x: number): string => String(Number(x.toPrecision(5)))
+            return (
+              `b_${refLc}_out_${sig.toLowerCase()} ${srcN} ${padN} I = ` +
+              `${num(iMax)}*tanh((v(${srcN})-v(${padN}))/${num(knee)})`
+            )
+          },
+        }
+      : null
+  /** Unloaded source node behind a pad (the pad itself when there is no output stage). */
+  const srcNode = (sig: string): string =>
+    stage ? `${refLc}_o_${sig.toLowerCase()}` : aNode(sig)
+
   // Schmitt-trigger inverters: expand each gate to a self-referential behavioral
   // B-source that encodes TRUE hysteresis (state retention) instead of the
   // adc_bridge → d_inverter → dac_bridge chain. The adc_bridge has no memory —
@@ -1087,14 +1133,19 @@ function expandXspiceDigital(
     for (const g of tpl.gates) {
       gi++
       const inN = aNode(g.in![0])
-      const outN = aNode(g.out as string)
+      const padN = aNode(g.out as string)
+      // The flip state lives on the UNLOADED source node, so a heavy load that
+      // sags the pad cannot disturb the hysteresis.
+      const srcN = srcNode(g.out as string)
       lines.push(
-        `b_${refLc}_${gi} ${outN} 0 V = ` +
-          `(v(${inN}) > (v(${outN}) > ${mid} ? ${inHigh} : ${inLow})) ? 0 : ${vHigh.toFixed(4)}`,
+        `b_${refLc}_${gi} ${srcN} 0 V = ` +
+          `(v(${inN}) > (v(${srcN}) > ${mid} ? ${inHigh} : ${inLow})) ? 0 : ${vHigh.toFixed(4)}`,
       )
-      // Both the input and output analog nodes are single-node island terminals
-      // (matches the old adc-input + dac-output push exactly).
-      analogNodes.push(inN, outN)
+      if (stage) lines.push(stage.card(g.out as string, srcN, padN))
+      // Both the input and the pad are single-node island terminals (matches the
+      // old adc-input + dac-output push exactly). The source node is referenced
+      // to ground by its own voltage source and is never a floating island.
+      analogNodes.push(inN, padN)
     }
     return { lines, expanded: true, analogNodes }
   }
@@ -1122,6 +1173,8 @@ function expandXspiceDigital(
   }
 
   // Gates on digital event nodes.
+  const activeLow = new Set(tpl.activeLow ?? [])
+  const invertedControls = new Set<string>()
   let gi = 0
   for (const g of tpl.gates) {
     gi++
@@ -1129,8 +1182,22 @@ function expandXspiceDigital(
     if (g.prim === 'd_dff') {
       // d_dff terminals: data clk set reset | q qbar. set/reset that are not real
       // chip inputs get tied off to a per-instance (floating-high) node.
-      const set = g.set && tpl.inputs.includes(g.set) ? dNode(g.set) : `${inst}_nset`
-      const reset = g.reset && tpl.inputs.includes(g.reset) ? dNode(g.reset) : `${inst}_nrst`
+      // The XSPICE d_dff set/reset pins are active HIGH; a template signal named
+      // in `activeLow` (PRE_N, CLR_N, MR_N) goes through one d_inverter per
+      // signal first, so parking the pin high (inactive) leaves the flop free.
+      const ctl = (sig: string | undefined, tieOff: string): string => {
+        if (!sig || !tpl.inputs.includes(sig)) return tieOff
+        if (!activeLow.has(sig)) return dNode(sig)
+        const inv = `${dNode(sig)}_h`
+        if (!invertedControls.has(sig)) {
+          invertedControls.add(sig)
+          lines.push(`.model a_${refLc}_inv_${sig.toLowerCase()}_m d_inverter(rise_delay=${rd} fall_delay=${rd})`)
+          lines.push(`a_${refLc}_inv_${sig.toLowerCase()} ${dNode(sig)} ${inv} a_${refLc}_inv_${sig.toLowerCase()}_m`)
+        }
+        return inv
+      }
+      const set = ctl(g.set, `${inst}_nset`)
+      const reset = ctl(g.reset, `${inst}_nrst`)
       lines.push(
         `.model ${inst}_m d_dff(clk_delay=${rd} set_delay=${rd} reset_delay=${rd} ` +
           `rise_delay=${rd} fall_delay=${rd})`,
@@ -1153,7 +1220,11 @@ function expandXspiceDigital(
 
   // One dac_bridge per output signal: digital event node → analog board node.
   for (const sig of tpl.outputs) {
-    lines.push(`abr_${refLc}_out_${sig.toLowerCase()} [${dNode(sig)}] [${aNode(sig)}] ${dacModel}`)
+    const srcN = srcNode(sig)
+    lines.push(`abr_${refLc}_out_${sig.toLowerCase()} [${dNode(sig)}] [${srcN}] ${dacModel}`)
+    if (stage) lines.push(stage.card(sig, srcN, aNode(sig)))
+    // The pad is the bridge's single analog terminal for island purposes; the
+    // source node is driven by the bridge itself.
     analogNodes.push(aNode(sig))
   }
 

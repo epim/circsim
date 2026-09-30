@@ -43,6 +43,8 @@ Some behavioral models are deliberately *simplified operating-point stubs*: a ba
 
 The 74HC and CD4000 logic families use **behavioral digital models** (built on ngspice's XSPICE extension, which lets a real logic gate live inside an analog simulation). The gate does the right truth table with datasheet-typical thresholds and delays. Schmitt-trigger parts (the 74HC14, CD40106) carry true hysteresis, so an *RC astable* (an oscillator made from just a resistor, a capacitor, and one gate) built around one actually oscillates.
 
+Every gate output has a finite drive: roughly 40 ohm and 25 mA for 74HC at 5 V, roughly 400 ohm and 3 mA for CD4000 at 5 V (both scale with the rail). A logic pin wired straight to an LED, a relay coil, or a heavy load therefore sags toward the load instead of holding the rail. The active-low clear, preset, and master-reset pins of the 74HC74, 74HC164, and 74HC595 behave as active-low, so tying them high leaves the register free to clock.
+
 ## Stubs and interactive pins {#stubs-and-interactive-pins}
 
 Some parts *can't* be modeled, and circsim represents them honestly rather than faking it.

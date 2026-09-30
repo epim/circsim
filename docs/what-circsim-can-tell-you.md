@@ -10,7 +10,7 @@ circsim runs a SPICE simulation of your circuit. SPICE simulations are powerful,
 
 **Signal waveforms at the schematic level.** Resistors, capacitors, inductors, standard diodes, BJTs, and op-amps are modeled accurately enough to catch the major design mistakes: wrong RC time constants, op-amp clipping, oscillator frequency off by a factor of 10.
 
-**Logic gate behavior.** The bundled 74HC library uses datasheet-typical propagation delays and drive strengths. Truth tables and simple timing diagrams are trustworthy.
+**Logic gate behavior.** The bundled 74HC and CD4000 libraries use datasheet-typical propagation delays and a simple output stage: a source resistance plus a drive-current limit, so a gate output sags under load and a bare LED or a short to ground draws a bounded current instead of amps. Truth tables and simple timing diagrams are trustworthy. The output stage is a typical-value approximation: it does not model the difference between source and sink strength, temperature, or the exact shape of the datasheet output curves.
 
 **The NE555 timer.** The bundled NE555 model is a behavioral subcircuit derived from the datasheet block diagram. Oscillation frequency and duty cycle match the RC formula within a few percent.
 
