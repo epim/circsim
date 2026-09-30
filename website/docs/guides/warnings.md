@@ -39,7 +39,7 @@ You can **minimize** it (the **»** button) to a compact header badge (**⚠ N a
 
 *(dismissable toasts)*
 
-- **Simulator restarted**: the isolated SPICE engine crashed and recovered automatically. Your work is intact; just re-run. (If it says it *couldn't* restart, restart circsim.)
+- **Simulator restarted**: the isolated SPICE engine crashed and recovered automatically. Your work is intact. If the bench was running, it restarts on its own from time zero. If the bench was paused, the paused run cannot be recovered: the notice says so, the bench goes back to idle, and pressing **Run** starts it again. (If it says it *couldn't* restart, restart circsim.)
 - **Bench restarted**: a long continuous transient hit its memory/time window and restarted to stay bounded. Scope history is kept. Note that sequential-logic state (flip-flops, counters) resets on a bench restart.
 
 ## The Sim Log

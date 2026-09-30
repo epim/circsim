@@ -105,6 +105,7 @@ export default function WarningsBar(): React.ReactElement | null {
           {crashNotice.willRespawn
             ? 'The simulation engine crashed and is recovering automatically.'
             : 'The simulation engine crashed and could not be restarted.'}
+          {crashNotice.pausedRunLost && ' Your paused run was lost; press Run to start it again.'}
           <button style={dismissBtn} onClick={() => store.setState({ crashNotice: null })}>
             ×
           </button>
