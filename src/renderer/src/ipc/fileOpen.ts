@@ -125,3 +125,20 @@ export function classifyFile(path: string): 'board' | 'schematic' | 'bom' | 'unk
   if (ext === '.csv' || ext === '.tsv' || ext === '.txt') return 'bom'
   return 'unknown'
 }
+
+/** Resolves a dropped File to its absolute on-disk path (window.circsim.getPathForFile). */
+export type GetPathForFileFn = (file: File) => string
+
+/**
+ * Absolute path of a file dropped onto the window, or '' when it has none
+ * (a File built in JS, or a bridge that throws). Electron 32 removed the
+ * nonstandard File.path, so the path comes from the preload's
+ * webUtils.getPathForFile bridge; callers fall back to File.text() on ''.
+ */
+export function droppedFilePath(file: File, getPathForFile: GetPathForFileFn): string {
+  try {
+    return getPathForFile(file) || ''
+  } catch {
+    return ''
+  }
+}

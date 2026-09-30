@@ -62,6 +62,11 @@ declare global {
        * BEFORE readFile so a missing sidecar never logs an ENOENT stack in main.
        */
       fileExists(path: string): Promise<boolean>
+      /**
+       * Absolute on-disk path of a dropped File ('' when it has none). Backed by
+       * Electron's webUtils.getPathForFile (File.path was removed in Electron 32).
+       */
+      getPathForFile(file: File): string
       getSimPort(): Promise<MessagePort>
       onSimhostCrashed(cb: (payload: CircsimCrashedPayload) => void): () => void
       platformPaths(): Promise<CircsimPlatformPaths>

@@ -12,6 +12,7 @@ import {
   joinPath,
   classifyFile,
   openProjectFromPath,
+  droppedFilePath,
 } from '../../ipc/fileOpen'
 
 describe('fileOpen — path helpers', () => {
@@ -162,5 +163,31 @@ describe('fileOpen — fileExists probing (F3, no ENOENT stack on board open)', 
     const opened = await openProjectFromPath('/p/proj.kicad_pcb', readFile)
     expect(opened.schematicText).toBeUndefined()
     expect(reads).toContain('/p/proj.kicad_sch')
+  })
+})
+
+describe('fileOpen - droppedFilePath (#34)', () => {
+  const file = { name: 'board.kicad_pcb' } as File
+
+  it('returns the path the bridge resolves', () => {
+    expect(droppedFilePath(file, () => '/p/board.kicad_pcb')).toBe('/p/board.kicad_pcb')
+  })
+
+  it('returns empty when the file has no path, so callers fall back to text()', () => {
+    expect(droppedFilePath(file, () => '')).toBe('')
+  })
+
+  it('returns empty when the bridge throws or is missing', () => {
+    expect(
+      droppedFilePath(file, () => {
+        throw new Error('no path')
+      }),
+    ).toBe('')
+    expect(droppedFilePath(file, undefined as unknown as (f: File) => string)).toBe('')
+  })
+
+  it('does not read the removed Electron File.path property', () => {
+    const legacy = { name: 'board.kicad_pcb', path: '/legacy/board.kicad_pcb' } as unknown as File
+    expect(droppedFilePath(legacy, () => '')).toBe('')
   })
 })
