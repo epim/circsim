@@ -10,10 +10,11 @@
  *   4. the parser never throws, and a defined result is a finite non-negative number
  *      for inputs that look like a value
  *
- * Two properties currently fail on real defects tracked by #8 (exponent notation
- * and the lowercase-m European form). They are written as `it.fails` so the suite
- * stays green now and turns red the moment #8 is fixed, at which point the
- * `it.fails` wrapper is removed.
+ *   5. alternate spellings of one value (uppercase U/N/P, Greek mu, decimal comma,
+ *      whitespace, Ohm words, exponent notation) parse to the same number (#8)
+ *
+ * Exponent-form round trips and the lowercase-m European form (2m2 = 2.2 milli)
+ * were `it.fails` markers for #8 and are now ordinary properties.
  */
 
 import * as fc from 'fast-check'
@@ -50,10 +51,9 @@ describe('parseValue vs formatSpiceValue', () => {
     )
   })
 
-  // Known defect (#8): parseValue has no exponent-notation branch, so the
-  // "4.7e-06" and "1e+10" forms formatSpiceValue emits below 1 mOhm and above
-  // 1e9 do not parse back. Remove `.fails` when #8 lands.
-  it.fails('known failing #8: exponent-form output (under 0.001 or 1e9 and over) round-trips', () => {
+  // formatSpiceValue emits "4.7e-06" and "1e+10" below 1 mOhm and above 1e9;
+  // those exponent forms must parse back (#8).
+  it('exponent-form output (under 0.001 or 1e9 and over) round-trips', () => {
     fc.assert(
       fc.property(
         fc.oneof(positive(1e-15, 0.000999), positive(1e9, 1e12)),
@@ -145,9 +145,9 @@ describe('parseValue spellings', () => {
     )
   })
 
-  // Known defect (#8): the uppercase-M European branch is compiled with the i
-  // flag, so 2m2 (2.2 milli in the file's own convention) reads as 2.2 mega.
-  it.fails('known failing #8: lowercase-m European form (2m2, 4m7) is milli', () => {
+  // 2m2 is 2.2 milli in the file's own convention; the European M branch used
+  // to be case-insensitive and read it as 2.2 mega (#8).
+  it('lowercase-m European form (2m2, 4m7) is milli', () => {
     fc.assert(
       fc.property(fc.integer({ min: 1, max: 99 }), fc.integer({ min: 1, max: 99 }), (a, b) => {
         const got = parseValue(`${a}m${b}`, 'R')
@@ -190,6 +190,121 @@ describe('parseValue spellings', () => {
   })
 })
 
+describe('parseValue alternate spellings (issue #8)', () => {
+  const mu = fc.constantFrom('u', 'U', 'µ', 'μ')
+  const kind = fc.constantFrom<'R' | 'C' | 'L'>('R', 'C', 'L')
+  const fracArb = fc.tuple(fc.integer({ min: 0, max: 999 }), fc.integer({ min: 1, max: 99 }))
+
+  it('micro, nano and pico prefixes are the same in any accepted case or mu glyph', () => {
+    const prefix = fc.constantFrom<[string, number]>(
+      ['u', 1e-6],
+      ['U', 1e-6],
+      ['µ', 1e-6],
+      ['μ', 1e-6],
+      ['n', 1e-9],
+      ['N', 1e-9],
+      ['p', 1e-12],
+      ['P', 1e-12]
+    )
+    fc.assert(
+      fc.property(mantissaArb, prefix, fc.constantFrom('', 'F', ' F'), (m, [p, mult], unit) => {
+        const got = parseValue(`${m}${p}${unit}`, 'C')
+        expect(got).toBeDefined()
+        expect(relErr(got as number, Number(m) * mult)).toBeLessThan(1e-9)
+      }),
+      { numRuns: 500 }
+    )
+  })
+
+  it('European form accepts every micro spelling and uppercase N/P', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 0, max: 999 }), mu, fc.integer({ min: 1, max: 999 }), (a, sep, b) => {
+        const got = parseValue(`${a}${sep}${b}`, 'C')
+        expect(got).toBeDefined()
+        expect(relErr(got as number, Number(`${a}.${b}`) * 1e-6)).toBeLessThan(1e-9)
+      }),
+      { numRuns: 300 }
+    )
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 999 }),
+        fc.constantFrom<[string, number]>(['N', 1e-9], ['P', 1e-12]),
+        fc.integer({ min: 1, max: 999 }),
+        (a, [sep, mult], b) => {
+          const got = parseValue(`${a}${sep}${b}`, 'C')
+          expect(got).toBeDefined()
+          expect(relErr(got as number, Number(`${a}.${b}`) * mult)).toBeLessThan(1e-9)
+        }
+      ),
+      { numRuns: 300 }
+    )
+  })
+
+  it('a decimal comma reads as a decimal point', () => {
+    fc.assert(
+      fc.property(
+        fracArb.filter(([a, b]) => !(a >= 1 && b >= 100)),
+        prefixArb,
+        kind,
+        ([a, b], [p], k) => {
+          const dot = parseValue(`${a}.${b}${p}${unitFor(k)}`, k)
+          const comma = parseValue(`${a},${b}${p}${unitFor(k)}`, k)
+          expect(dot).toBeDefined()
+          expect(comma).toBe(dot)
+        }
+      ),
+      { numRuns: 400 }
+    )
+  })
+
+  it('whitespace between number, prefix and unit never changes the value', () => {
+    const gap = fc.constantFrom('', ' ', '  ', '	')
+    const prefixNoEmpty = prefixArb.filter(([p]) => p !== '')
+    fc.assert(
+      fc.property(mantissaArb, prefixNoEmpty, kind, gap, gap, (m, [p], k, g1, g2) => {
+        const tight = parseValue(`${m}${p}${unitFor(k)}`, k)
+        expect(tight).toBeDefined()
+        expect(parseValue(`${m}${g1}${p}${g2}${unitFor(k)}`, k)).toBe(tight)
+      }),
+      { numRuns: 400 }
+    )
+  })
+
+  it('Ohm, Ohms and the omega signs are the unit, never a multiplier', () => {
+    const unit = fc.constantFrom('Ohm', 'ohm', 'OHM', 'Ohms', 'Ω', 'Ω')
+    fc.assert(
+      fc.property(mantissaArb, prefixArb, unit, fc.constantFrom('', ' '), (m, [p, mult], u, g) => {
+        // A bare lowercase "m" before "ohm" is milli-ohm: same rule as "10mR".
+        const got = parseValue(`${m}${g}${p}${u}`, 'R')
+        expect(got).toBeDefined()
+        expect(relErr(got as number, Number(m) * mult)).toBeLessThan(1e-9)
+      }),
+      { numRuns: 500 }
+    )
+  })
+
+  it('exponent spelling equals the decimal spelling', () => {
+    fc.assert(
+      fc.property(mantissaArb, fc.integer({ min: -15, max: 12 }), fc.constantFrom('e', 'E'), (m, exp, e) => {
+        const got = parseValue(`${m}${e}${exp}`, 'C')
+        expect(got).toBeDefined()
+        expect(relErr(got as number, Number(`${m}e${exp}`))).toBeLessThan(1e-9)
+      }),
+      { numRuns: 400 }
+    )
+  })
+
+  it('the M/m distinction survives every spelling: M is mega, m is milli', () => {
+    fc.assert(
+      fc.property(mantissaArb, fc.constantFrom('', 'R', 'Ohm', 'Ω'), (m, unit) => {
+        expect(relErr(parseValue(`${m}M${unit}`, 'R') as number, Number(m) * 1e6)).toBeLessThan(1e-9)
+        expect(relErr(parseValue(`${m}m${unit}`, 'R') as number, Number(m) * 1e-3)).toBeLessThan(1e-9)
+      }),
+      { numRuns: 300 }
+    )
+  })
+})
+
 describe('parseValue totality', () => {
   it('never throws on arbitrary text; a defined result is a finite number', () => {
     fc.assert(
@@ -205,7 +320,7 @@ describe('parseValue totality', () => {
   })
 
   it('never throws on value-shaped noise', () => {
-    const chars = fc.constantFrom(...'0123456789.kKMmGTunpfRrFHVΩµ%/, eEgG-+'.split(''))
+    const chars = fc.constantFrom(...'0123456789.kKMmGTunpfUNPRrFHVΩµμΩ%/, eEgGohs-+\t'.split(''))
     fc.assert(
       fc.property(fc.array(chars, { maxLength: 14 }), (cs) => {
         const v = parseValue(cs.join(''), 'C')

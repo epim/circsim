@@ -52,6 +52,7 @@ import {
   SolveFailedError,
   type SolveInputs,
   type SolveResult,
+  type UndrivenNet,
 } from '../../../core/solve'
 import {
   wiredInstruments, isFullyWired, type Instrument,
@@ -70,6 +71,7 @@ import { parseBom } from '../../../core/bom/parseBom'
 import type { BoardModel } from '../../../core/kicad/types'
 import { runCritic } from '../../../core/critic/run'
 import type { CriticReport, Finding, OpResult } from '../../../core/critic/types'
+import { deriveSolvedCurrents, type SolvedCurrents } from '../../../core/critic/solvedCurrents'
 
 import type { SimClient } from '../ipc/simClient'
 import { splitPath, type ReadFileFn } from '../ipc/fileOpen'
@@ -323,6 +325,9 @@ export interface BoardHooks {
 
 // ─── store shape ─────────────────────────────────────────────────────────────
 
+/** Why a start attempt was blocked (Spec §12 guided empty-states). */
+export type GuidedBlock = 'no-ground' | 'no-source'
+
 export type SimRunState = 'idle' | 'op' | 'running' | 'paused'
 
 export interface ParseErrorInfo {
@@ -394,6 +399,14 @@ export interface AppState {
    * clearly know it exists); never set for user-attached supplies.
    */
   autoAttachedSupplyId: string | null
+  /**
+   * Why the last Energize / Power On / Run attempt could not proceed (Spec §12
+   * guided empty-state): 'no-ground' (no ground net designated) or 'no-source'
+   * (no wired source). The UI mounts NoGroundState / NoSourceState from this so
+   * a blocked click is never silent. Cleared on a successful start, on dismiss,
+   * and when a board is opened.
+   */
+  guidedBlock: GuidedBlock | null
 
   // ── sim state ────────────────────────────────────────────────────────────────
   simState: SimRunState
@@ -417,6 +430,14 @@ export interface AppState {
    */
   currentsByRef: Map<string, number>
   /**
+   * Branch currents of every part from the latest op solve (LEDs, resistors and
+   * bench sources measured, other parts by KCL at the nets), for the Board
+   * Critic's ampacity and IR-drop checks (issues #9 and #45). Unlike
+   * currentsByRef it is not LED-only. null before the first solve. Reset on
+   * board change.
+   */
+  criticCurrents: SolvedCurrents | null
+  /**
    * Plain-language "why isn't my LED glowing?" coach notes (First Light, L3).
    * Rebuilt after every op solve from diagnoseDarkLeds(buildCoachInput(...)).
    * Empty when every LED is lit (or there are no LEDs). Surfaced as a small
@@ -437,6 +458,13 @@ export interface AppState {
    * override (Task 6). Empty when no rail is gated off.
    */
   railNotes: RailNote[]
+  /**
+   * Nets the latest powerOn deck held at 0 V through a bleed resistor because
+   * nothing on the board drives them (issue #43). Their 0 V readings are not
+   * measurements; WarningsBar lists them. Empty when every net has a path to
+   * ground or a driver.
+   */
+  undrivenNets: UndrivenNet[]
   ngspiceVersion: string | null
   /** Real-time pacing factor (0.1× / 1× / 'max'). */
   paceFactor: number | 'max'
@@ -489,7 +517,7 @@ export interface AppState {
   // ── log stream ────────────────────────────────────────────────────────────────
   logLines: { level: 'info' | 'warn' | 'error'; text: string }[]
   lastBenchRestart: { reason: 'window-elapsed' | 'memory'; at: number } | null
-  crashNotice: { willRespawn: boolean; at: number } | null
+  crashNotice: { willRespawn: boolean; at: number; pausedRunLost?: boolean } | null
 
   // ── transient run honesty surfaces (Spec §7.5, §12) ───────────────────────────
   /**
@@ -682,6 +710,8 @@ export interface AppState {
 
   /** Dismiss the bench-restart toast. */
   dismissBenchRestartToast(): void
+  /** Dismiss the guided no-ground / no-source card (see `guidedBlock`). */
+  dismissGuidedBlock(): void
 
   /** Dismiss the convergence-failure card. */
   dismissConvergenceCard(): void
@@ -790,6 +820,12 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
    * replayAfterCrash() ops still commit via ingestEvent normally.
    */
   let powerOnOpInFlight = false
+  /**
+   * True while validateSubckt's probe deck owns the engine. Same idea as
+   * powerOnOpInFlight: the probe's opResult / convergenceFailure describe a
+   * dummy circuit and must not reach the board readouts or the convergence card.
+   */
+  let subcktProbeInFlight = false
   /** Snapshot of the instruments the in-flight (or last) op was solved for. */
   let lastSolvedInstruments: Instrument[] | null = null
   let reopSettledResolvers: Array<() => void> = []
@@ -887,15 +923,18 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     suggestedSupplyNetIds: [],
     selectedInstrumentId: null,
     autoAttachedSupplyId: null,
+    guidedBlock: null,
     simState: 'idle',
     deckDirty: false,
     opVoltages: null,
     opVoltagesStale: false,
     voltageRange: null,
     currentsByRef: new Map(),
+    criticCurrents: null,
     coachNotes: [],
     measuredRails: null,
     railNotes: [],
+    undrivenNets: [],
     ngspiceVersion: null,
     paceFactor: 1,
     achievedRealtimeFactor: null,
@@ -928,12 +967,15 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         opVoltagesStale: false,
         voltageRange: null,
         currentsByRef: new Map(),
+        criticCurrents: null,
         coachNotes: [],
         measuredRails: null,
         railNotes: [],
+        undrivenNets: [],
         instruments: [],
         selectedInstrumentId: null,
         autoAttachedSupplyId: null,
+        guidedBlock: null,
         stubOverrides: new Map(),
         pinMapOverrides: new Map(),
         railOverrides: new Map(),
@@ -1227,7 +1269,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     // ── Board Critic (Spec §7) ─────────────────────────────────────────────────
     runCriticAudit() {
-      const { board, circuit, opVoltages, currentsByRef } = get()
+      const { board, circuit, opVoltages, currentsByRef, criticCurrents } = get()
       if (!board || !circuit) {
         set({ criticReport: null, selectedFindingId: null })
         boardHooks?.clearCriticFindings?.()
@@ -1236,7 +1278,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Build the critic OpResult from the live op state ONLY when energized (an
       // op result is present). Without it runCritic SKIPS ampacity/thermal — which
       // is fine: opening re-audits no-sim checks, the post-op re-audit feeds reals.
-      const opResult = buildCriticOpResult(circuit, opVoltages, currentsByRef)
+      const opResult = buildCriticOpResult(circuit, opVoltages, currentsByRef, criticCurrents)
       const report = runCritic(board, circuit, opResult)
       set({ criticReport: report })
       // Drop a stale selection if the finding no longer exists.
@@ -1430,17 +1472,24 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     async powerOn() {
       const { circuit, resolutions, instruments, groundNetId } = get()
-      if (!circuit || groundNetId === null) {
-        // Guided empty-state (Spec §12): nothing to power on.
+      if (!circuit) return null
+      if (groundNetId === null) {
+        // Guided empty-state (Spec §12): surface the no-ground card, never a
+        // silent no-op.
+        set({ guidedBlock: 'no-ground' })
         return null
       }
-      // Guided empty-state: zero resolved (wired) sources → no-op (Spec §12).
-      // An UNWIRED source added from the shelf palette (bench-leads) doesn't
-      // count — it drives nothing until a lead is dropped on a net.
+      // Guided empty-state: zero resolved (wired) sources (Spec §12). An
+      // UNWIRED source added from the shelf palette (bench-leads) doesn't
+      // count: it drives nothing until a lead is dropped on a net.
       const hasSource = wiredInstruments(instruments).some(
         i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
       )
-      if (!hasSource) return null
+      if (!hasSource) {
+        set({ guidedBlock: 'no-source' })
+        return null
+      }
+      if (get().guidedBlock !== null) set({ guidedBlock: null })
 
       // Snapshot every deck input ONCE per powerOn so the pass-1 deck, the
       // sensing skip-list, and the pass-2 deck all agree even if the user edits
@@ -1486,6 +1535,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
         const voltageRange = computeVoltageRange(opVoltages)
         const currentsByRef = applyOpCurrents(boardHooks, op.values, resolutions, circuit)
+        const criticCurrents = deriveCriticCurrents(inputs, solved)
 
         // Coach: explain any dark LEDs in plain language (First Light, L3).
         const coachNotes = diagnoseDarkLeds(
@@ -1503,8 +1553,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           opVoltagesStale: false, // fresh result — no longer showing old numbers
           voltageRange,
           currentsByRef,
+          criticCurrents,
           coachNotes,
           railNotes,
+          undrivenNets: solved.undrivenNets,
           // Honesty surface (F1): powerOn is now the sole committer for its own op,
           // so it carries ingestEvent's caveat logic — an op that converged only
           // via a fallback rung gets the persistent caveat (absent method ⇒ direct).
@@ -1540,7 +1592,12 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         if (gnd) get().setGround(gnd.id)
       }
       const groundNetId = get().groundNetId
-      if (groundNetId === null) return null // nothing we can tie to 0 V
+      if (groundNetId === null) {
+        // Nothing we can tie to 0 V (e.g. every net is auto-named): guide the
+        // user to designate one instead of a silent no-op (Spec §12).
+        set({ guidedBlock: 'no-ground' })
+        return null
+      }
 
       // 2) Ensure a driving source. Reuse the open-time auto-supply: attach a
       //    default 5 V DC supply on the top suggested supply net (≠ ground) when
@@ -1571,15 +1628,21 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     run() {
       const { circuit, instruments, groundNetId, simState, deckDirty } = get()
-      if (!circuit || groundNetId === null) {
-        // Guided empty-state (Spec §12): no ground → Run is a no-op, not a dead button.
+      if (!circuit) return
+      if (groundNetId === null) {
+        // Guided empty-state (Spec §12): no ground, show the card, not a dead button.
+        set({ guidedBlock: 'no-ground' })
         return
       }
-      // Guided empty-state: zero resolved (wired) sources → no-op (Spec §12).
+      // Guided empty-state: zero resolved (wired) sources (Spec §12).
       const hasSource = wiredInstruments(instruments).some(
         i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
       )
-      if (!hasSource) return
+      if (!hasSource) {
+        set({ guidedBlock: 'no-source' })
+        return
+      }
+      if (get().guidedBlock !== null) set({ guidedBlock: null })
 
       // Resume-from-pause with a clean deck: do NOT reload, just resume.
       if (simState === 'paused' && !deckDirty) {
@@ -1630,6 +1693,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       set({ benchRestartToast: null })
     },
 
+    dismissGuidedBlock() {
+      set({ guidedBlock: null })
+    },
+
     dismissConvergenceCard() {
       set({ convergenceCard: null })
     },
@@ -1642,7 +1709,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Any deck-dirtying edit (setGround, setPinMap, override changes, …) can
       // shift the reference frame or topology the sensed rails were measured in,
       // so the op-measured rail cache + gated-off notes must not survive it.
-      set({ deckDirty: true, measuredRails: null, railNotes: [] })
+      set({ deckDirty: true, measuredRails: null, railNotes: [], undrivenNets: [] })
     },
 
     // ── crash recovery (Spec §6.1) ─────────────────────────────────────────────
@@ -1675,29 +1742,52 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         set({ vectorNames: [], simTimeSeconds: 0 })
       } else if (simState === 'op') {
         simClient.send({ type: 'runOp' })
+      } else if (simState === 'paused') {
+        // The fresh SimHost holds the deck but no transient, so there is nothing
+        // to resume: leaving the store 'paused' would make Run send a bare
+        // `resume` that the new process ignores, and the bench would sit dead
+        // while the store said 'running' (#75). Drop to 'idle' so Run takes the
+        // fresh-start path (loadCircuit + runTransient), and say so in the crash
+        // notice. The pause is not re-created on the new process: a halt queued
+        // straight after runTransient races the ngspice background thread
+        // (bg_halt before the thread is up is a no-op), so it would not hold.
+        // Scope ring buffers keep the history the user was inspecting.
+        set(s => ({
+          simState: 'idle',
+          crashNotice: {
+            willRespawn: s.crashNotice?.willRespawn ?? true,
+            at: s.crashNotice?.at ?? Date.now(),
+            pausedRunLost: true,
+          },
+        }))
       }
     },
 
     // ── Task 25: LLM-assist + user .lib import ───────────────────────────────
 
     async validateSubckt(subcktText, subcktName, nodeCount) {
-      // Build a minimal test deck: the pasted subckt + one dummy instance +
-      // enough dummy sources/ground so ngspice can parse it without error.
-      // We don't care about simulation convergence — only that ngspice PARSES
-      // the subckt definition without emitting a fatal error (loadCircuit).
-      // We use nodeCount dummy nodes (n1, n2, ...) tied to ground via 1G resistors
-      // so the deck has a DC path and won't hit the "no DC path to ground" trap.
+      // Build a minimal probe deck: the pasted subckt + one dummy instance +
+      // enough dummy bleeds/ground so ngspice can parse it without error.
+      // We don't care about simulation convergence, only that ngspice PARSES
+      // the subckt definition without emitting an error: only errors raised
+      // while the deck loads count, never the ones from the op behind it (a
+      // subckt with its own source can fail the dummy op and still be valid).
+      // The dummy nodes
+      // (_tst1, _tst2, ...) are tied to ground via 1G resistors so the deck has
+      // a DC path and won't hit the "no DC path to ground" trap.
+      //
+      // ngSpice_Circ takes exactly one card per entry and never splits on
+      // newlines, so the pasted block goes in one entry per line (issue #18;
+      // SimHost.loadCircuit guards the same way).
       const dummyNodes = Array.from({ length: nodeCount }, (_, i) => `_tst${i + 1}`)
       const dummyNodeStr = dummyNodes.join(' ')
-      const dummyRs = dummyNodes
-        .map((n, i) => `r_chk_${i + 1} ${n} 0 1000meg`)
-        .join('\n')
+      const dummyRs = dummyNodes.map((n, i) => `r_chk_${i + 1} ${n} 0 1000meg`)
 
       const testDeck = [
         `* circsim subckt validation test for ${subcktName}`,
-        subcktText.trim(),
+        ...subcktText.trim().split(/\r?\n/),
         `x_test ${dummyNodeStr} ${subcktName}`,
-        dummyRs,
+        ...dummyRs,
         `v_test _tst1 0 dc 0`,
         `.op`,
         `.end`,
@@ -1705,43 +1795,43 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
       // Collect log lines during the load to detect errors.
       const errorLines: string[] = []
-      let errorDetected = false
+      // ngspice prints "Doing analysis at TEMP = ..." when the op starts, after
+      // the deck has been parsed. Everything past that line belongs to the
+      // dummy harness's op, not to the pasted model, so stop collecting there.
+      let loadPhase = true
 
       const unsub = simClient.onEvent(event => {
-        if (event.type === 'log' && event.level === 'error') {
+        if (event.type !== 'log' || !loadPhase) return
+        if (/Doing analysis at TEMP/i.test(event.text)) {
+          loadPhase = false
+        } else if (event.level === 'error') {
           errorLines.push(event.text)
-          errorDetected = true
         }
       })
 
+      // The probe replaces the board deck in the live engine, and the op behind
+      // it is not the board's: keep ingestEvent from painting it onto the board
+      // or raising a convergence card for a dummy circuit.
+      subcktProbeInFlight = true
       try {
+        // A runOp right behind the load is the load-complete signal: SimHost
+        // applies commands in order and always answers an op with an opResult,
+        // even when the load failed (load errors arrive as log events before
+        // it). Waiting on it, not a fixed timer, keeps a valid paste from
+        // costing the whole timeout. The timeout only backstops a dead host.
+        // The op's own log lines are ignored (see loadPhase above).
+        const done = simClient.waitFor('opResult', 8000).catch(() => undefined)
         simClient.send({ type: 'loadCircuit', deckLines: testDeck })
-        // Give SimHost up to 8 seconds to respond with opResult or an error.
-        // If it loads cleanly we get an opResult (even a failed .op produces
-        // one; what matters is that ngspice accepted the deck structure).
-        // A parse/load error produces log{level:'error'} lines.
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 8000)
-          const innerUnsub = simClient.onEvent(evt => {
-            if (evt.type === 'opResult' || evt.type === 'convergenceFailure') {
-              clearTimeout(timer)
-              innerUnsub()
-              resolve()
-            }
-          })
-          // Also resolve immediately if we already detected a hard error
-          // (some errors fire before opResult).
-          if (errorDetected) {
-            clearTimeout(timer)
-            innerUnsub()
-            resolve()
-          }
-        })
+        simClient.send({ type: 'runOp' })
+        await done
       } finally {
         unsub()
+        subcktProbeInFlight = false
+        // The engine now holds the probe deck, not the board's.
+        get().markDeckDirty()
       }
 
-      if (errorDetected) {
+      if (errorLines.length > 0) {
         return { ok: false, error: errorLines.join('\n') }
       }
       return { ok: true }
@@ -1772,12 +1862,18 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         case 'opResult': {
           // powerOn is the sole committer for its own ops — skip the interim
           // pass-1 (family-default) result it is about to correct in pass 2 (FIX 2).
-          if (powerOnOpInFlight) break
+          if (powerOnOpInFlight || subcktProbeInFlight) break
           const { circuit, resolutions, instruments, groundNetId } = get()
           if (!circuit) break
           const opVoltages = mapOpResultToNetVoltages(event.values, circuit)
           const voltageRange = computeVoltageRange(opVoltages)
           const currentsByRef = applyOpCurrents(boardHooks, event.values, resolutions, circuit)
+          // The deck only supplies element names for the current derivation (LED
+          // sense lines, bench resistors), which do not depend on measured rails.
+          const replayInputs = currentSolveInputs()
+          const criticCurrents = replayInputs
+            ? deriveCriticCurrents(replayInputs, { op: { values: event.values }, deck: buildDeck(replayInputs) })
+            : null
           // Coach: rebuild the plain-language dark-LED notes for this op too.
           const coachNotes = diagnoseDarkLeds(
             buildCoachInput(
@@ -1797,7 +1893,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
               ? { method: event.method, at: Date.now() }
               : null
           // A fresh result also retires any staleness flag (M7 review fix).
-          set({ opVoltages, opVoltagesStale: false, voltageRange, currentsByRef, coachNotes, opCaveat })
+          set({ opVoltages, opVoltagesStale: false, voltageRange, currentsByRef, criticCurrents, coachNotes, opCaveat })
           // Keep the board in sync after a replayed/standalone op too.
           applyOpToBoard(boardHooks, opVoltages, voltageRange)
           // Re-audit with the fresh op result (ampacity/thermal get real data).
@@ -1826,6 +1922,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           })
           break
         case 'convergenceFailure':
+          if (subcktProbeInFlight) break
           set({
             simState: 'idle',
             convergenceCard: {
@@ -1995,6 +2092,7 @@ export function buildCriticOpResult(
   circuit: Circuit,
   opVoltages: Map<number, number> | null,
   currentsByRef: Map<string, number>,
+  solvedCurrents?: SolvedCurrents | null,
 ): OpResult | undefined {
   if (!opVoltages || opVoltages.size === 0) return undefined
 
@@ -2005,6 +2103,17 @@ export function buildCriticOpResult(
   for (const [netId, volts] of opVoltages) {
     const node = netToNode.get(netId)
     if (node !== undefined) nodeVoltages[node] = volts
+  }
+
+  // Branch currents of every part from the solve, when it was derived; else the
+  // LED-only map (the critic then sees LED currents and nothing else).
+  if (solvedCurrents) {
+    return {
+      nodeVoltages,
+      partCurrents: solvedCurrents.partCurrents,
+      padCurrents: solvedCurrents.padCurrents,
+      unresolvedRefs: solvedCurrents.unresolvedRefs,
+    }
   }
 
   const partCurrents: Record<string, number> = {}
@@ -2235,6 +2344,22 @@ function applyOpCurrents(
   const currentsByRef = mapOpResultToCurrents(values, ledSpiceNames)
   hooks?.applyLedCurrents?.(currentsByRef)
   return currentsByRef
+}
+
+/**
+ * Every part's branch currents from a solve, for the Board Critic. Never throws:
+ * a derivation failure leaves the critic on the LED-only map rather than
+ * breaking the solve that just landed.
+ */
+function deriveCriticCurrents(
+  inputs: SolveInputs,
+  solve: Pick<SolveResult, 'op' | 'deck'>,
+): SolvedCurrents | null {
+  try {
+    return deriveSolvedCurrents(inputs, solve)
+  } catch {
+    return null
+  }
 }
 
 /**

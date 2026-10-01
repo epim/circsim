@@ -7,11 +7,16 @@
  * Design rules (see spec §8.1):
  * - Handles quoted strings with backslash escapes (\", \\, \n, \t, \r)
  * - Bare tokens that parse as a valid JS number become numbers; otherwise strings
- * - Tolerant of unknown tokens — never throws on unrecognised atoms
+ * - Tolerant of unknown tokens: never throws on unrecognised atoms
  * - Throws SexprError { line, col, message } on structural errors (unbalanced parens)
+ *
+ * Allocation (issue #60): one pass over the text with an index cursor. There is
+ * no token array and no per-character string building, so the only allocations
+ * are the tree itself, and `skipHeads` lets a caller avoid building subtrees it
+ * never reads.
  */
 
-// ─── public types ─────────────────────────────────────────────────────────────
+// --- public types ------------------------------------------------------------
 
 export type SExpr = string | number | SExpr[]
 
@@ -27,244 +32,276 @@ export class SexprError extends Error {
   }
 }
 
-// ─── tokeniser ────────────────────────────────────────────────────────────────
-
-const enum TKind {
-  LParen = 0,
-  RParen = 1,
-  Atom   = 2, // bare token (number or string)
-  Str    = 3, // quoted string (already unescaped)
-  EOF    = 4,
+export interface ParseOptions {
+  /**
+   * Heads of lists to skip. A list whose first element is a bare atom equal to
+   * one of these is not built: it comes back as a one-element list
+   * holding only its head, in its original position, so `findAll(parent, head)`
+   * still counts it. The skipped text is still scanned for balanced parens and
+   * quotes, so a malformed file throws the same SexprError either way.
+   *
+   * Use it for subtrees the caller never reads, such as a zone's
+   * `filled_polygon` point lists, which dominate pour-heavy boards.
+   */
+  skipHeads?: readonly string[]
 }
 
-interface Token {
-  kind: TKind
-  value: string
-  line: number
-  col: number
-}
+// --- scanner constants -------------------------------------------------------
 
-/** Convert a string atom to a number if it is a valid JS number, else keep it as string. */
+const TAB = 9
+const LF = 10
+const CR = 13
+const SPACE = 32
+const DQUOTE = 34
+const LPAREN = 40
+const RPAREN = 41
+const SEMI = 59
+const BSLASH = 92
+
+/** Cap on distinct list heads kept for sharing, so hostile input cannot grow the table. */
+const MAX_SHARED_HEADS = 1024
+
+const NUMERIC =/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/
+
+/** Convert a bare atom to a number if it is a valid JS number, else keep it as string. */
 function maybeNumber(raw: string): string | number {
-  // Fast-path: reject tokens that definitely can't be numbers
-  // A number must match [+-]?\d*\.?\d+([eE][+-]?\d+)?  — no letters other than e/E
-  // We use Number() which is lenient but correctly rejects "1.0.5", "F.Cu", "smd" etc.
-  if (raw === '' || raw === '.' || raw === '-' || raw === '+') return raw
+  // A number starts with a digit, a sign or a dot. Anything else (F.Cu, smd,
+  // Infinity, NaN) is a string, so skip Number() and the regex for it.
+  const first = raw.charCodeAt(0)
+  if (!((first >= 48 && first <= 57) || first === 43 || first === 45 || first === 46)) return raw
   const n = Number(raw)
-  // Number('') === 0 (false positive), Number('   ') === 0 (false positive)
-  // All bare tokens we receive are trimmed and non-empty from the tokeniser, so
-  // only check isNaN and that the string actually looks numeric.
-  if (!Number.isNaN(n) && /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(raw)) {
-    return n
-  }
+  // The regex rejects what Number() is lenient about ("", "0x1", "Infinity").
+  if (!Number.isNaN(n) && NUMERIC.test(raw)) return n
   return raw
 }
 
+// --- parser ------------------------------------------------------------------
+
 /**
- * Tokenise the entire input into a flat array of tokens.
- * We collect all tokens up front rather than streaming; this is fast enough for
- * KiCad files (tens of MB) and keeps the recursive descent simple.
+ * Parse a KiCad S-expression file.
+ * Throws `SexprError` with `{ line, col, message }` on structural errors.
  */
-function tokenise(text: string): Token[] {
-  const tokens: Token[] = []
+export function parseSexpr(text: string, options?: ParseOptions): SExpr {
+  const skip =
+    options?.skipHeads !== undefined && options.skipHeads.length > 0 ? new Set(options.skipHeads) : null
+  const n = text.length
   let pos = 0
   let line = 1
   let lineStart = 0
 
-  const col = (): number => pos - lineStart + 1
+  /** Advance over whitespace and ';' line comments. */
+  function skipTrivia(): void {
+    while (pos < n) {
+      const c = text.charCodeAt(pos)
+      if (c === SPACE || c === TAB || c === CR) {
+        pos++
+      } else if (c === LF) {
+        pos++
+        line++
+        lineStart = pos
+      } else if (c === SEMI) {
+        while (pos < n && text.charCodeAt(pos) !== LF) pos++
+      } else {
+        return
+      }
+    }
+  }
 
-  while (pos < text.length) {
-    const ch = text[pos]
-
-    // Whitespace
-    if (ch === ' ' || ch === '\t' || ch === '\r') {
+  /** Read a bare token: everything up to whitespace, a paren, or a quote. */
+  function readBare(): string {
+    const start = pos
+    while (pos < n) {
+      const c = text.charCodeAt(pos)
+      if (c === LPAREN || c === RPAREN || c === DQUOTE || c === SPACE || c === TAB || c === LF || c === CR) break
       pos++
-      continue
     }
-    if (ch === '\n') {
-      line++
-      lineStart = pos + 1
-      pos++
-      continue
-    }
+    return text.slice(start, pos)
+  }
 
-    // Line comment (KiCad sometimes has semicolon comments)
-    if (ch === ';') {
-      while (pos < text.length && text[pos] !== '\n') pos++
-      continue
-    }
-
-    // Left paren
-    if (ch === '(') {
-      tokens.push({ kind: TKind.LParen, value: '(', line, col: col() })
-      pos++
-      continue
-    }
-
-    // Right paren
-    if (ch === ')') {
-      tokens.push({ kind: TKind.RParen, value: ')', line, col: col() })
-      pos++
-      continue
-    }
-
-    // Quoted string
-    if (ch === '"') {
-      const startLine = line
-      const startCol = col()
-      pos++ // skip opening quote
-      let buf = ''
-      while (pos < text.length) {
-        const c = text[pos]
-        if (c === '"') {
-          pos++ // skip closing quote
-          break
+  /** Read a quoted string; `pos` is on the opening quote. Handles escapes and raw newlines. */
+  function readQuoted(): string {
+    pos++ // opening quote
+    let start = pos
+    let out: string | null = null // only built once an escape is seen
+    while (pos < n) {
+      const c = text.charCodeAt(pos)
+      if (c === DQUOTE) {
+        const v = out === null ? text.slice(start, pos) : out + text.slice(start, pos)
+        pos++
+        return v
+      }
+      if (c === BSLASH) {
+        out = (out === null ? '' : out) + text.slice(start, pos)
+        pos++
+        if (pos >= n) return out // dangling backslash at end of input
+        const esc = text.charCodeAt(pos)
+        switch (esc) {
+          case 110: out += '\n'; break // \n
+          case 114: out += '\r'; break // \r
+          case 116: out += '\t'; break // \t
+          default: out += text[pos]; break // \" \\ and unknown escapes pass through
         }
-        if (c === '\\') {
-          pos++
-          const esc = text[pos]
-          if (esc === undefined) break
-          switch (esc) {
-            case '"':  buf += '"';  break
-            case '\\': buf += '\\'; break
-            case 'n':  buf += '\n'; break
-            case 'r':  buf += '\r'; break
-            case 't':  buf += '\t'; break
-            default:   buf += esc;  break  // pass unknown escapes through
-          }
-          pos++
-          if (esc === '\n') {
-            line++
-            lineStart = pos
-          }
-          continue
-        }
-        if (c === '\n') {
-          buf += c
+        pos++
+        if (esc === LF) {
           line++
-          lineStart = pos + 1
-        } else {
-          buf += c
+          lineStart = pos
         }
+        start = pos
+        continue
+      }
+      if (c === LF) {
+        line++
+        lineStart = pos + 1
+      }
+      pos++
+    }
+    // Unterminated string: keep what was read.
+    return out === null ? text.slice(start, pos) : out + text.slice(start, pos)
+  }
+
+  /**
+   * Scan to the ')' that closes a list whose head has just been read, building
+   * nothing. Returns false if the input ends first.
+   */
+  function skipRest(): boolean {
+    let depth = 1
+    while (pos < n) {
+      const c = text.charCodeAt(pos)
+      if (c === RPAREN) {
+        pos++
+        if (--depth === 0) return true
+      } else if (c === LPAREN) {
+        pos++
+        depth++
+      } else if (c === DQUOTE) {
+        pos++
+        while (pos < n) {
+          const q = text.charCodeAt(pos)
+          if (q === DQUOTE) {
+            pos++
+            break
+          }
+          if (q === BSLASH) {
+            pos++
+            if (pos < n && text.charCodeAt(pos) === LF) {
+              line++
+              lineStart = pos + 1
+            }
+            pos++
+            continue
+          }
+          if (q === LF) {
+            line++
+            lineStart = pos + 1
+          }
+          pos++
+        }
+      } else if (c === LF) {
+        pos++
+        line++
+        lineStart = pos
+      } else if (c === SEMI) {
+        // A comment only starts at a token boundary; inside a bare token ';' is text.
+        const prev = text.charCodeAt(pos - 1)
+        if (
+          prev === SPACE || prev === TAB || prev === LF || prev === CR ||
+          prev === LPAREN || prev === RPAREN || prev === DQUOTE
+        ) {
+          while (pos < n && text.charCodeAt(pos) !== LF) pos++
+        } else {
+          pos++
+        }
+      } else {
         pos++
       }
-      tokens.push({ kind: TKind.Str, value: buf, line: startLine, col: startCol })
-      continue
     }
-
-    // Bare token (atom): everything up to whitespace, (, ), or "
-    {
-      const startLine = line
-      const startCol = col()
-      let buf = ''
-      while (pos < text.length) {
-        const c = text[pos]
-        if (c === '(' || c === ')' || c === '"' || c === ' ' || c === '\t' || c === '\n' || c === '\r') break
-        buf += c
-        pos++
-      }
-      if (buf.length > 0) {
-        tokens.push({ kind: TKind.Atom, value: buf, line: startLine, col: startCol })
-      }
-    }
+    return false
   }
 
-  tokens.push({ kind: TKind.EOF, value: '', line, col: col() })
-  return tokens
-}
-
-// ─── recursive descent parser ─────────────────────────────────────────────────
-
-function parseTokens(tokens: Token[]): SExpr {
-  let idx = 0
-
-  function peek(): Token {
-    return tokens[idx]
+  /**
+   * The skipped region ran off the end of the input. The innermost unclosed '('
+   * is somewhere inside it, so let a full parse find and report it.
+   */
+  function failInsideSkip(): never {
+    parseSexpr(text)
+    throw new SexprError('Unexpected end of input', line, pos - lineStart + 1)
   }
 
-  function consume(): Token {
-    const t = tokens[idx]
-    idx++
-    return t
-  }
+  // Children of every open list accumulate here and are copied out at the
+  // closing paren. Pushing straight into a fresh array per list would leave each
+  // one with the spare capacity V8 gives a grown array (17 slots), which for a
+  // segment's seven small lists is most of the retained tree.
+  const stack: SExpr[] = []
+  const heads = new Map<string, string>()
 
   function parseList(): SExpr[] {
-    const open = consume() // LParen — already verified by caller
-    const items: SExpr[] = []
+    const openLine = line
+    const openCol = pos - lineStart + 1
+    const base = stack.length
+    pos++ // '('
 
     for (;;) {
-      const t = peek()
-      if (t.kind === TKind.EOF) {
+      skipTrivia()
+      if (pos >= n) {
         throw new SexprError(
-          `Unexpected end of input — unclosed '(' at line ${open.line}, col ${open.col}`,
-          open.line,
-          open.col
+          `Unexpected end of input - unclosed '(' at line ${openLine}, col ${openCol}`,
+          openLine,
+          openCol
         )
       }
-      if (t.kind === TKind.RParen) {
-        consume() // closing paren
+      const c = text.charCodeAt(pos)
+      if (c === RPAREN) {
+        pos++
+        const items = stack.slice(base)
+        stack.length = base
         return items
       }
-      items.push(parseExpr())
+      if (stack.length === base && c !== LPAREN && c !== DQUOTE) {
+        // List head: a small vocabulary repeated for every node, so share one
+        // string per distinct head instead of keeping a copy per list.
+        let head = readBare()
+        const shared = heads.get(head)
+        if (shared !== undefined) head = shared
+        else if (heads.size < MAX_SHARED_HEADS) heads.set(head, head)
+        if (skip !== null && skip.has(head)) {
+          if (!skipRest()) failInsideSkip()
+          return [head]
+        }
+        stack.push(maybeNumber(head))
+        continue
+      }
+      stack.push(parseExpr())
     }
   }
 
   function parseExpr(): SExpr {
-    const t = peek()
-    if (t.kind === TKind.LParen) {
-      return parseList()
+    skipTrivia()
+    if (pos >= n) throw new SexprError('Unexpected end of input', line, pos - lineStart + 1)
+    const c = text.charCodeAt(pos)
+    if (c === LPAREN) return parseList()
+    if (c === RPAREN) {
+      const col = pos - lineStart + 1
+      throw new SexprError(`Unexpected ')' at line ${line}, col ${col}`, line, col)
     }
-    if (t.kind === TKind.Str) {
-      consume()
-      return t.value
-    }
-    if (t.kind === TKind.Atom) {
-      consume()
-      return maybeNumber(t.value)
-    }
-    if (t.kind === TKind.RParen) {
-      throw new SexprError(
-        `Unexpected ')' at line ${t.line}, col ${t.col}`,
-        t.line,
-        t.col
-      )
-    }
-    // EOF
-    throw new SexprError(`Unexpected end of input`, t.line, t.col)
+    if (c === DQUOTE) return readQuoted()
+    return maybeNumber(readBare())
   }
 
   const result = parseExpr()
 
-  // Continue scanning remaining tokens to catch structural errors (e.g. unclosed
-  // parens in trailing content). Unknown extra atoms/lists after the root are
-  // tolerated for future-compat, but mis-matched parens must still throw.
-  while (peek().kind !== TKind.EOF) {
-    const t = peek()
-    if (t.kind === TKind.RParen) {
-      throw new SexprError(
-        `Unexpected ')' at line ${t.line}, col ${t.col}`,
-        t.line,
-        t.col
-      )
-    }
-    // Parse and discard any additional top-level expressions; this lets structural
-    // errors (unclosed parens) inside them surface correctly.
+  // Keep scanning the trailing content so structural errors surface. Extra
+  // top-level atoms and lists after the root are tolerated for future
+  // compatibility and discarded; a stray ')' still throws.
+  for (;;) {
+    skipTrivia()
+    if (pos >= n) break
     parseExpr()
   }
 
   return result
 }
 
-// ─── public API ───────────────────────────────────────────────────────────────
-
-/**
- * Parse a KiCad S-expression file.
- * Throws `SexprError` with `{ line, col, message }` on structural errors.
- */
-export function parseSexpr(text: string): SExpr {
-  const tokens = tokenise(text)
-  return parseTokens(tokens)
-}
+// --- tree helpers ------------------------------------------------------------
 
 /**
  * Return the immediate child lists of `node` whose first element equals `head`.
