@@ -244,6 +244,7 @@ export function createLedGlowController(group: THREE.Object3D): LedGlowControlle
     const anchor = mesh.position.clone()
     halo.position.copy(anchor)
     halo.scale.setScalar(0.0001) // effectively hidden until lit
+    halo.visible = false
     group.add(halo)
 
     leds.set(ref, { material, halo, color: col, anchor })
@@ -258,18 +259,21 @@ export function createLedGlowController(group: THREE.Object3D): LedGlowControlle
       rec.material.emissive.set(color)
       ;(rec.halo.material as THREE.SpriteMaterial).color.set(color)
     }
+    // emissiveIntensity, opacity and color are uniforms three.js re-reads on
+    // every draw; none of them needs material.needsUpdate (#77).
     rec.material.emissiveIntensity = clamped * MAX_EMISSIVE_INTENSITY
-    rec.material.needsUpdate = true
 
     const haloMat = rec.halo.material as THREE.SpriteMaterial
     if (clamped <= 0) {
       haloMat.opacity = 0
       rec.halo.scale.setScalar(0.0001)
+      // A dark LED's halo is not drawn at all (one fewer draw call per LED).
+      rec.halo.visible = false
     } else {
       haloMat.opacity = clamped
       rec.halo.scale.setScalar(HALO_FULL_SCALE_MM * (0.4 + 0.6 * clamped))
+      rec.halo.visible = true
     }
-    haloMat.needsUpdate = true
   }
 
   function applyCurrents(currentsByRef: Map<string, number>): void {

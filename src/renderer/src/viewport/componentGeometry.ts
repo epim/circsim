@@ -217,6 +217,114 @@ export interface ComponentBoxEntry {
   layer: 'F' | 'B'
 }
 
+// ─── instanced boxes (#57) ──────────────────────────────────────────────────────
+
+/** Material for placeholder boxes (shared by the instanced mesh and per-part meshes). */
+export function makeBoxMaterial(color = 0xffffff): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.7,
+    metalness: 0.1,
+    transparent: true,
+    opacity: 0.85,
+  })
+}
+
+/** Where one placeholder box sits, whether it is instanced or its own mesh. */
+export interface ComponentPlacement {
+  ref: string
+  worldX: number
+  worldY: number
+  worldZ: number
+  className: string
+  color: number
+  layer: 'F' | 'B'
+}
+
+export interface ComponentBoxBatch {
+  /** One InstancedMesh holding every non-excluded box, or null when there are none. */
+  instanced: THREE.InstancedMesh | null
+  /** instancedRefs[i] is the part drawn as instance i. */
+  instancedRefs: string[]
+  /** Parts excluded from instancing (e.g. LEDs), one BoxGeometry each. */
+  individual: ComponentBoxEntry[]
+  /** Every part in footprint order, instanced or not. */
+  placements: ComponentPlacement[]
+}
+
+/**
+ * Build the placeholder boxes as ONE InstancedMesh (a unit box scaled and placed
+ * per instance, class color as the instance color) instead of one Mesh and one
+ * material per footprint, so the boxes cost a single draw call (#57).
+ *
+ * Parts for which `isIndividual` returns true are returned as ordinary entries
+ * instead, because they own a material (LEDs drive their own emissive glow).
+ */
+export function buildComponentBoxBatch(
+  footprints: Footprint[],
+  boardThicknessMm: number,
+  isIndividual: (fp: Footprint) => boolean = () => false,
+): ComponentBoxBatch {
+  const placements: ComponentPlacement[] = []
+  const individual: ComponentBoxEntry[] = []
+  const instanced: { fp: Footprint; info: PlaceholderBoxInfo }[] = []
+
+  for (const fp of footprints) {
+    const info = computePlaceholderBox(fp, boardThicknessMm)
+    placements.push({
+      ref: fp.ref,
+      worldX: info.worldX,
+      worldY: info.worldY,
+      worldZ: info.worldZ,
+      className: info.className,
+      color: info.color,
+      layer: fp.layer,
+    })
+    if (isIndividual(fp)) {
+      individual.push({
+        ref: fp.ref,
+        geo: new THREE.BoxGeometry(info.w, info.h, info.heightMm),
+        worldX: info.worldX,
+        worldY: info.worldY,
+        worldZ: info.worldZ,
+        className: info.className,
+        color: info.color,
+        layer: fp.layer,
+      })
+    } else {
+      instanced.push({ fp, info })
+    }
+  }
+
+  if (instanced.length === 0) {
+    return { instanced: null, instancedRefs: [], individual, placements }
+  }
+
+  const mesh = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    makeBoxMaterial(),
+    instanced.length,
+  )
+  const m = new THREE.Matrix4()
+  const q = new THREE.Quaternion()
+  const pos = new THREE.Vector3()
+  const scale = new THREE.Vector3()
+  const col = new THREE.Color()
+  const instancedRefs: string[] = []
+  instanced.forEach(({ fp, info }, i) => {
+    pos.set(info.worldX, info.worldY, info.worldZ)
+    scale.set(info.w, info.h, info.heightMm)
+    m.compose(pos, q, scale)
+    mesh.setMatrixAt(i, m)
+    mesh.setColorAt(i, col.set(info.color))
+    instancedRefs.push(fp.ref)
+  })
+  mesh.instanceMatrix.needsUpdate = true
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+  mesh.computeBoundingSphere()
+  return { instanced: mesh, instancedRefs, individual, placements }
+}
+
 /**
  * Build placeholder box entries for all footprints on a board.
  *

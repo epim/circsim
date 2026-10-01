@@ -138,6 +138,27 @@ describe('createLedGlowController', () => {
     expect((halo.material as THREE.SpriteMaterial).opacity).toBeGreaterThan(0)
   })
 
+  it('a dark LED draws no halo; a lit one does (#57)', () => {
+    ctrl.registerLed('D1', makeLedMesh(), 0xff3030)
+    const halo = ctrl.getHalo('D1')!
+    expect(halo.visible).toBe(false)
+    ctrl.updateComponentEmissive('D1', 0.8)
+    expect(halo.visible).toBe(true)
+    ctrl.updateComponentEmissive('D1', 0)
+    expect(halo.visible).toBe(false)
+  })
+
+  it('glow updates never bump a material version (#77)', () => {
+    ctrl.registerLed('D1', makeLedMesh(), 0xff3030)
+    const mat = ctrl.getMaterial('D1')!
+    const haloMat = ctrl.getHalo('D1')!.material as THREE.SpriteMaterial
+    const before = [mat.version, haloMat.version]
+    ctrl.updateComponentEmissive('D1', 1, 0x30ff40)
+    ctrl.updateComponentEmissive('D1', 0.3)
+    ctrl.updateComponentEmissive('D1', 0)
+    expect([mat.version, haloMat.version]).toEqual(before)
+  })
+
   it('intensity 0 keeps the LED dark and the halo hidden', () => {
     ctrl.registerLed('D1', makeLedMesh(), 0xff3030)
     ctrl.updateComponentEmissive('D1', 1)
