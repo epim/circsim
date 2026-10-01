@@ -30,6 +30,7 @@ import ExportReport from './panels/ExportReport'
 import { NoBoardState } from './panels/EmptyStates'
 import GuidedStateHost from './panels/GuidedStateHost'
 import { AppStoreProvider, useApp, useAppStoreApi } from './store/storeContext'
+import OpenProgressBar from './boardOpen/OpenProgressBar'
 import type { AppStore } from './store/appStore'
 import { resolutionSummary } from './store/appStore'
 import { openProjectFromPath, classifyFile } from './ipc/fileOpen'
@@ -59,6 +60,7 @@ function Shell(): React.ReactElement {
   const opVoltages = useApp(s => s.opVoltages)
   const voltageRange = useApp(s => s.voltageRange)
   const parseError = useApp(s => s.parseError)
+  const opening = useApp(s => s.openProgress !== null)
   const viewerOnly = useApp(s => s.viewerOnly)
   const resolutions = useApp(s => s.resolutions)
 
@@ -139,7 +141,10 @@ function Shell(): React.ReactElement {
         window.circsim.fileExists,
         window.circsim.readSidecar,
       )
-      store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+      // The worker-based open (issue #55): parse, extract, resolve and audit run
+      // off the UI thread while the progress strip shows; the setup-file restore
+      // and its note are part of that open, as in the sync path.
+      void store.getState().openBoard(opened.boardText, opened.boardFileName, {
         schematicText: opened.schematicText,
         schematicFileName: opened.schematicFileName,
         bomText: opened.bomText,
@@ -191,7 +196,7 @@ function Shell(): React.ReactElement {
         undefined,
         window.circsim.fileExists,
       )
-      store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+      void store.getState().openBoard(opened.boardText, opened.boardFileName, {
         schematicText: opened.schematicText,
         schematicFileName: opened.schematicFileName,
         bomText: opened.bomText,
@@ -212,7 +217,7 @@ function Shell(): React.ReactElement {
         undefined,
         window.circsim.fileExists,
       )
-      store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+      void store.getState().openBoard(opened.boardText, opened.boardFileName, {
         schematicText: opened.schematicText,
         schematicFileName: opened.schematicFileName,
         bomText: opened.bomText,
@@ -271,7 +276,7 @@ function Shell(): React.ReactElement {
           await openBoardPath(path)
         } else {
           const text = await boardFile.text()
-          store.getState().openBoardFromText(text, boardFile.name)
+          void store.getState().openBoard(text, boardFile.name)
         }
         return
       }
@@ -349,6 +354,8 @@ function Shell(): React.ReactElement {
       {/* Simulation toolbar: Power On · Run/Pause · pace · overlay (Spec §11). */}
       <Toolbar overlay={overlay} onOverlay={setOverlay} />
 
+      <OpenProgressBar />
+
       {parseError && (
         <div style={errorCardStyle}>
           <strong>Could not parse {parseError.fileName ?? 'board'}.</strong>{' '}
@@ -388,7 +395,7 @@ function Shell(): React.ReactElement {
                   voltageRange={voltageRange}
                   overlay={overlay}
                 />
-              ) : (
+              ) : opening ? null : (
                 <NoBoardState
                   onOpen={handleOpen}
                   onOpenSample={handleOpenSample}

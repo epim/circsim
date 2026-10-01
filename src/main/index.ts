@@ -12,11 +12,20 @@
  *  - CSP: allows worker-src blob: for troika-three-text (Spec §5).
  */
 
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, net } from 'electron'
 import { join } from 'path'
 import { copyFile, readFile, rename, stat, unlink, writeFile } from 'fs/promises'
+import { release } from 'os'
+import { deflateRawSync } from 'zlib'
 import { createProductionSupervisor, unwrapPort } from './simhostSupervisor'
 import { buildMenuTemplate, docsPageUrl } from './docsLinks'
+import {
+  MainDiagnostics,
+  assembleBundle,
+  sanitizeBundleName,
+  validateRendererFiles
+} from './diagnosticsBundle'
+import { openFidelityDocs } from './openDocs'
 import { sidecarPathFor } from '../core/persist/paths'
 import { MAX_SIDECAR_BYTES } from '../core/persist/sidecar'
 import { addRecent, normalizeRecent, removeRecent } from '../core/persist/recent'
@@ -33,6 +42,9 @@ interface ModelIndex {
 // ─── Globals ──────────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null
+
+/** SimHost output and exits this session, for the diagnostics bundle (issue #26). */
+const mainDiagnostics = new MainDiagnostics()
 
 /**
  * Base for bundled resources/docs.
@@ -268,6 +280,53 @@ function registerIpcHandlers(): void {
   })
 
   /**
+   * Save the diagnostics bundle (issue #26): the renderer sends the files it
+   * gathered (decks, log, board hash, resolutions), main adds the environment,
+   * the SimHost output and the crash history, asks where to save, and writes a
+   * zip. Resolves `{ saved: false }` when the user cancels the dialog.
+   */
+  ipcMain.handle(
+    'circsim:saveDiagnosticsBundle',
+    async (_event, payload: { suggestedName?: unknown; files?: unknown }) => {
+      try {
+        const rendererFiles = validateRendererFiles(payload?.files)
+        const defaultPath = join(app.getPath('documents'), sanitizeBundleName(payload?.suggestedName))
+        const dialogOpts: Electron.SaveDialogOptions = {
+          title: 'Save diagnostic bundle',
+          defaultPath,
+          filters: [{ name: 'Zip archive', extensions: ['zip'] }]
+        }
+        const picked = mainWindow
+          ? await dialog.showSaveDialog(mainWindow, dialogOpts)
+          : await dialog.showSaveDialog(dialogOpts)
+        if (picked.canceled || !picked.filePath) return { saved: false }
+        const environment = {
+          app: app.getVersion(),
+          packaged: app.isPackaged,
+          electron: process.versions.electron,
+          chromium: process.versions.chrome,
+          node: process.versions.node,
+          platform: process.platform,
+          arch: process.arch,
+          osRelease: release()
+        }
+        const zip = assembleBundle(
+          rendererFiles,
+          [
+            { name: 'environment.json', text: JSON.stringify(environment, null, 2) + '\n' },
+            ...mainDiagnostics.files()
+          ],
+          { deflateRaw: (d) => deflateRawSync(d) }
+        )
+        await writeFile(picked.filePath, zip)
+        return { saved: true, path: picked.filePath }
+      } catch (err) {
+        return { saved: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  /**
    * Return the absolute path to the bundled sample project's .kicad_pcb file.
    * In dev: <appRoot>/resources/sample/blinker-555.kicad_pcb.
    * Packaged: <resourcesPath>/sample/blinker-555.kicad_pcb (via extraResources).
@@ -286,21 +345,22 @@ function registerIpcHandlers(): void {
   })
 
   /**
-   * Open the "what circsim can tell you" fidelity doc.
-   * Opens the bundled docs/what-circsim-can-tell-you.html (rendered from
-   * website/docs/concepts/fidelity.md by scripts/fidelity-doc.mjs) in the
-   * default browser via shell.openPath. Packaged: <resources>/docs; dev: the
-   * project docs/ dir. If the file is not found, fall back to a no-op (graceful).
-   * Task 28 — Spec §16 risk 7, §12; issue #61.
+   * Open the "what circsim can tell you" fidelity doc and report the outcome.
+   * Online: the published page via the system browser; offline (or if that
+   * hand-off throws): the bundled docs/what-circsim-can-tell-you.html (rendered
+   * from website/docs/concepts/fidelity.md by scripts/fidelity-doc.mjs) via
+   * shell.openPath. Packaged: <resources>/docs; dev: the project docs/ dir.
+   * shell.openPath never rejects, so its resolved error string is returned to
+   * the renderer as `{ ok: false, error }` (issue #62).
+   * Task 28 — Spec §16 risk 7, §12; issues #61, #62.
    */
-  ipcMain.handle('circsim:openDocs', async () => {
-    try {
-      await shell.openPath(docPath('what-circsim-can-tell-you.html'))
-    } catch {
-      // Non-fatal: if the doc isn't present (CI runner without a display),
-      // the promise still resolves so the UI doesn't stall.
-    }
-  })
+  ipcMain.handle('circsim:openDocs', () =>
+    openFidelityDocs({
+      shell,
+      localPath: docPath('what-circsim-can-tell-you.html'),
+      isOnline: () => net.isOnline()
+    })
+  )
 
   /**
    * Open one page of the public docs site in the system browser (issue #73).
@@ -464,9 +524,11 @@ app.whenReady().then(async () => {
   // notification via contextBridge (not the dead MessagePort — Spec §6.1).
   const supervisor = await createProductionSupervisor({
     simhostPath,
-    onSimhostCrashed: ({ willRespawn }) => {
+    onChildOutput: (stream, text) => mainDiagnostics.recordOutput(stream, text),
+    onSimhostCrashed: (payload) => {
+      mainDiagnostics.recordCrash(payload)
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('circsim:simhostCrashed', { willRespawn })
+        mainWindow.webContents.send('circsim:simhostCrashed', payload)
       }
     }
   })

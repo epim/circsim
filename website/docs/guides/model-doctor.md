@@ -2,7 +2,9 @@
 
 When a part shows a red **"no model"** dot, circsim couldn't match it to a SPICE model, so it contributes nothing to the simulation and appears in the [fidelity banner](./warnings). The **Model Doctor** (left dock, under Parts) is where you fix it. It's a docked panel, never a blocking dialog, so you can keep working while it's open.
 
-Click a part in the fidelity banner's **open Model Doctor** link, or click the part in the **Parts** panel, to reveal its card.
+Click a part in the fidelity banner's **open Model Doctor** link, or click the part in the **Parts** panel, to reveal its card. When a convergence failure names a culprit part, clicking the name in the error card does the same.
+
+In the **Parts** panel, parts needing attention are grouped first, under a **Needs attention** heading with a count, followed by **Open by design** and **OK**. On a board with more than six problem parts the Doctor shows one line per part and expands the card for the part you select; click the open card's header to collapse it again. Hover any action button for a one-line description of what it does.
 
 ## What a card shows
 
@@ -19,7 +21,11 @@ If you have a SPICE model file for the part (from the manufacturer, or anywhere)
 3. **Verify the pin matching** (the *pin map*): map each board pad to the correct model terminal. *Check this against the datasheet; a wrong pin map produces confidently-wrong results.*
 4. **Bind** it to the part.
 
-Imported models are prepended to circsim's library, so your model for a given part number wins over any bundled one. They are remembered for the rest of the session, and across restarts once you [save the board's setup](./save-and-report), which stores your models and every Model Doctor override beside the board.
+What gets bound is the model itself, not a link to the file. circsim copies the chosen `.subckt` block into the board's model, together with any helper subckts it instantiates and the top-level `.model`, `.param` and `.func` cards those blocks use. Unrelated parts in the same file are left out, and comments are dropped. Because the text is copied, the original `.lib` can move or disappear afterwards. If the file `.include`s or `.lib`s other files, circsim cannot follow them: the panel says so under the subckt list, and you can import those files too.
+
+The panel checks the model before it lets you bind. A model that [the safety gate would refuse](#models-are-code), a block with no matching `.ends`, a `.subckt` declared inside another one, or a name circsim cannot save shows its reason in red and the **Bind** button stays hidden, instead of failing later when the board is loaded into the engine.
+
+Imported models are prepended to circsim's library, so your model for a given part number wins over any bundled one. They are remembered for the rest of the session, and across restarts once you [save the board's setup](./save-and-report), which stores your models and every Model Doctor override beside the board. A model saved by an earlier circsim build as just a comment line (it never contained the model, so it could not load) is skipped when the setup is reopened, with a note naming the part; import the `.lib` again.
 
 ### Ask your LLM
 
@@ -54,7 +60,7 @@ Hover either button in the app for the technical name and a plain definition.
 
 ### Interactive pins {#interactive-pins}
 
-For microcontrollers and complex digital ICs (which have no SPICE model and whose firmware doesn't run), choose **Interactive pins** (⋮ menu). This turns the part into a control panel (right dock) where each pin has a **Hi-Z / 0 / 1 / Watch** mode:
+For microcontrollers and complex digital ICs (which have no SPICE model and whose firmware doesn't run), choose **Interactive pins** (⋮ menu). A microcontroller circsim recognizes by name already carries an amber [supply-load stub](../concepts/models#supply-load-stubs); choosing Interactive pins replaces that load with the pin panel, so the part then draws no supply current. This turns the part into a control panel (right dock) where each pin has a **Hi-Z / 0 / 1 / Watch** mode:
 
 - **Hi-Z**: floating (high impedance).
 - **0** / **1**: drive the pin low or high.

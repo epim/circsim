@@ -1,0 +1,150 @@
+* Provenance: written for circsim from manufacturer datasheet supply-current figures, MIT.
+* In-house SUPPLY-LOAD stubs for parts that have no simulable model but must not
+* be left silently unmodeled: microcontrollers and modules, addressable LEDs and
+* USB-serial bridges (issue #29). No vendor model text is copied; the only
+* datasheet content used is one supply-current figure per family, stated with its
+* operating condition below.
+*
+* A stub is a two-terminal load, nodes: vdd gnd. It draws the family's supply
+* current from the vdd pad to the gnd pad once the rail is above the part's
+* minimum operating voltage, and does nothing else: no GPIO, no clock, no
+* peripheral, no protocol. The pads are chosen per part by src/core/models/
+* stubRules.ts (schematic pin names, datasheet pinout, or net names), so every
+* wrapper has the same two terminals.
+*
+* The current is the datasheet figure for one stated working condition, not the
+* part's worst case; real firmware spends its time between that figure and the
+* deep-sleep floor. Figures are transcribed from the datasheet families and are
+* not yet re-verified against vendor PDFs row by row, the same caveat
+* characterization.json carries. A rail that is below the minimum operating
+* voltage carries no load (smooth step 0.1 V wide), so a collapsing or unpowered
+* supply is not pulled further down by a source that has nothing to run.
+*
+* SIMPLIFICATIONS (apply to every stub below): constant current above the knee
+* (no dynamic or pulsed load, no inrush, no brown-out hysteresis), no I/O
+* leakage, no pin states, no input protection diodes, no internal regulator
+* dropout. The pads other than vdd and gnd are left open on purpose.
+
+* ---------------------------------------------------------------------------
+* Generic supply-load core. Params: iload (A), vmin (V, the knee).
+.subckt sup_load vdd gnd
++ params: iload=10m vmin=2
+bload vdd gnd i = iload*0.5*(1 + tanh((v(vdd,gnd) - vmin)/0.05))
+.ends sup_load
+
+* ---------------------------------------------------------------------------
+* ESP32 family (ESP32, -S2, -S3, -C3 modules and chips). 100 mA: Espressif
+* ESP32 datasheet, current consumption by RF mode, Active (RF working), Rx
+* 802.11b/g/n about 95 to 100 mA (Tx reaches 240 mA, modem sleep at 240 MHz is
+* 30 to 68 mA). Minimum VDD3P3 supply 2.3 V (brown-out detector 2.43 V typ).
+.subckt MCU_STUB_ESP32 vdd gnd
+xl vdd gnd sup_load
++ params: iload=100m vmin=2.4
+.ends MCU_STUB_ESP32
+
+* ESP8266 family (ESP8266EX, ESP-01, ESP-07, ESP-12). 60 mA: Espressif ESP8266EX
+* datasheet, Rx 802.11b/g/n about 56 to 62 mA (Tx 802.11b +20 dBm about 170 mA).
+* Minimum supply 2.5 V.
+.subckt MCU_STUB_ESP8266 vdd gnd
+xl vdd gnd sup_load
++ params: iload=60m vmin=2.5
+.ends MCU_STUB_ESP8266
+
+* STM32F1 (STM32F103 and kin). 36 mA: ST DS5319, supply current in Run mode,
+* code from flash, fHCLK = 72 MHz, all peripherals enabled (typical; the
+* maximum column is about 50 mA). VDD 2.0 to 3.6 V.
+.subckt MCU_STUB_STM32F1 vdd gnd
+xl vdd gnd sup_load
++ params: iload=36m vmin=2.0
+.ends MCU_STUB_STM32F1
+
+* STM32F4 (STM32F405/407/411 class). 100 mA: ST DS8626 family, Run mode at
+* 168 MHz with all peripherals enabled, about 90 to 100 mA typical. VDD 1.8 to
+* 3.6 V (1.7 V on the lower-power F4 parts).
+.subckt MCU_STUB_STM32F4 vdd gnd
+xl vdd gnd sup_load
++ params: iload=100m vmin=1.8
+.ends MCU_STUB_STM32F4
+
+* STM32 C0/F0/G0/L0/L4 low-power series. 10 mA: ST datasheets of the series, Run
+* mode at 48 to 80 MHz with the peripherals enabled, about 5 to 12 mA typical.
+* VDD 1.7 to 3.6 V.
+.subckt MCU_STUB_STM32LP vdd gnd
+xl vdd gnd sup_load
++ params: iload=10m vmin=1.7
+.ends MCU_STUB_STM32LP
+
+* ATmega (ATmega328P, 168, 32U4, 2560 and kin). 10 mA: Microchip ATmega328P
+* datasheet, active supply current versus frequency, 16 MHz at 5 V about 10 mA
+* (4 MHz at 3 V is about 1.7 mA). VCC 1.8 to 5.5 V.
+.subckt MCU_STUB_ATMEGA vdd gnd
+xl vdd gnd sup_load
++ params: iload=10m vmin=1.8
+.ends MCU_STUB_ATMEGA
+
+* ATtiny (ATtiny85, 45, 25, 13, 84, 1614 and kin). 5 mA: Microchip ATtiny85
+* datasheet, active supply current at 8 MHz, 5 V about 5 mA. VCC 1.8 to 5.5 V.
+.subckt MCU_STUB_ATTINY vdd gnd
+xl vdd gnd sup_load
++ params: iload=5m vmin=1.8
+.ends MCU_STUB_ATTINY
+
+* RP2040. 25 mA: Raspberry Pi RP2040 datasheet, both cores running at 125 MHz,
+* core plus IO supply about 20 to 25 mA typical. IOVDD 1.62 to 3.63 V.
+.subckt MCU_STUB_RP2040 vdd gnd
+xl vdd gnd sup_load
++ params: iload=25m vmin=1.7
+.ends MCU_STUB_RP2040
+
+* nRF52 (nRF52832, nRF52840). 6 mA: Nordic product specification, radio Rx at
+* 1 Mbps BLE about 5.4 to 6.5 mA with the DC/DC converter at 3 V (CPU at 64 MHz
+* from flash about 3.3 to 3.7 mA). VDD 1.7 to 3.6 V.
+.subckt MCU_STUB_NRF52 vdd gnd
+xl vdd gnd sup_load
++ params: iload=6m vmin=1.7
+.ends MCU_STUB_NRF52
+
+* SAMD21. 6 mA: Microchip SAM D21 datasheet, active mode at 48 MHz, 3.3 V,
+* about 5 to 6 mA typical. VDD 1.62 to 3.63 V.
+.subckt MCU_STUB_SAMD21 vdd gnd
+xl vdd gnd sup_load
++ params: iload=6m vmin=1.7
+.ends MCU_STUB_SAMD21
+
+* CH32V003. 8 mA: WCH CH32V003 datasheet, run mode at 48 MHz with the
+* peripherals clocked, about 8 mA typical. VDD 2.7 to 5.5 V.
+.subckt MCU_STUB_CH32V003 vdd gnd
+xl vdd gnd sup_load
++ params: iload=8m vmin=2.7
+.ends MCU_STUB_CH32V003
+
+* MSP430 (MSP430G2xxx and kin). 230 uA: TI MSP430G2553 datasheet, active mode
+* at 1 MHz, 2.2 V, 230 uA typical (it scales with clock, about 3 mA at 16 MHz).
+* VCC 1.8 to 3.6 V.
+.subckt MCU_STUB_MSP430 vdd gnd
+xl vdd gnd sup_load
++ params: iload=0.23m vmin=1.8
+.ends MCU_STUB_MSP430
+
+* ---------------------------------------------------------------------------
+* WS2812B / WS2811 / NeoPixel addressable LED, nodes: vdd gnd. 1 mA IDLE
+* (all three channels dark). The WS2812B datasheet gives the working figure,
+* 20 mA per colour channel (60 mA per LED at full white), but no dark-state
+* current; the roughly 1 mA that the control IC draws while the LED is off is
+* the figure vendors and the Adafruit NeoPixel guide report. This is a SMALL
+* IDLE SINK ON PURPOSE: a lit LED draws up to 60 times more, so a chain of N
+* LEDs at full white is N x 60 mA and a bench user should add that as a load.
+* Supply 3.5 to 5.3 V.
+.subckt LED_STUB_WS2812B vdd gnd
+xl vdd gnd sup_load
++ params: iload=1m vmin=3.5
+.ends LED_STUB_WS2812B
+
+* ---------------------------------------------------------------------------
+* CH340C / CH340G USB-serial bridge. 12 mA: WCH CH340 datasheet, operating
+* supply current at 5 V about 12 mA. VCC 3.3 to 5 V (the part regulates its own
+* internal 3.3 V from VCC).
+.subckt IC_STUB_CH340 vdd gnd
+xl vdd gnd sup_load
++ params: iload=12m vmin=3.0
+.ends IC_STUB_CH340

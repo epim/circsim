@@ -20,10 +20,17 @@
  * attachSupplyToNet, plus Phase 6 E2E (no headless GL needed here).
  */
 
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
 import Term from '../ui/Term'
 import DocsLink from '../ui/docsLink'
+import type { CircuitNet } from '../../../core/netlist/extract'
+import {
+  rankGroundCandidates,
+  rankSupplyCandidates,
+  filterNets,
+  MAX_PICKER_ROWS,
+} from './netRanking'
 
 export default function GroundSetup(): React.ReactElement | null {
   const store = useAppStoreApi()
@@ -110,7 +117,7 @@ export default function GroundSetup(): React.ReactElement | null {
       {!groundNet && (
         <div style={suggestionBlockStyle}>
           <div style={hintStyle}>Click a net below or on the board to set ground:</div>
-          {allNets.slice(0, 6).map(n => (
+          {rankGroundCandidates(allNets, null).slice(0, 6).map(n => (
             <button
               key={n.id}
               style={netChipStyle}
@@ -133,15 +140,16 @@ export default function GroundSetup(): React.ReactElement | null {
           >
             Change…
           </button>
-          {/* Quick-pick other nets */}
-          {allNets
-            .filter(n => n.id !== groundNetId)
+          {/* Quick-pick other nets: ground-named first, then by pad degree (#72) */}
+          {rankGroundCandidates(allNets, groundNetId)
             .slice(0, 4)
             .map(n => (
               <button
                 key={n.id}
+                data-testid="ground-quickpick"
                 style={netChipStyle}
                 onClick={() => store.getState().setGround(n.id)}
+                title={`Set ${n.kicadName} as ground`}
               >
                 {n.kicadName}
               </button>
@@ -185,20 +193,12 @@ export default function GroundSetup(): React.ReactElement | null {
           </button>
         </div>
         {showSupplyPicker && (
-          <div style={changeRowStyle}>
-            {allNets.map(n => (
-              <button
-                key={n.id}
-                data-testid="supply-pick"
-                style={netChipStyle}
-                onClick={() => attachSupply(n.id)}
-                title={`Attach a 5 V DC supply to ${n.kicadName}`}
-              >
-                {supplyAttachedNetIds.has(n.id) ? '✓ ' : ''}
-                {n.kicadName}
-              </button>
-            ))}
-          </div>
+          <SupplyPicker
+            nets={nets}
+            groundNetId={groundNetId}
+            attachedNetIds={supplyAttachedNetIds}
+            onPick={attachSupply}
+          />
         )}
       </div>
 
@@ -230,7 +230,79 @@ export default function GroundSetup(): React.ReactElement | null {
   )
 }
 
+/**
+ * The "Choose..." supply picker (issue #72): a filter input over every named
+ * net, ranked by supply likelihood (suggestSupplies first, then pad degree) and
+ * capped at MAX_PICKER_ROWS so a few-hundred-net board is not a wall of chips
+ * in a 240 px dock. The ground net is never offered. Exported for tests;
+ * `initialFilter` seeds the box (static renders cannot type).
+ */
+export function SupplyPicker({
+  nets,
+  groundNetId,
+  attachedNetIds,
+  onPick,
+  initialFilter = '',
+}: {
+  nets: readonly CircuitNet[]
+  groundNetId: number | null
+  attachedNetIds: ReadonlySet<number>
+  onPick: (netId: number) => void
+  initialFilter?: string
+}): React.ReactElement {
+  const [filter, setFilter] = useState(initialFilter)
+  const ranked = useMemo(() => rankSupplyCandidates(nets, groundNetId), [nets, groundNetId])
+  const matches = useMemo(() => filterNets(ranked, filter), [ranked, filter])
+  const shown = matches.slice(0, MAX_PICKER_ROWS)
+  const hidden = matches.length - shown.length
+  return (
+    <div>
+      <input
+        type="text"
+        value={filter}
+        onChange={e => setFilter(e.target.value)}
+        placeholder={`Filter ${ranked.length} nets…`}
+        aria-label="Filter nets"
+        data-testid="supply-filter"
+        style={pickerFilterStyle}
+      />
+      <div style={changeRowStyle}>
+        {shown.map(n => (
+          <button
+            key={n.id}
+            data-testid="supply-pick"
+            style={netChipStyle}
+            onClick={() => onPick(n.id)}
+            title={`Attach a 5 V DC supply to ${n.kicadName}`}
+          >
+            {attachedNetIds.has(n.id) ? '✓ ' : ''}
+            {n.kicadName}
+          </button>
+        ))}
+        {matches.length === 0 && <span style={hintStyle}>No nets match.</span>}
+        {hidden > 0 && (
+          <span style={hintStyle} data-testid="supply-pick-more">
+            {hidden} more: type to filter.
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── styles ───────────────────────────────────────────────────────────────────
+
+const pickerFilterStyle: React.CSSProperties = {
+  width: '100%',
+  boxSizing: 'border-box',
+  marginTop: 4,
+  background: '#1e1e2c',
+  border: '1px solid #33334a',
+  borderRadius: 3,
+  color: '#dde',
+  fontSize: 11,
+  padding: '3px 6px',
+}
 
 const containerStyle: React.CSSProperties = {
   padding: '8px 10px',
