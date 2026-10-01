@@ -8,10 +8,11 @@
  *  - the unsigned path still exists and disables identity auto-discovery;
  *  - every secret the signed path reads is gated on being present;
  *  - notarization is env-driven (electron-builder 26: mac.notarize is a boolean);
- *  - SHA256SUMS is produced and attached by a job that follows the matrix.
+ *  - SHA256SUMS is produced and attached by a job that follows the matrix;
+ *  - no doc brings back the unsigned-build claims (right-click Open, `identity: null`).
  */
 
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { describe, it, expect } from 'vitest'
@@ -99,5 +100,32 @@ describe('checksums job', () => {
     expect(checksums).toContain('sha256sum -c')
     expect(checksums).toMatch(/files:\s*SHA256SUMS/)
     expect(checksums).toMatch(/fail_on_unmatched_files:\s*true/)
+  })
+})
+
+describe('docs make no unsigned-build bypass claims', () => {
+  function markdownIn(dir: string): string[] {
+    const out: string[] = []
+    for (const name of readdirSync(join(ROOT, dir))) {
+      if (name === 'node_modules' || name === '.vitepress') continue
+      const rel = `${dir}/${name}`
+      if (statSync(join(ROOT, rel)).isDirectory()) out.push(...markdownIn(rel))
+      else if (name.endsWith('.md')) out.push(rel)
+    }
+    return out
+  }
+  const files = ['README.md', ...markdownIn('docs'), ...markdownIn('website/docs')]
+
+  it('scans the docs, the website and the README', () => {
+    expect(files).toContain('docs/licensing.md')
+    expect(files).toContain('website/docs/start/install.md')
+  })
+
+  it('never says "right-click" or "identity: null"', () => {
+    for (const f of files) {
+      const text = readFileSync(join(ROOT, f), 'utf8')
+      expect(text, `${f} right-click`).not.toMatch(/right[- ]click/i)
+      expect(text, `${f} identity: null`).not.toMatch(/identity:\s*null/i)
+    }
   })
 })

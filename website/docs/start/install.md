@@ -68,7 +68,7 @@ xattr -dr com.apple.quarantine /Applications/circsim.app
 :::
 
 ::: details macOS 14 (Sonoma) and earlier
-After dragging circsim to Applications, Control-click (or right-click) the app, choose **Open**, then click **Open** in the dialog. You only do this once per install. The Privacy & Security steps above also work on these versions.
+After dragging circsim to Applications, Control-click the app, choose **Open**, then click **Open** in the dialog. You only do this once per install. The Privacy & Security steps above also work on these versions.
 :::
 
 ::: details Linux: AppImage
