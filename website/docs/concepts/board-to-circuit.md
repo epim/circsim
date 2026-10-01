@@ -14,7 +14,7 @@ KiCad 6 to 8 boards carry a numeric net table (for example, `(net 3 "VCC")`) and
 
 ## Nets become SPICE nodes
 
-SPICE wants node *names*, and it has rules (case-insensitive, limited character set, and node `0` is sacred: it's the global ground reference). circsim translates each KiCad net name into a safe SPICE node name: lowercased, non-alphanumeric characters replaced with underscores, runs collapsed, and collisions disambiguated with a numeric suffix. Your designated ground net becomes node `0`.
+SPICE wants node *names*, and it has rules (case-insensitive, limited character set, and node `0` is sacred: it's the global ground reference). circsim translates each KiCad net name into a safe SPICE node name: lowercased, non-alphanumeric characters replaced with underscores, runs collapsed, and collisions disambiguated with a numeric suffix that is never allowed to land on another net's name, so every net keeps its own node. Your designated ground net becomes node `0`.
 
 This is why the voltage overlay can label copper with real net names while the solver underneath works in SPICE nodes. circsim keeps the mapping and shows you the human name.
 
