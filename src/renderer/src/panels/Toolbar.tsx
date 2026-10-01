@@ -12,8 +12,10 @@
  *   so App.tsx can drive the imperative SceneManager.
  *
  * Buttons are guided-disabled (Spec §12): Power On / Run require a designated
- * ground AND at least one resolved source — never a silently-dead button; the
- * disabled tooltip explains what's missing.
+ * ground AND at least one wired source. They stay focusable (aria-disabled, not
+ * `disabled`) so a click still reaches the store, which raises the guided
+ * no-ground / no-source card (GuidedStateHost); the reason is also shown as
+ * visible helper text beside the buttons, never only in a tooltip.
  *
  * UI-only; validated by build + Phase 6 E2E. Orchestration logic is unit-tested
  * in the store (orchestration.test.ts).
@@ -21,6 +23,7 @@
 
 import React, { useCallback } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
+import { wiredInstruments } from '../../../core/spicegen/instruments'
 import type { OverlayMode } from '../viewport/overlay'
 
 const PACE_OPTIONS: { label: string; value: number | 'max' }[] = [
@@ -51,8 +54,9 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
   const paceFactor = useApp(s => s.paceFactor)
   const achievedFactor = useApp(s => s.achievedRealtimeFactor)
 
-  // A "source" is any supply / function-gen / logic-input (something that drives a net).
-  const hasSource = instruments.some(
+  // A "source" is any WIRED supply / function-gen / logic-input (something that
+  // drives a net). An unwired shelf instrument drives nothing, so it doesn't count.
+  const hasSource = wiredInstruments(instruments).some(
     i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
   )
   const hasGround = groundNetId !== null
@@ -107,7 +111,7 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
 
       <button
         style={canPowerOn ? primaryBtn : disabledBtn}
-        disabled={!canPowerOn}
+        aria-disabled={!canPowerOn}
         onClick={handlePowerOn}
         title={canPowerOn ? 'Run a DC operating-point check' : disabledReason}
         data-testid="power-on-btn"
@@ -117,13 +121,20 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
 
       <button
         style={canPowerOn ? (running ? pauseBtn : runBtn) : disabledBtn}
-        disabled={!canPowerOn}
+        aria-disabled={!canPowerOn}
         onClick={handleRunPause}
         title={canPowerOn ? (running ? 'Pause the simulation' : 'Run the live simulation') : disabledReason}
         data-testid="run-btn"
       >
         {running ? 'Pause' : simState === 'paused' ? 'Resume' : 'Run'}
       </button>
+
+      {/* Visible reason the Power On / Run buttons are not ready (not title-only). */}
+      {!canPowerOn && (
+        <span style={reasonStyle} data-testid="toolbar-blocked-reason">
+          {disabledReason}
+        </span>
+      )}
 
       {/* Pace selector */}
       <div style={groupStyle} title="Real-time pacing">
@@ -201,6 +212,10 @@ const disabledBtn: React.CSSProperties = {
   borderColor: '#2a2a34',
   color: '#555',
   cursor: 'not-allowed',
+}
+const reasonStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#d8b060',
 }
 const groupStyle: React.CSSProperties = {
   display: 'flex',

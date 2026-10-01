@@ -12,9 +12,9 @@
  * Route order:
  *  1. Online: hand the published fidelity page to the system browser
  *     (`shell.openExternal`), so the user gets the rendered page the docs
- *     promise instead of raw Markdown in a text editor. circsim itself makes no
+ *     promise instead of a raw file. circsim itself makes no
  *     network request; the browser does.
- *  2. Offline, or the browser hand-off throws: open the bundled Markdown via
+ *  2. Offline, or the browser hand-off throws: open the bundled HTML copy via
  *     `shell.openPath` and report the error string it resolves with.
  */
 
@@ -34,7 +34,7 @@ export type OpenDocsResult =
 
 export interface OpenDocsDeps {
   shell: DocsShell
-  /** Absolute path of the bundled what-circsim-can-tell-you.md. */
+  /** Absolute path of the bundled what-circsim-can-tell-you.html. */
   localPath: string
   /** OS connectivity flag (Electron `net.isOnline`); not a network request. */
   isOnline: () => boolean

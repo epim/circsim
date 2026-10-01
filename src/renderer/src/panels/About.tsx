@@ -37,8 +37,10 @@ const FALLBACK_PROVENANCE =
   'The bundled SPICE model library was written in-house for circsim from public ' +
   'datasheet parameters and is MIT-licensed. Every file in resources/models/ carries ' +
   'a "Provenance:" header; no vendor (TI/ADI/onsemi) or Micro-Cap/Intusoft model text ' +
-  'is included. The GPL-encumbered ngspice "table.cm" code model is excluded from every ' +
-  'platform bundle.'
+  'is included. The discrete diode, LED and transistor cards are derived from datasheet ' +
+  'operating points by the checked-in script scripts/fit-model-cards.mjs, and a CI ' +
+  'fingerprint test rejects any card that reproduces a known third-party library card. ' +
+  'The GPL-encumbered ngspice "table.cm" code model is excluded from every platform bundle.'
 
 export default function About({ open, onClose }: AboutProps): React.ReactElement | null {
   const [texts, setTexts] = useState<LicenseTexts | null>(null)

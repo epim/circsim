@@ -20,11 +20,14 @@
 import { describe, it, expect } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
+import * as THREE from 'three'
 import { parseBoard } from '../../../../core/kicad/board'
+import type { Footprint } from '../../../../core/kicad/types'
 import {
   classifyFootprint,
   computePlaceholderBox,
   buildComponentBoxes,
+  buildComponentBoxBatch,
   COMPONENT_CLASSES,
 } from '../componentGeometry'
 
@@ -347,5 +350,81 @@ describe('buildComponentBoxes — B-side mirroring', () => {
     const entries = buildComponentBoxes(mixedBoard, 1.6)
     const c1 = entries.find(e => e.ref === 'C1')!
     expect(c1.worldZ).toBeLessThan(0)
+  })
+})
+
+// ─── instanced boxes (#57) ─────────────────────────────────────────────────────
+
+describe('buildComponentBoxBatch', () => {
+  const mk = (ref: string, libId: string, layer: 'F' | 'B', x: number): Footprint => ({
+    ref,
+    value: '1k',
+    libId,
+    layer,
+    at: { x, y: 10, rotDeg: 0 },
+    pads: [
+      { number: '1', type: 'smd', shape: 'rect', at: { x: -0.8, y: 0, rotDeg: 0 }, size: { w: 0.9, h: 1 }, layers: ['F.Cu'], netId: 1 },
+      { number: '2', type: 'smd', shape: 'rect', at: { x: 0.8, y: 0, rotDeg: 0 }, size: { w: 0.9, h: 1 }, layers: ['F.Cu'], netId: 2 },
+    ],
+    properties: {},
+  })
+  const fps = [
+    mk('R1', 'Resistor_SMD:R_0603_1608Metric', 'F', 10),
+    mk('Q1', 'Package_TO_SOT_SMD:SOT-23', 'F', 20),
+    mk('U1', 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm', 'B', 30),
+    mk('D1', 'LED_SMD:LED_0603_1608Metric', 'F', 40),
+  ]
+
+  it('builds one InstancedMesh holding every part', () => {
+    const batch = buildComponentBoxBatch(fps, 1.6)
+    expect(batch.instanced).not.toBeNull()
+    expect(batch.instanced!.count).toBe(4)
+    expect(batch.instancedRefs).toEqual(['R1', 'Q1', 'U1', 'D1'])
+    expect(batch.individual).toEqual([])
+    expect(batch.placements.map(p => p.ref)).toEqual(['R1', 'Q1', 'U1', 'D1'])
+  })
+
+  it('places each instance at the same world position computePlaceholderBox gives', () => {
+    const batch = buildComponentBoxBatch(fps, 1.6)
+    const m = new THREE.Matrix4()
+    const pos = new THREE.Vector3()
+    const scale = new THREE.Vector3()
+    fps.forEach((fp, i) => {
+      const info = computePlaceholderBox(fp, 1.6)
+      batch.instanced!.getMatrixAt(i, m)
+      m.decompose(pos, new THREE.Quaternion(), scale)
+      expect(pos.x).toBeCloseTo(info.worldX)
+      expect(pos.y).toBeCloseTo(info.worldY)
+      expect(pos.z).toBeCloseTo(info.worldZ)
+      expect(scale.x).toBeCloseTo(info.w)
+      expect(scale.y).toBeCloseTo(info.h)
+      expect(scale.z).toBeCloseTo(info.heightMm)
+    })
+  })
+
+  it('colors each instance by its part class', () => {
+    const batch = buildComponentBoxBatch(fps, 1.6)
+    const c = new THREE.Color()
+    batch.instanced!.getColorAt(0, c)
+    expect(c.getHex()).toBe(new THREE.Color(COMPONENT_CLASSES.passive.color).getHex())
+    batch.instanced!.getColorAt(1, c)
+    expect(c.getHex()).toBe(new THREE.Color(COMPONENT_CLASSES.sot.color).getHex())
+    batch.instanced!.getColorAt(2, c)
+    expect(c.getHex()).toBe(new THREE.Color(COMPONENT_CLASSES.soic.color).getHex())
+  })
+
+  it('leaves parts the predicate selects out of the instanced mesh', () => {
+    const batch = buildComponentBoxBatch(fps, 1.6, fp => fp.ref === 'D1')
+    expect(batch.instanced!.count).toBe(3)
+    expect(batch.instancedRefs).toEqual(['R1', 'Q1', 'U1'])
+    expect(batch.individual.map(e => e.ref)).toEqual(['D1'])
+    expect(batch.individual[0].geo).toBeInstanceOf(THREE.BoxGeometry)
+    // still placed, so anchors cover every part
+    expect(batch.placements.map(p => p.ref)).toEqual(['R1', 'Q1', 'U1', 'D1'])
+  })
+
+  it('returns no instanced mesh when every part is individual or there are no parts', () => {
+    expect(buildComponentBoxBatch([], 1.6).instanced).toBeNull()
+    expect(buildComponentBoxBatch(fps, 1.6, () => true).instanced).toBeNull()
   })
 })

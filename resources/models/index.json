@@ -1,50 +1,47 @@
 {
-  "$comment": "Provenance: bundled SPICE model library index for circsim, MIT. Every model file referenced here carries its own 'Provenance:' header and was written in-house from datasheet parameters (no vendor model text). PinMap node positions are 1-based and refer to the device's terminal order: diode/LED = 'anode cathode' (1=anode, 2=cathode); BJT = 'collector base emitter' (1=C, 2=B, 3=E); VDMOS = 'drain gate source' (1=D, 2=G, 3=S). Pad numbers come from the KiCad footprint. KiCad-official diode footprints (D_*) put pad-1 = cathode; JLC/EasyEDA-origin diode footprints (JLC lib prefix or bare dimension-pattern names like SMC_L7.1-W6.2) put pad-1 = ANODE, hence the anode-first '^JLC|_L…-W…' key ordered first on every two-terminal diode entry (first pinMaps key match wins; verified on the led_lantern rev B design files, D7).",
+  "$comment": "Provenance: bundled SPICE model library index for circsim, MIT. Every model file referenced here carries its own 'Provenance:' header and was written in-house from datasheet parameters (no vendor model text); the discrete BJT, diode, TVS and LED cards are derived from datasheet operating points by scripts/fit-model-cards.mjs and checked against known third-party library cards by library-fingerprint.test.ts. PinMap node positions are 1-based and refer to the device's terminal order: diode/LED = 'anode cathode' (1=anode, 2=cathode); BJT = 'collector base emitter' (1=C, 2=B, 3=E); VDMOS = 'drain gate source' (1=D, 2=G, 3=S). Pad numbers come from the KiCad footprint. KiCad-official diode footprints (D_*) put pad-1 = cathode, and the pinMaps keys encode that. JLC/EasyEDA-origin diode footprints (JLC lib prefix or bare dimension-pattern names like SMC_L7.1-W6.2-LS8.1) carry NO polarity convention: on the led_lantern rev B board pad 1 is the anode on one of four such diodes and the cathode on the other three, so no footprint-name key can know. selectPinMap therefore never matches those names against pinMaps keys; it returns the KiCad-convention defaultPinMap with a pinmap-unverified polarity warning, and only the attached schematic's A/K pin names (or a Model Doctor override) make the polarity known.",
   "entries": [
     {
       "id": "diode-1n4148",
       "match": {
         "mpn": ["1N4148", "1N914", "1N4148W", "1N4148WS", "BAS16", "BAS16W"],
         "refdesPrefix": ["D"],
-        "footprintRegex": "D_(SOD|SMA|SMB|0805|MELF|DO-35|DO-204)"
+        "footprintRegex": "(?:^|:)D_(SOD|SMA|SMB|0805|MELF|DO-35|DO-204)"
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "D1N4148" },
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(SOD|SMA|SMB|0805|MELF|DO-35|DO-204|DO-41).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim from 1N4148 datasheet parameters (Vf, Cj, trr, Vbr), MIT."
+      "provenance": "Derived for circsim from 1N4148 datasheet operating points (Vf at 5 mA and 100 mA, Cj, trr, Vbr) by scripts/fit-model-cards.mjs, MIT."
     },
     {
       "id": "diode-1n4001",
       "match": {
         "mpn": ["1N4001", "1N4002", "1N4003", "1N4004", "1N4005", "1N4006", "1N4007"],
         "refdesPrefix": ["D"],
-        "footprintRegex": "D_(DO-41|SMA|SMB|DO-214)"
+        "footprintRegex": "(?:^|:)D_(DO-41|SMA|SMB|DO-214)"
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "D1N4001" },
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(DO-41|SMA|SMB|DO-214|DO-201).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim from 1N400x rectifier datasheet parameters (Vf@1A, Vbr=50V), MIT."
+      "provenance": "Derived for circsim from 1N400x rectifier datasheet operating points (Vf at 1 A, Cj, trr, VRRM=50V) by scripts/fit-model-cards.mjs, MIT."
     },
     {
       "id": "diode-1n5819",
       "match": {
         "mpn": ["1N5819", "1N5817", "1N5818", "SB5819", "B5819W", "SS14"],
         "refdesPrefix": ["D"],
-        "footprintRegex": "D_(DO-41|SMA|SMB|DO-214|SOD)"
+        "footprintRegex": "(?:^|:)D_(DO-41|SMA|SMB|DO-214|SOD)"
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "D1N5819" },
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(DO-41|SMA|SMB|DO-214|SOD).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim from 1N5819 Schottky datasheet parameters (Vf~0.6V@1A, Vbr=40V, eg=0.69), MIT."
+      "provenance": "Derived for circsim from 1N5819 Schottky datasheet operating points (Vf at 1 A and 3 A, Cj, VRRM=40V) by scripts/fit-model-cards.mjs, MIT."
     },
     {
       "id": "schottky-ss54",
@@ -52,9 +49,8 @@
         "mpn": ["SS54", "SS52", "SS56", "SB540"]
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "DSS54" },
-      "$comment": "5A/40V-class Schottky (DO-214AB/SMC). MPN/value matching only — a D + SMA/SMB/SMC fallback would collide with the 1N4001/1N5819 fallback rules. pinMaps keys are for pin mapping, not matching; the (D_)? prefix covers bare routed-board footprint names like SMC_L7.1-…. The anode-first JLC/EasyEDA key MUST stay ordered before the generic key: the generic pattern also matches JLC names (SMC anywhere in the string) and would silently reverse the diode (led_lantern rev B D7, JLC-MCP:SMC_L7.1-W6.2-LS8.1-R-RD, pad 1 = anode = /VBUS_C).",
+      "$comment": "5A/40V-class Schottky (DO-214AB/SMC). MPN/value matching only — a D + SMA/SMB/SMC fallback would collide with the 1N4001/1N5819 fallback rules. pinMaps keys are for pin mapping, not matching; the (D_)? prefix covers bare routed-board footprint names like SMC_L7.1-…. JLC/EasyEDA-origin names (which the generic pattern also matches) are intercepted in selectPinMap before any key is tried and come back pinmap-unverified, because their pad-1 polarity varies by part (led_lantern rev B: D7 SMC pad 1 = anode, but the SMA and SOD-123 diodes are cathode on pad 1).",
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "(D_)?(SMC|SMB|SMA|DO-214|DO-201).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
@@ -65,11 +61,10 @@
       "match": {
         "mpn": ["BZX55C5V1", "BZX84C5V1", "1N4733A", "5V1"],
         "refdesPrefix": ["D", "Z", "ZD"],
-        "footprintRegex": "D_(SOD|MiniMELF|DO-35|SOT-23)"
+        "footprintRegex": "(?:^|:)D_(SOD|MiniMELF|DO-35|SOT-23)"
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "DZ5V1" },
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(SOD|MiniMELF|DO-35|MELF).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
@@ -81,12 +76,11 @@
         "mpn": ["BZX84C3V0", "3V0"],
         "valueRegex": "(?i)^3\\.0V$",
         "refdesPrefix": ["D", "Z", "ZD"],
-        "footprintRegex": "D_(SOD|MiniMELF|DO-35|SOT-23)"
+        "footprintRegex": "(?:^|:)D_(SOD|MiniMELF|DO-35|SOT-23)"
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "DZ3V0" },
       "$comment": "valueRegex matches part VALUES only, and only the explicit '3.0V' (bare '3V' is ambiguous with battery values — refdes BT); a supply net named 3V0 never reaches the matcher.",
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(SOD|MiniMELF|DO-35|MELF).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
@@ -100,11 +94,10 @@
       "model": { "type": "model-card", "file": "diodes.lib", "name": "DSMAJ24A" },
       "$comment": "Unidirectional 24V TVS (SMA). MPN/value matching only — the D + SMA refdes/footprint fallback tier gave a live 3-way false ambiguity on a real board (D3). pinMaps keys are for pin mapping, not matching.",
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "(D_)?(SMA|SMB|SMC|DO-214).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim from SMAJ24A TVS datasheet parameters (Vbr=26.7V@1mA, Vc=38.9V@10.3A via rs, Cj~280pF), MIT."
+      "provenance": "Derived for circsim from SMAJ24A TVS datasheet operating points (forward Vf at 1 A and 25 A, VBR at 1 mA, VC=38.9V at 10.3A, Cj~280pF) by scripts/fit-model-cards.mjs. Two-branch subcircuit: separate forward diode and reverse clamp. MIT."
     },
     {
       "id": "led-generic",
@@ -118,63 +111,59 @@
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Generic LED (red model, Vf~1.9V) written for circsim — used when value field is simply 'LED' without a color qualifier, MIT."
+      "provenance": "Generic LED (red model, Vf 1.9V at 20 mA) derived for circsim, used when value field is simply 'LED' without a color qualifier, MIT."
     },
     {
       "id": "led-red",
       "match": {
-        "valueRegex": "(?i)^(led[_-]?)?red$",
-        "refdesPrefix": ["D", "LED"],
-        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+        "valueRegex": "(?i)^(led[_ -]?)?red([_ -]?led)?$",
+        "refdesPrefix": ["D", "LED"]
       },
       "model": { "type": "model-card", "file": "led.lib", "name": "LED_RED" },
       "pinMaps": {
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim: red LED (AlGaInP, Vf~1.8-2.0V@20mA) via tuned n/eg, MIT."
+      "provenance": "Derived for circsim by scripts/fit-model-cards.mjs: red LED (AlGaInP, Vf 1.9V at 20 mA, band 1.8-2.0V) by fitting is, MIT."
     },
     {
       "id": "led-green",
       "match": {
-        "valueRegex": "(?i)^(led[_-]?)?green$",
-        "refdesPrefix": ["D", "LED"],
-        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+        "valueRegex": "(?i)^(led[_ -]?)?green([_ -]?led)?$",
+        "refdesPrefix": ["D", "LED"]
       },
       "model": { "type": "model-card", "file": "led.lib", "name": "LED_GREEN" },
       "pinMaps": {
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim: green LED (InGaN, Vf~2.0-2.2V@20mA) via tuned n/eg, MIT."
+      "provenance": "Derived for circsim by scripts/fit-model-cards.mjs: green LED (InGaN, Vf 2.15V at 20 mA, band 2.1-2.2V) by fitting is, MIT."
     },
     {
       "id": "led-blue",
       "match": {
-        "valueRegex": "(?i)^(led[_-]?)?blue$",
-        "refdesPrefix": ["D", "LED"],
-        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+        "valueRegex": "(?i)^(led[_ -]?)?blue([_ -]?led)?$",
+        "refdesPrefix": ["D", "LED"]
       },
       "model": { "type": "model-card", "file": "led.lib", "name": "LED_BLUE" },
       "pinMaps": {
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim: blue LED (InGaN, Vf~3.0-3.2V@20mA) via tuned n/eg, MIT."
+      "provenance": "Derived for circsim by scripts/fit-model-cards.mjs: blue LED (InGaN, Vf 3.1V at 20 mA, band 3.0-3.2V) by fitting is, MIT."
     },
     {
       "id": "led-white",
       "match": {
-        "valueRegex": "(?i)^(led[_-]?)?white$",
-        "refdesPrefix": ["D", "LED"],
-        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+        "valueRegex": "(?i)^(led[_ -]?)?white([_ -]?led)?$",
+        "refdesPrefix": ["D", "LED"]
       },
       "model": { "type": "model-card", "file": "led.lib", "name": "LED_WHITE" },
       "pinMaps": {
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim: white LED (InGaN+phosphor, Vf~3.0-3.4V@20mA) via tuned n/eg, MIT."
+      "provenance": "Derived for circsim by scripts/fit-model-cards.mjs: white LED (InGaN+phosphor, Vf 3.2V at 20 mA, band 3.0-3.4V) by fitting is, MIT."
     },
     {
       "id": "bjt-2n2222",
@@ -192,7 +181,7 @@
         "TO-92.*": { "1": "3", "2": "2", "3": "1" }
       },
       "defaultPinMap": { "1": "3", "2": "2", "3": "1" },
-      "provenance": "Written for circsim from 2N2222A datasheet parameters (hFE, fT=300MHz), Gummel-Poon NPN, MIT."
+      "provenance": "Derived for circsim from 2N2222A datasheet operating points (hFE, Vbe, hoe, fT=300MHz, Cobo, Cibo, ts) by scripts/fit-model-cards.mjs, Gummel-Poon NPN, MIT."
     },
     {
       "id": "bjt-2n3904",
@@ -209,7 +198,7 @@
         "TO-92.*": { "1": "3", "2": "2", "3": "1" }
       },
       "defaultPinMap": { "1": "3", "2": "2", "3": "1" },
-      "provenance": "Written for circsim from 2N3904 datasheet parameters (hFE, fT=300MHz), Gummel-Poon NPN, MIT."
+      "provenance": "Derived for circsim from 2N3904 datasheet operating points (hFE, Vbe, hoe, fT=300MHz, Cobo, Cibo, ts) by scripts/fit-model-cards.mjs, Gummel-Poon NPN, MIT."
     },
     {
       "id": "bjt-2n3906",
@@ -226,7 +215,7 @@
         "TO-92.*": { "1": "3", "2": "2", "3": "1" }
       },
       "defaultPinMap": { "1": "3", "2": "2", "3": "1" },
-      "provenance": "Written for circsim from 2N3906 datasheet parameters (hFE, fT=250MHz), Gummel-Poon PNP, MIT."
+      "provenance": "Derived for circsim from 2N3906 datasheet operating points (hFE, Vbe, hoe, fT=250MHz, Cobo, Cibo, ts) by scripts/fit-model-cards.mjs, Gummel-Poon PNP, MIT."
     },
     {
       "id": "bjt-bc547",
@@ -243,7 +232,7 @@
         "TO-92.*": { "1": "1", "2": "2", "3": "3" }
       },
       "defaultPinMap": { "1": "1", "2": "2", "3": "3" },
-      "provenance": "Written for circsim from BC547B datasheet parameters (hFE~200-450, fT=300MHz), Gummel-Poon NPN. Note TO-92 BC547 pinout is C-B-E (pin1=C), MIT."
+      "provenance": "Derived for circsim from BC547B datasheet operating points (hFE typ 290 at 2 mA, Vbe, hoe, fT=300MHz, Cc, Ce, ts) by scripts/fit-model-cards.mjs, Gummel-Poon NPN. Note TO-92 BC547 pinout is C-B-E (pin1=C), MIT."
     },
     {
       "id": "bjt-bc557",
@@ -260,7 +249,7 @@
         "TO-92.*": { "1": "1", "2": "2", "3": "3" }
       },
       "defaultPinMap": { "1": "1", "2": "2", "3": "3" },
-      "provenance": "Written for circsim from BC557B datasheet parameters (hFE~200-450, fT=150MHz), Gummel-Poon PNP. TO-92 pinout C-B-E (pin1=C), MIT."
+      "provenance": "Derived for circsim from BC557B datasheet operating points (hFE typ 290 at 2 mA, Vbe, hoe, fT=150MHz, Cc, Ce, ts) by scripts/fit-model-cards.mjs, Gummel-Poon PNP. TO-92 pinout C-B-E (pin1=C), MIT."
     },
     {
       "id": "mosfet-2n7002",

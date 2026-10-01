@@ -3,6 +3,9 @@
   "version": "0.2.9",
   "description": "Cross-platform Electron PCB simulator",
   "main": "./out/main/index.js",
+  "bin": {
+    "circsim": "./out/cli/index.js"
+  },
   "author": "circsim maintainers <epim@users.noreply.github.com>",
   "license": "MIT",
   "config": {
@@ -13,6 +16,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build && vite build --config vite.simhost.config.ts",
+    "build:cli": "vite build --config vite.cli.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -28,10 +32,10 @@
     "license:check": "node scripts/license-hygiene.mjs",
     "package": "npm run build && electron-builder",
     "package:dir": "npm run build && electron-builder --dir",
-    "check:markers": "node scripts/check-known-bug-markers.mjs"
+    "check:markers": "node scripts/check-known-bug-markers.mjs",
+    "docs:fidelity": "node scripts/fidelity-doc.mjs"
   },
   "dependencies": {
-    "electron-updater": "^6.1.7",
     "koffi": "^3.1.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
