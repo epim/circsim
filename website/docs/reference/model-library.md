@@ -25,7 +25,7 @@ Two-terminal, anode = pin 1, cathode = pin 2. Zeners are modeled as silicon diod
 
 ## LEDs: primitive
 
-Matched by value (the word "LED" plus a color). Forward voltage is fitted per color to the middle of the typical datasheet band at 20 mA, and checked at 10 mA and 20 mA by the characterization suite. LEDs get a current sense that drives their [3D glow](../guides/energize).
+Matched by value (the word "LED" plus a color, such as `Green`, `LED_green` or `Green LED`). Forward voltage is fitted per color to the middle of the typical datasheet band at 20 mA, and checked at 10 mA and 20 mA by the characterization suite. An LED on an `LED_*` footprint whose value is not one of these colors (`Yellow`, `Amber`, `LED 0805`) resolves to the generic LED with a fallback warning. LEDs get a current sense that drives their [3D glow](../guides/energize).
 
 | Part | Matches | Vf at 20 mA (10 mA) |
 | --- | --- | --- |
