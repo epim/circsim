@@ -116,8 +116,8 @@ describe('solveNodal', () => {
     expect(v).toBeNull()
   })
 
-  it('solves a 200 x 200 sheet (40 000 nodes) quickly and to the closed form', () => {
-    const W = 200
+  /** Build a W x W sheet: left column tied to node 0, 1 mA drawn from every right-column node. */
+  function sheet(W: number) {
     const edges: [number, number, number][] = []
     for (let y = 0; y < W; y++) {
       for (let x = 0; x < W; x++) {
@@ -133,12 +133,38 @@ describe('solveNodal', () => {
     // 1 mA x (W - 1) links / 2000 S.
     const inject = new Float64Array(W * W)
     for (let y = 0; y < W; y++) inject[y * W + W - 1] = 0.001
-    const t0 = performance.now()
-    const v = solveNodal(system(W * W, edges), 0, inject)!
-    const ms = performance.now() - t0
+    return { sys: system(W * W, edges), inject }
+  }
+
+  /** Best-of-N wall time (ms) for one solve, plus the last result. */
+  function timeSolve(W: number, reps: number) {
+    const { sys, inject } = sheet(W)
+    let best = Infinity
+    let v: Float64Array | null = null
+    for (let r = 0; r < reps; r++) {
+      const t0 = performance.now()
+      v = solveNodal(sys, 0, inject)
+      best = Math.min(best, performance.now() - t0)
+    }
+    return { best, v: v! }
+  }
+
+  it('solves a 200 x 200 sheet (40 000 nodes) to the closed form, scaling far below dense elimination', () => {
+    const W = 200
+    const small = timeSolve(50, 5)
+    const big = timeSolve(W, 1)
+    const v = big.v
     expect(v[W - 1]).toBeCloseTo((0.001 * (W - 1)) / 2000, 7)
     expect(v[(W - 1) * W + W - 1]).toBeCloseTo((0.001 * (W - 1)) / 2000, 7)
-    // The dense elimination this replaced needed n^3 = 6.4e13 operations here.
-    expect(ms).toBeLessThan(5000)
+    // No absolute millisecond bound: CI runners are up to 5x slower than a dev
+    // machine, so the test compares two sizes on the same machine instead. Going
+    // from 50 x 50 to 200 x 200 multiplies nodes by 16. The conjugate gradient
+    // here needs about W iterations of W^2 edges each, so about 4^3 = 64x the
+    // time; the dense elimination this replaced is n^3 = 16^3 = 4096x. A ratio
+    // under 600 passes with roughly 10x headroom over the expected scaling and
+    // still fails on cubic-in-nodes (or even quadratic-in-nodes plus overhead
+    // growth) regressions. Both sides run on the same runner, so its speed cancels.
+    const ratio = big.best / Math.max(small.best, 0.05)
+    expect(ratio).toBeLessThan(600)
   })
 })
