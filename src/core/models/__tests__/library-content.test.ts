@@ -752,9 +752,25 @@ describe('macromodel structure: supply-pin current, pole clamp, smooth decisions
     expect(b).toMatch(/^\s*vsns\s+osns\s+out\s+0\s*$/im)
     expect(b).toMatch(/^\s*bsrc\s+vcc\s+gnd\s+i\s*=.*i\(vsns\)/im)
     expect(b).toMatch(/^\s*rq\s+vcc\s+gnd\s+1\.8k\b/im)
-    // The latch is a regenerative bistable with a DC path, not a bare integrator.
-    expect(b).toMatch(/^\s*blat\s+t\s+gnd\s+v\s*=/im)
+    // The latch is an algebraic regenerative bistable (it references its own
+    // output), not a bare integrator and not a lagged node.
+    expect(b).toMatch(/^\s*bq\s+q\s+gnd\s+v\s*=.*v\(q,\s*gnd\)/im)
     expect(b).not.toMatch(/^\s*blatch\s+0\s+q\s+i\b/im)
+  })
+
+  it('NE555: no capacitor or resistor sits on the latch node (solver-step chatter, review of PR #118)', () => {
+    // A stiff lag on a regenerative node rings under trapezoidal integration when
+    // the solver step is many times the lag (a function generator picks 5 us at
+    // 1 kHz), which chattered the output at every threshold crossing. The latch
+    // must stay algebraic: no capacitor or resistor may touch q or qd.
+    const b = body('timer555.lib', 'NE555')
+    for (const line of b.split(/\r?\n/).filter((l) => !/^\s*\*/.test(l))) {
+      const tok = line.trim().split(/\s+/)
+      if (/^[cr]/i.test(tok[0] ?? '')) {
+        expect(tok.slice(1, 3), `reactive or resistive element on a latch node: ${line}`).not.toContain('q')
+        expect(tok.slice(1, 3), `reactive or resistive element on a latch node: ${line}`).not.toContain('qd')
+      }
+    }
   })
 
   it('reg_lin: input current is the delivered output current plus Iq (issue #2) and dropout depends on load (issue #42)', () => {

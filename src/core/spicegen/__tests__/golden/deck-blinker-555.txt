@@ -33,41 +33,35 @@ rq vcc gnd 1.8k
 *
 * ---- upper (threshold) comparator ----
 * output -> 1 when THRES > CTRL (2/3 Vcc). Drives the latch RESET input.
-* Smooth step 2 mV wide (1 V wide at time 0). The latch state feeds back as
-* +/-5 mV of hysteresis: once the latch starts to flip, the comparator holds its
-* decision while the discharge transistor pulls THRES back, so a threshold that
-* is only just crossed still completes the flip instead of leaving the latch
-* hovering at its unstable midpoint.
-bcomphi chi gnd v = 0.5*(1 + tanh((v(thres,ctrl) - 0.01*(v(q,gnd) - 0.5))/(0.002 + 1.0*(time < 1e-6 ? 1 - time/1e-6 : 0))))
+* Smooth step 2 mV wide (1 V wide at time 0).
+bcomphi chi gnd v = 0.5*(1 + tanh(v(thres,ctrl)/(0.002 + 1.0*(time < 1e-6 ? 1 - time/1e-6 : 0))))
 *
 * ---- lower (trigger) comparator ----
 * output -> 1 when TRIG < 1/3 Vcc (node n13). Drives the latch SET input.
-bcomplo clo gnd v = 0.5*(1 + tanh((v(n13,trig) + 0.01*(v(q,gnd) - 0.5))/(0.002 + 1.0*(time < 1e-6 ? 1 - time/1e-6 : 0))))
+bcomplo clo gnd v = 0.5*(1 + tanh(v(n13,trig)/(0.002 + 1.0*(time < 1e-6 ? 1 - time/1e-6 : 0))))
 *
 * ---- active-low RESET pin gate (datasheet threshold about 1 V) ----
 * rok -> 1 when the pin is high (latch allowed to run), -> 0 when pulled low.
 brok rok gnd v = 0.5*(1 + tanh((v(reset,gnd) - 1)/0.05))
 *
 * ---- RS latch with active-low RESET pin override ----
-* State node 'q' is held in [0,1] by a regenerative bistable: the target
-*   t = (1-chi)*rok * ( clo + (1-clo)*hold(q) )
-* is 0 whenever the upper comparator or the RESET pin resets the latch (RESET is
-* dominant, per the datasheet), 1 when only the lower comparator sets it, and
-* otherwise hold(q) = 0.5*(1+tanh(6*(q-0.5))), whose stable fixed points are
-* q=0 and q=1 (the unstable one sits at q=0.5). That is the latch memory. It is
-* off at time 0 and ramps in over the first microsecond, so the operating point
-* solves to q=0 (output low, discharge on) whenever neither comparator is
-* active, with no memory to choose between two states. q follows t through a
-* 200 ohm / 1 nF lag (about 200 ns, close to the real part's propagation delay).
-* The lag is deliberately not much shorter than the solver step: a stiff
-* regenerative node can be balanced on its unstable midpoint by the trapezoidal
-* integrator, a slower one cannot.
-blat t gnd v = v(rok,gnd)*(1 - v(chi,gnd))*( v(clo,gnd) + (1 - v(clo,gnd))*(time < 1e-6 ? time/1e-6 : 1)*0.5*(1 + tanh(6*(v(q,gnd) - 0.5))) )
-rlat t q 200
-cq q gnd 1n ic=0
+* State node 'q' is an algebraic regenerative bistable: the voltage source below
+* forces
+*   q = (1-chi)*rok * ( clo + (1-clo)*hold(q) )
+* The factor (1-chi)*rok is 0 whenever the upper comparator or the RESET pin
+* resets the latch (RESET is dominant, per the datasheet), clo = 1 sets it, and
+* otherwise q = hold(q) = 0.5*(1+tanh(6*(q-0.5))), whose stable solutions are
+* q=0 and q=1 (the unstable one sits at q=0.5). That self-reference is the latch
+* memory: q stays on whichever branch it is on until a comparator forces it off
+* that branch. The memory term is off at time 0 and ramps in over the first
+* microsecond, so the operating point solves to q=0 (output low, discharge on)
+* whenever neither comparator is active, with no memory to choose between two
+* states. There is deliberately no capacitor or lag on q (see "Solver step"
+* above): the real part's propagation delay (about 100 ns) is far below the step circsim normally takes.
+bq q gnd v = v(rok,gnd)*(1 - v(chi,gnd))*( v(clo,gnd) + (1 - v(clo,gnd))*(time < 1e-6 ? time/1e-6 : 1)*0.5*(1 + tanh(6*(v(q,gnd) - 0.5))) )
 * read the latch state through a smooth 0/1 decision (mid-point 0.5). The slope
 * is 20 per volt, 8 per volt at time 0.
-bqd qd gnd v = 0.5*(1 + tanh((20 - 12*(time < 1e-6 ? 1 - time/1e-6 : 0))*(v(q,gnd) - 0.5)))
+bqd qd gnd v = 0.5*(1 + tanh((60 - 52*(time < 1e-6 ? 1 - time/1e-6 : 0))*(v(q,gnd) - 0.5)))
 *
 * ---- output buffer (pin 3) ----
 * OUT is HIGH (Vcc - 0.5) when the latch is SET, LOW (0.1 V) when reset,
@@ -89,7 +83,7 @@ bsrc vcc gnd i = 0.5*(1 + tanh((v(vcc,gnd) - 1)/0.25))*0.5*( i(vsns) + sqrt(i(vs
 * GND; the current it sinks leaves through the gnd pin. The state readout inside
 * it is softer than qd at time 0 (3 per volt), because the loop through THRES
 * is what the operating point has to solve.
-bdisch disch gnd i = v(disch,gnd)*( (1 - (0.5*(1 + tanh((20 - 17*(time < 1e-6 ? 1 - time/1e-6 : 0))*(v(q,gnd) - 0.5))))*v(rok,gnd))/15 + ((0.5*(1 + tanh((20 - 17*(time < 1e-6 ? 1 - time/1e-6 : 0))*(v(q,gnd) - 0.5))))*v(rok,gnd))/1e9 )
+bdisch disch gnd i = v(disch,gnd)*( (1 - (0.5*(1 + tanh((60 - 57*(time < 1e-6 ? 1 - time/1e-6 : 0))*(v(q,gnd) - 0.5))))*v(rok,gnd))/15 + ((0.5*(1 + tanh((60 - 57*(time < 1e-6 ? 1 - time/1e-6 : 0))*(v(q,gnd) - 0.5))))*v(rok,gnd))/1e9 )
 .ends NE555
 .model LED_RED D(is=1e-19 rs=2.0 n=1.7 cjo=30p vj=0.75 m=0.333 bv=5 ibv=100u eg=1.9 xti=3)
 .save all

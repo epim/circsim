@@ -678,6 +678,39 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     expect(relErr).toBeLessThan(0.2)
   }, 90_000)
 
+  it('NE555 astable: no spurious output edges at solver steps 2 us to 50 us (review of PR #118)', async () => {
+    // A function generator sets the step to 1/200 of its fastest frequency, so the
+    // step can be 10x to 250x any lag inside the model. A stiff lag on the latch
+    // rang under trapezoidal integration there and chattered the output at the
+    // THRES crossing. Every half period must stay within 25 % of the median.
+    const deck = [
+      '* NE555 astable at coarse steps',
+      'vcc vcc 0 dc 5',
+      'r1 vcc disch 1k',
+      'r2 disch thres 10k',
+      'c1 thres 0 100n ic=0',
+      'cc ctrl 0 10n',
+      'x1 0 thres out vcc ctrl thres disch vcc NE555',
+      ...t555Lib,
+      '.end'
+    ]
+    for (const tstep of ['2u', '3u', '5u', '10u', '25u', '50u']) {
+      const r = await runTran(deck, tstep, '0.1')
+      const out = r.series['out'] ?? []
+      const edges: number[] = []
+      for (let i = 1; i < out.length; i++) if (out[i - 1] < 2.5 !== out[i] < 2.5) edges.push(r.t[i])
+      const gaps = edges.slice(2).map((e, i) => e - edges[i + 1])
+      const median = [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)]
+      const odd = gaps.filter((g) => g < 0.8 * median || g > 1.25 * median).length
+      expect(r.errs, `tstep ${tstep}`).toEqual([])
+      expect(r.t[r.t.length - 1], `tstep ${tstep}: ran to the end`).toBeGreaterThan(0.099)
+      // 0.1 s holds about 68 periods of 1.455 ms: 136 edges, allow startup and rounding.
+      expect(edges.length, `tstep ${tstep}: edge count`).toBeGreaterThan(125)
+      expect(edges.length, `tstep ${tstep}: edge count`).toBeLessThan(145)
+      expect(odd, `tstep ${tstep}: half periods off the median (${(median * 1e6).toFixed(0)} us)`).toBe(0)
+    }
+  }, 180_000)
+
   it('74HC00 NAND truth table via ONE .tran stepping 00/01/10/11', async () => {
     const logic = JSON.parse(readFileSync(join(MODELS, 'logic74hc.json'), 'utf8')) as Logic74
     const vHigh = 5
