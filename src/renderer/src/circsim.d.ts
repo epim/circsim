@@ -45,6 +45,10 @@ interface CircsimDiagnosticsBundleResult {
   error?: string
 }
 
+type CircsimOpenDocsResult =
+  | { ok: true; target: 'web' | 'local' }
+  | { ok: false; error: string }
+
 interface CircsimLicenseTexts {
   appVersion: string
   appLicense: string
@@ -101,10 +105,12 @@ declare global {
        */
       getFirstLightDemoPath(): Promise<string>
       /**
-       * Open the "what circsim can tell you" fidelity doc in the system viewer.
-       * Wired from the fidelity banner and About panel (Task 28, Spec §12, §16 risk 7).
+       * Open the "what circsim can tell you" fidelity doc (published page in the
+       * system browser when online, else the bundled Markdown). Resolves with the
+       * outcome so a failure can be shown (issue #62). Wired from the fidelity
+       * banner and About panel (Task 28, Spec §12, §16 risk 7).
        */
-      openDocs(): Promise<void>
+      openDocs(): Promise<CircsimOpenDocsResult>
       /**
        * Licensing texts for the About dialog (Task 27, Spec §14): app license,
        * verbatim ngspice COPYING, model-library provenance, docs/licensing.md.

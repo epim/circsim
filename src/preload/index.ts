@@ -78,6 +78,11 @@ export interface DiagnosticsBundleResult {
   error?: string
 }
 
+/** Outcome of `openDocs` (mirrors OpenDocsResult in src/main/openDocs.ts). */
+export type OpenDocsResult =
+  | { ok: true; target: 'web' | 'local' }
+  | { ok: false; error: string }
+
 export interface LicenseTexts {
   appVersion: string
   appLicense: string
@@ -307,12 +312,13 @@ contextBridge.exposeInMainWorld('circsim', {
   },
 
   /**
-   * Open the "what circsim can tell you" fidelity documentation in the
-   * system browser. Used by the fidelity banner and About panel (Task 28).
-   * Returns a promise that resolves once the open is dispatched.
+   * Open the "what circsim can tell you" fidelity documentation: the
+   * published page in the system browser when online, else the bundled
+   * Markdown. Used by the fidelity banner and About panel (Task 28).
+   * Resolves with the outcome so the UI can show a failure (issue #62).
    */
-  openDocs: (): Promise<void> => {
-    return ipcRenderer.invoke('circsim:openDocs') as Promise<void>
+  openDocs: (): Promise<OpenDocsResult> => {
+    return ipcRenderer.invoke('circsim:openDocs') as Promise<OpenDocsResult>
   },
 
   /**
