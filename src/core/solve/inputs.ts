@@ -11,9 +11,9 @@
 import type { BoardModel } from '../kicad/types'
 import type { Resolution } from '../models/types'
 import type { Circuit } from '../netlist/extract'
-import { generateDeck, type GenerateOptions } from '../spicegen/generate'
+import { generateDeckWithDiagnostics, type GenerateOptions } from '../spicegen/generate'
 import { wiredInstruments, type Instrument } from '../spicegen/instruments'
-import type { SolveInputs, SolveOverrides, UserModelText } from './types'
+import type { SolveInputs, SolveOverrides, UndrivenNet, UserModelText } from './types'
 
 /**
  * Snapshot every deck input. Rail overrides are resolved against this circuit,
@@ -48,7 +48,43 @@ export function buildSolveInputs(
  * baseline by clearing them first.
  */
 export function buildDeck(inputs: SolveInputs): string[] {
-  return generateDeck(generateOptions(inputs))
+  return buildDeckWithUndriven(inputs).deck
+}
+
+/**
+ * buildDeck plus the circuit nets the deck bled to ground because nothing
+ * drives them (issue #43). Still the only place in the app that calls the deck
+ * generator.
+ */
+export function buildDeckWithUndriven(inputs: SolveInputs): { deck: string[]; undrivenNets: UndrivenNet[] } {
+  const { lines, diagnostics } = generateDeckWithDiagnostics(generateOptions(inputs))
+  return { deck: lines, undrivenNets: undrivenNetsOf(diagnostics.undrivenIslands, inputs.circuit) }
+}
+
+/**
+ * Map undriven-island spice nodes back to circuit nets, in the generator's
+ * deterministic first-seen order. Nodes that are not a circuit net (a
+ * synthetic or expansion-internal node) have no KiCad name to show and are
+ * skipped; ground is never in an island.
+ */
+export function undrivenNetsOf(islands: readonly (readonly string[])[], circuit: Circuit): UndrivenNet[] {
+  const byNode = new Map<string, UndrivenNet>()
+  for (const net of circuit.nets) {
+    if (net.spiceNode === '0') continue
+    byNode.set(net.spiceNode, { netId: net.id, kicadName: net.kicadName, spiceNode: net.spiceNode })
+  }
+  const out: UndrivenNet[] = []
+  const seen = new Set<number>()
+  for (const island of islands) {
+    for (const node of island) {
+      const net = byNode.get(node)
+      if (net && !seen.has(net.netId)) {
+        seen.add(net.netId)
+        out.push(net)
+      }
+    }
+  }
+  return out
 }
 
 function generateOptions(inputs: SolveInputs): GenerateOptions {

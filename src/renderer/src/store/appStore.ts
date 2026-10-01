@@ -52,6 +52,7 @@ import {
   SolveFailedError,
   type SolveInputs,
   type SolveResult,
+  type UndrivenNet,
 } from '../../../core/solve'
 import {
   wiredInstruments, isFullyWired, type Instrument,
@@ -437,6 +438,13 @@ export interface AppState {
    * override (Task 6). Empty when no rail is gated off.
    */
   railNotes: RailNote[]
+  /**
+   * Nets the latest powerOn deck held at 0 V through a bleed resistor because
+   * nothing on the board drives them (issue #43). Their 0 V readings are not
+   * measurements; WarningsBar lists them. Empty when every net has a path to
+   * ground or a driver.
+   */
+  undrivenNets: UndrivenNet[]
   ngspiceVersion: string | null
   /** Real-time pacing factor (0.1× / 1× / 'max'). */
   paceFactor: number | 'max'
@@ -902,6 +910,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     coachNotes: [],
     measuredRails: null,
     railNotes: [],
+    undrivenNets: [],
     ngspiceVersion: null,
     paceFactor: 1,
     achievedRealtimeFactor: null,
@@ -937,6 +946,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         coachNotes: [],
         measuredRails: null,
         railNotes: [],
+        undrivenNets: [],
         instruments: [],
         selectedInstrumentId: null,
         autoAttachedSupplyId: null,
@@ -1511,6 +1521,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           currentsByRef,
           coachNotes,
           railNotes,
+          undrivenNets: solved.undrivenNets,
           // Honesty surface (F1): powerOn is now the sole committer for its own op,
           // so it carries ingestEvent's caveat logic — an op that converged only
           // via a fallback rung gets the persistent caveat (absent method ⇒ direct).
@@ -1648,7 +1659,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Any deck-dirtying edit (setGround, setPinMap, override changes, …) can
       // shift the reference frame or topology the sensed rails were measured in,
       // so the op-measured rail cache + gated-off notes must not survive it.
-      set({ deckDirty: true, measuredRails: null, railNotes: [] })
+      set({ deckDirty: true, measuredRails: null, railNotes: [], undrivenNets: [] })
     },
 
     // ── crash recovery (Spec §6.1) ─────────────────────────────────────────────
