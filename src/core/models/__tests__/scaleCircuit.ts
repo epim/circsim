@@ -6,7 +6,9 @@
  * extract, so the circuit has the shape the app feeds resolveAll: nets grow with
  * parts (about one net per part), a mix of passives that resolve at tier 2,
  * library parts that resolve at tier 3 (by MPN, by value regex and by footprint
- * fallback), and parts nothing resolves.
+ * fallback), controllers and addressable LEDs that the stub rules turn into
+ * supply-load stubs (their pads sit on the named +3V3 and GND nets), and parts
+ * nothing resolves.
  */
 
 import { readFileSync } from 'node:fs'
@@ -57,6 +59,8 @@ interface Kind {
   value: string
   lib: string
   pads: number
+  /** A stub-rule part: pad 1 is on +3V3 and pad 2 on GND, as a stubbed controller's supply pads are. */
+  supply?: boolean
 }
 
 /** Cycle of part kinds; roughly the mix of a small mixed-signal board. */
@@ -71,15 +75,17 @@ const KINDS: Kind[] = [
   { prefix: 'D', value: 'MysteryDiode', lib: 'Diode_SMD:D_SOD-123', pads: 2 },
   { prefix: 'U', value: 'NoSuchChip', lib: 'Package_SO:SOIC-16_3.9x9.9mm_P1.27mm', pads: 4 },
   { prefix: 'C', value: '10uF', lib: 'Capacitor_SMD:C_1206_3216Metric', pads: 2 },
+  { prefix: 'U', value: 'ESP32-WROOM-32', lib: 'RF_Module:ESP32-WROOM-32', pads: 4, supply: true },
+  { prefix: 'D', value: 'WS2812B', lib: 'LED_SMD:LED_WS2812B_PLCC4_5.0x5.0mm_P3.2mm', pads: 4, supply: true },
 ]
 
 /**
- * A circuit of `parts` parts and about `parts` nets (plus GND), ground set to
+ * A circuit of `parts` parts and about `parts` nets (plus GND and +3V3), ground set to
  * the net named GND. Deterministic: the same size gives the same circuit.
  */
 export function scaleCircuit(parts: number): Circuit {
   const netCount = parts
-  const nets = ['GND', ...Array.from({ length: netCount }, (_, i) => `N${i}`)]
+  const nets = ['GND', '+3V3', ...Array.from({ length: netCount }, (_, i) => `N${i}`)]
   const footprints: SyntheticFootprint[] = []
   for (let i = 0; i < parts; i++) {
     const kind = KINDS[i % KINDS.length]
@@ -91,7 +97,9 @@ export function scaleCircuit(parts: number): Circuit {
         y: 0,
         w: 1,
         h: 1.3,
-        net: p === 0 && i % 7 === 0 ? 'GND' : nets[1 + ((i + p * 31) % netCount)],
+        net: kind.supply && p < 2
+          ? (p === 0 ? '+3V3' : 'GND')
+          : p === 0 && i % 7 === 0 ? 'GND' : nets[2 + ((i + p * 31) % netCount)],
       })
     }
     footprints.push({

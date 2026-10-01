@@ -105,7 +105,7 @@ describe('resolveAll and generateDeck growth (issue #76)', () => {
   it('the scale circuits have the shape the growth test relies on', () => {
     expect(small.parts.length).toBe(SMALL)
     expect(large.parts.length).toBe(LARGE)
-    expect(large.nets.length).toBeGreaterThan(LARGE)
+    expect(large.nets.length).toBeGreaterThan(LARGE * 0.9) // about one net per part
     expect(largeLibrary.length).toBe(library.length * SCALE)
     const res = resolveAll(small, undefined, undefined, library)
     const byTier = new Set(res.map((r) => `${r.status}:${r.tier}`))
@@ -113,6 +113,10 @@ describe('resolveAll and generateDeck growth (issue #76)', () => {
     expect(byTier.has('ok:2')).toBe(true)
     expect(byTier.has('ok:3')).toBe(true)
     expect(byTier.has('unresolved:6')).toBe(true)
+    // tier 6 supply-load stubs: the stub rules run inside the indexed resolveAll
+    const stubbed = res.filter((r) => r.status === 'stubbed')
+    expect(stubbed.length).toBeGreaterThan(SMALL / 20)
+    expect(stubbed.every((r) => r.model?.kind === 'subckt')).toBe(true)
     // The filler entries match nothing: the grown library resolves alike.
     expect(resolveAll(small, undefined, undefined, largeLibrary)).toEqual(res)
   })

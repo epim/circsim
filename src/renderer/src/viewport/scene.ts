@@ -182,9 +182,13 @@ export interface SceneManager {
    * a component are along the ray; resolveDrop (bench/leads.ts) then picks
    * whichever key matches the dragged jack's `accepts`. Miss → null.
    * pickNetAt remains for callers that only accept nets.
+   *
+   * `pointMm` is where the ray first met the board, in KiCad board millimetres
+   * (the frame of a Finding.location), rounded to 0.01 mm. The store records it
+   * as the lead's copper position when a lead is dropped (issue #27).
    */
   pickAttachTargetAt(xPx: number, yPx: number, width: number, height: number):
-    { netId?: number; ref?: string } | null
+    { netId?: number; ref?: string; pointMm?: { x: number; y: number } } | null
 
   /**
    * Bench leads: project net + component anchor world positions to canvas px
@@ -672,9 +676,15 @@ export function createSceneManager(): SceneManager {
       const ndcY = (yPx / height) * -2 + 1
       const hit = picker.raycastTargets({ x: ndcX, y: ndcY }, cam)
       if (!hit) return null
-      const result: { netId?: number; ref?: string } = {}
+      const result: { netId?: number; ref?: string; pointMm?: { x: number; y: number } } = {}
       if (hit.netId !== undefined) result.netId = hit.netId
       if (hit.ref !== undefined) result.ref = hit.ref
+      // Inverse of kicadToWorld plus the board-centering offset applied in loadBoard.
+      const round = (v: number): number => Math.round(v * 100) / 100
+      result.pointMm = {
+        x: round(hit.point.x + boardCenter.x),
+        y: round(-(hit.point.y + boardCenter.y)),
+      }
       return result
     },
 

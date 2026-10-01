@@ -31,6 +31,11 @@ function readIndex(): LibraryIndex {
   return JSON.parse(readFileSync(join(MODELS_DIR, 'index.json'), 'utf8')) as LibraryIndex
 }
 
+/** Supply-load stubs (issue #29): selected by src/core/models/stubRules.ts, never by libraryMatch. */
+function isStubEntry(entry: LibraryEntry): boolean {
+  return entry.id.startsWith('stub-')
+}
+
 /** All non-index files in resources/models/. */
 function modelFiles(): string[] {
   return readdirSync(MODELS_DIR).filter((f) => f !== 'index.json' && !f.startsWith('.'))
@@ -111,6 +116,10 @@ describe('bundled model library — index resolution (Spec §8.5)', () => {
         expect(entry.defaultPinMap).toBeUndefined()
         return
       }
+      // A supply-load stub binds its two pads at resolution time (stubRules.ts), from
+      // the schematic, a datasheet pinout when it has one, or the net names; it needs no
+      // pin map of its own.
+      if (isStubEntry(entry)) return
       const hasPinMaps = entry.pinMaps && Object.keys(entry.pinMaps).length > 0
       const hasDefault = entry.defaultPinMap && Object.keys(entry.defaultPinMap).length > 0
       expect(
@@ -131,6 +140,9 @@ describe('bundled model library — index resolution (Spec §8.5)', () => {
   it.each(readIndex().entries.map((e) => [e.id, e] as const))(
     'entry %s has at least one match criterion',
     (_id, entry) => {
+      // Stubs are chosen by name patterns in stubRules.ts and are deliberately never
+      // matched by libraryMatch; the stub tests below check that they carry no criteria.
+      if (isStubEntry(entry)) return
       const m = entry.match
       const has =
         (m.mpn && m.mpn.length > 0) ||
@@ -199,7 +211,11 @@ describe('bundled model library — Task 14b IC + digital entries (Spec §8.5)',
     for (const part of ['00', '04', '08', '14', '32', '74', '86', '164', '595']) {
       expect(digIds, `missing 74HC${part}`).toContain(`logic-74hc${part}`)
     }
-    expect(digIds.length).toBe(9)
+    // The nine above plus the 74HC02, 74HC10 and 74HC20 added for issue #29.
+    for (const part of ['02', '10', '20']) {
+      expect(digIds, `missing 74HC${part}`).toContain(`logic-74hc${part}`)
+    }
+    expect(digIds.length).toBe(12)
   })
 
   it('every subckt entry references a .subckt that exists in opamp/regulators/555 files', () => {
