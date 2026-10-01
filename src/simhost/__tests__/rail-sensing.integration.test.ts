@@ -101,10 +101,10 @@ async function runOp(deck: string[]): Promise<{ errs: string[]; v: Record<string
  * pulled to ground through R3 (100 kΩ) so the op is a clean static point; output
  * 1Y is net 4. VSS (pad 7) is grounded.
  *
- * The digital expansion's Schmitt B-source does NOT load `/VGATED` (it is a
- * behavioral source on the 1Y node that only READS v(1A)/v(1Y)), so the divider
- * alone sets the rail voltage — deterministic and independent of the derived
- * swing used for the thresholds.
+ * The digital expansion draws the current the Schmitt B-source delivers from
+ * `/VGATED` (issue #2). Output 1Y has no load here, so that draw is nanoamps and
+ * the divider alone sets the rail voltage to within microvolts: deterministic
+ * and independent of the derived swing used for the thresholds.
  */
 function buildFixture(supplyV: number): {
   circuit: Circuit
@@ -180,7 +180,9 @@ describe.skipIf(!haveNgspice)('op-informed rail sensing (real ngspice)', () => {
     expect(result.pass2).toBe('solved')
     expect(result.deck).toBe(result.pass2Deck)
     const pass2Text = result.deck.join('\n')
-    expect(pass2Text).toContain('(v(out) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000')
+    // The rail is the divider's ~5 V less microvolts of draw from the gate, so the
+    // rounded swing prints as 4.9999 or 5.0000.
+    expect(pass2Text).toMatch(/\(v\(out\) > 2\.5000 \? 3\.0000 : 2\.0000\)\) \? 0 : (4\.9999|5\.0000)/)
     expect(pass2Text).not.toContain('12.0000')
     // Provenance names the tier (the raw vHigh is the un-rounded ~4.99996 V op).
     expect(pass2Text).toContain('(op-measured rail; family default 12)')
