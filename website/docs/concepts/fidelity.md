@@ -59,7 +59,7 @@ If your design runs above ~10 MHz, switches power at moderate frequencies, or ne
 If circsim reports it "couldn't find a stable solution," that usually means the solver hit a numerical problem, not that your circuit is broken. Common causes:
 
 - A part has no model (it's in the fidelity banner).
-- A node has no DC path to ground.
+- A node has no DC path to ground. (circsim ties such a net to ground through 1 GOhm so the solve can finish. When no chip output drives the net either, circsim lists it in an "Undriven nets held at 0 V" note, because its 0 V is not a measurement. See [reading the warnings](../guides/warnings#undriven-nets-held-at-0-v).)
 - Component values span a huge range (a 1 GΩ resistor next to a 1 mΩ one).
 
 Assign ground to the right net, stub out unresolved parts, and check for floating nodes. See [reading the warnings](../guides/warnings).

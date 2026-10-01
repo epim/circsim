@@ -23,7 +23,7 @@
 import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { describe, test, expect } from 'vitest'
-import { generateDeck, formatSpiceValue, alterPlan, instrumentSpiceName, buildLedSpiceNames, isLedPart, subcktTerminalConductivity, digitalVddNet } from '../generate'
+import { generateDeck, generateDeckWithDiagnostics, formatSpiceValue, alterPlan, instrumentSpiceName, buildLedSpiceNames, isLedPart, subcktTerminalConductivity, digitalVddNet } from '../generate'
 import type { Circuit, CircuitNet, Part } from '../../netlist/extract'
 import type { Resolution } from '../../models/types'
 import type { Instrument } from '../instruments'
@@ -979,6 +979,60 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
     // adc/dac rails from the CD4000 family vHigh=12: 30%/70% thresholds.
     expect(deckText).toContain('adc_bridge(in_low=3.6000 in_high=8.4000)')
     expect(deckText).toContain('dac_bridge(out_low=0 out_high=12.0000)')
+  })
+
+  describe('undriven nets across a capacitor (issue #43)', () => {
+    /** Drop the expansion-internal u1_* nodes of the chip's unused gates. */
+    const boardNodes = (groups: string[][]): string[][] =>
+      groups.map(g => g.filter(n => !n.startsWith('u1_'))).filter(g => g.length > 0)
+
+    function acCoupledInput(withCap: boolean) {
+      const circuit = makeDigitalCircuit()
+      circuit.parts.push(
+        { ref: 'R1', value: '10k', libId: 'Device:R', layer: 'F', padNet: new Map([['1', 4], ['2', 1]]), properties: {} },
+        { ref: 'C1', value: '1n', libId: 'Device:C', layer: 'F', padNet: new Map([['1', 3], ['2', 2]]), properties: {} },
+      )
+      const resolutions: Resolution[] = [
+        {
+          ref: 'U1', status: 'ok', tier: 3, warnings: [],
+          model: {
+            kind: 'xspice-digital', templateId: '74HC00',
+            pinMap: { '1': '1A', '2': '1B', '3': '1Y', '7': 'GND', '14': 'VCC' },
+          },
+        },
+        { ref: 'R1', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'r_r1 vcc a 10000' } },
+      ]
+      if (withCap) {
+        resolutions.push({ ref: 'C1', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'c_c1 y b 1e-09' } })
+      }
+      return generateDeckWithDiagnostics({
+        circuit, resolutions,
+        instruments: [
+          { kind: 'ground-ref', netId: 5 },
+          { kind: 'dc-supply', id: '1', netId: 4, volts: 5, seriesOhms: 0.1 },
+        ],
+        groundNetId: 5,
+        modelTexts: { 'logic74hc.json': LOGIC_JSON },
+      })
+    }
+
+    test('an input AC-coupled to a gate output with no bias is undriven although the gate shares its island', () => {
+      const { lines, diagnostics } = acCoupledInput(true)
+      // The capacitor joins b and y into one island, and both are bled ...
+      expect(boardNodes(diagnostics.floatingIslands)).toEqual([['b', 'y']])
+      expect(lines).toContain('r_float_1 b 0 1e9')
+      // (the dac bridge's per-instance source node joins the island through the
+      // output-current sense source, so the bleeds are numbered past it)
+      expect(lines.some(l => /^r_float_\d+ y 0 1e9$/.test(l))).toBe(true)
+      // ... but only y is driven: b has no DC path to the gate output.
+      expect(boardNodes(diagnostics.undrivenIslands)).toEqual([['b']])
+    })
+
+    test('without the capacitor the unbiased input is undriven and the gate output is not', () => {
+      const { diagnostics } = acCoupledInput(false)
+      expect(boardNodes(diagnostics.floatingIslands)).toEqual([['b'], ['y']])
+      expect(boardNodes(diagnostics.undrivenIslands)).toEqual([['b']])
+    })
   })
 
   test('CD40106 Schmitt template expands to a self-referential hysteresis B-source (40%/60% band, 4.8/7.2 V at 12 V)', () => {
@@ -1963,6 +2017,117 @@ describe('M12 — sense-only subckt terminals in deck generation (real bundled o
   })
 })
 
+describe('undriven nets: subckt-modeled chip outputs are driven (issue #43, real bundled libs)', () => {
+  const lib = (f: string): string => readFileSync(join(process.cwd(), 'resources', 'models', f), 'utf8')
+
+  /**
+   * A unity-gain follower on one op-amp channel: OUT and IN- (pads 1, 2) on
+   * BUF, IN+ (pad 3) on PLUS, V+ (pad 8) on the 12 V bench rail, V- (pad 4)
+   * on ground. BUF feeds nothing else. With `biasPlus` a 10k/10k divider
+   * sets PLUS; without it PLUS touches only the sense-only IN+ terminal.
+   */
+  function follower(subcktName: string, biasPlus: boolean) {
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'VCC', spiceNode: 'vcc', padRefs: [] },
+      { id: 2, kicadName: 'PLUS', spiceNode: 'plus', padRefs: [] },
+      { id: 3, kicadName: 'BUF', spiceNode: 'buf', padRefs: [] },
+      { id: 4, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const u1: Part = {
+      ref: 'U1', value: subcktName, libId: 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm', layer: 'F',
+      padNet: new Map([['1', 3], ['2', 3], ['3', 2], ['4', 4], ['8', 1]]),
+      properties: {},
+    }
+    const divider: Array<[string, string]> = biasPlus
+      ? [['R1', 'r_r1 vcc plus 10000'], ['R2', 'r_r2 plus 0 10000']]
+      : []
+    const parts: Part[] = [
+      u1,
+      ...divider.map(([ref]): Part => ({ ref, value: '10k', libId: 'R', layer: 'F', padNet: new Map(), properties: {} })),
+    ]
+    const resolutions: Resolution[] = [
+      {
+        ref: 'U1', status: 'ok', tier: 3, warnings: [],
+        model: {
+          kind: 'subckt', libFile: 'opamp.lib', subcktName,
+          pinMap: { '3': 'inp', '2': 'inn', '1': 'out', '8': 'vcc', '4': 'vee' },
+        },
+      },
+      ...divider.map(([ref, card]): Resolution => ({
+        ref, status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card },
+      })),
+    ]
+    const opts = {
+      circuit: { nets, parts, warnings: [] },
+      resolutions,
+      instruments: [
+        { kind: 'ground-ref', netId: 4 },
+        { kind: 'dc-supply', id: '1', netId: 1, volts: 12, seriesOhms: 0.1 },
+      ] as Instrument[],
+      groundNetId: 4,
+      modelTexts: { 'opamp.lib': lib('opamp.lib') },
+    }
+    return { opts, result: generateDeckWithDiagnostics(opts) }
+  }
+
+  test.each(['LM358', 'LM324', 'TL072'])(
+    '%s follower: the output net is neither bled nor undriven (it reaches ground through the output buffer)',
+    (name) => {
+      const { opts, result } = follower(name, true)
+      expect(result.lines).toEqual(generateDeck(opts))
+      // The op-amp output buffer is referenced to the vee pin (bout obuf vee),
+      // which this board ties to ground, so BUF reaches node 0 through the
+      // subckt and needs no bleed card at all.
+      expect(result.diagnostics.floatingIslands).toEqual([])
+      expect(result.lines.some(l => /^r_float_\d+ buf /.test(l))).toBe(false)
+      // ... and the output stage drives BUF, so it is not an undriven net.
+      expect(result.diagnostics.undrivenIslands).toEqual([])
+    },
+  )
+
+  test('an unbiased op-amp input is still undriven next to a driven output', () => {
+    const { result } = follower('LM358', false)
+    expect(result.diagnostics.floatingIslands).toEqual([['plus']])
+    expect(result.diagnostics.undrivenIslands).toEqual([['plus']])
+  })
+
+  test('a subckt pin reaching internal ground only through a capacitor is not driven', () => {
+    // Synthetic: `held` sits on a ground-referenced source through a resistor,
+    // `coupled` reaches ground only through a capacitor (no DC). Both pins are
+    // singletons in the island view, so both nets are bled; only `coupled`
+    // has nothing holding it at DC.
+    const LIB = [
+      '.subckt twopin held coupled',
+      'bsrc mid 0 v = 2.5',
+      'rout mid held 100',
+      'cin coupled 0 1n',
+      '.ends twopin',
+    ].join('\n')
+    const nets: CircuitNet[] = [
+      { id: 1, kicadName: 'HELD', spiceNode: 'held', padRefs: [] },
+      { id: 2, kicadName: 'COUPLED', spiceNode: 'coupled', padRefs: [] },
+      { id: 3, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+    ]
+    const u1: Part = {
+      ref: 'U1', value: 'twopin', libId: 'X', layer: 'F',
+      padNet: new Map([['1', 1], ['2', 2]]), properties: {},
+    }
+    const { lines, diagnostics } = generateDeckWithDiagnostics({
+      circuit: { nets, parts: [u1], warnings: [] },
+      resolutions: [{
+        ref: 'U1', status: 'ok', tier: 3, warnings: [],
+        model: { kind: 'subckt', libFile: 'x.lib', subcktName: 'twopin', pinMap: { '1': 'held', '2': 'coupled' } },
+      }],
+      instruments: [{ kind: 'ground-ref', netId: 3 }],
+      groundNetId: 3,
+      modelTexts: { 'x.lib': LIB },
+    })
+    expect(lines).toContain('r_float_1 held 0 1e9')
+    expect(lines).toContain('r_float_2 coupled 0 1e9')
+    expect(diagnostics.undrivenIslands).toEqual([['coupled']])
+  })
+})
+
 // ─── M8: floating-island bleed resistors ──────────────────────────────────────
 
 describe('generateDeck — floating-island bleed resistors (M8)', () => {
@@ -2022,6 +2187,35 @@ describe('generateDeck — floating-island bleed resistors (M8)', () => {
     const commentIdx = deck.indexOf('* floating-island bleed resistors (no DC path to ground)')
     expect(commentIdx).toBeGreaterThan(-1)
     expect(deck[commentIdx + 1]).toBe(bleeds[0])
+  })
+
+  test('diagnostics return the bled islands by spice node, without changing the deck (issue #43)', () => {
+    const opts = {
+      circuit: makeIslandCircuit(),
+      resolutions: makeIslandResolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 2 },
+        { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.1 },
+      ] as Instrument[],
+      groundNetId: 2,
+    }
+    const { lines, diagnostics } = generateDeckWithDiagnostics(opts)
+    expect(lines).toEqual(generateDeck(opts))
+    expect(diagnostics.floatingIslands).toEqual([['_led3_k', '_gauge_c3']])
+    expect(diagnostics.undrivenIslands).toEqual([['_led3_k', '_gauge_c3']])
+  })
+
+  test('a grounded deck reports no islands (issue #43)', () => {
+    const { diagnostics } = generateDeckWithDiagnostics({
+      circuit: makeRcCircuit(3),
+      resolutions: makeRcResolutions(),
+      instruments: [
+        { kind: 'ground-ref', netId: 3 },
+        { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.1 },
+      ],
+      groundNetId: 3,
+    })
+    expect(diagnostics).toEqual({ floatingIslands: [], undrivenIslands: [] })
   })
 
   test('grounded fixture gains no bleed lines', () => {
