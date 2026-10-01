@@ -5,9 +5,18 @@ The **operating point** is the DC steady state of your circuit: the voltage on e
 ## Two ways to power up
 
 - **`⚡ Energize`**: the one-click path. It designates a ground net, clips a 5 V supply onto the best power net if you haven't attached a source, then solves. Great for a board you just opened.
-- **`Power On`**: the deliberate path. It rigs *nothing*: it stays disabled until you've [set ground and a supply](./ground-and-supply) yourself, then solves exactly the bench you built.
+- **`Power On`**: the deliberate path. It rigs *nothing*: it needs you to have [set ground and a supply](./ground-and-supply) yourself, then solves exactly the bench you built.
 
 Use Energize to get going; use Power On once you're driving the bench on purpose.
+
+## When a button can't proceed
+
+Neither button ever fails silently. If circsim can't start the solve, a card appears over the board telling you what to do next, and the toolbar shows the same reason as text beside **Power On** and **Run** (the buttons stay focusable, so keyboard users reach them too):
+
+- **Designate a ground net first.** Energize picks a ground from net names like `GND`, `AGND`, or `VSS`. A board whose nets all carry KiCad's auto-generated names (`Net-(R1-Pad1)` and so on) gives it nothing to go on, and circsim will not guess which net is 0 V. Click the net you want in the **Ground & Power** panel, or click it on the board, then press the button again.
+- **Attach a power supply or signal source.** Ground is set but no source drives the circuit. Use a suggested supply chip in **Ground & Power**, or add a DC Supply or Function Generator from the [bench](./bench-and-leads) and draw its lead to a net. A source that has not been wired to a net yet does not count.
+
+The card closes by itself once the problem is fixed, or you can dismiss it.
 
 ## What you'll see
 

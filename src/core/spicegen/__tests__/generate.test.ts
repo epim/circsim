@@ -3044,6 +3044,54 @@ describe('Deck structure invariants', () => {
   })
 })
 
+// ─── Incomplete primitive cards never reach ngspice (issues #6, #7) ──────────
+
+describe('generateDeck: deck-level guard for incomplete primitive cards', () => {
+  function deckWithCards(cards: string[]): string {
+    const circuit = makeRcCircuit(3)
+    const resolutions: Resolution[] = cards.map((card, i) => ({
+      ref: `X${i + 1}`,
+      status: 'ok',
+      model: { kind: 'primitive', card },
+      tier: 1,
+      warnings: [],
+    }))
+    circuit.parts = cards.map((_, i) => ({
+      ref: `X${i + 1}`, value: 'x', libId: 'Lib:X', layer: 'F' as const,
+      padNet: new Map([['1', 1], ['2', 2]]), properties: {},
+    }))
+    return generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 3 }],
+      groundNetId: 3,
+    }).join('\n')
+  }
+
+  test('a model-less diode card is commented out, not emitted (ngspice: could not find a valid modelname)', () => {
+    const text = deckWithCards(['d_x1 vin out'])
+    expect(text).not.toMatch(/^d_x1 /m)
+    expect(text).toMatch(/^\* X1: skipped incomplete primitive card/m)
+  })
+
+  test('a valueless voltage or current source card is commented out, not emitted (DC 0 assumed)', () => {
+    const text = deckWithCards(['v_x1 vin out', 'i_x2 vin out'])
+    expect(text).not.toMatch(/^v_x1 /m)
+    expect(text).not.toMatch(/^i_x2 /m)
+  })
+
+  test('an empty-quoted value is never emitted', () => {
+    const text = deckWithCards(['c_x1 vin out ""'])
+    expect(text).not.toMatch(/^c_x1 /m)
+  })
+
+  test('complete cards pass through unchanged', () => {
+    const text = deckWithCards(['v_x1 vin out 5', 'd_x2 vin out D1N4148', 'c_x3 vin out 1e-7'])
+    expect(text).toMatch(/^v_x1 vin out 5$/m)
+    expect(text).toMatch(/^d_x2 vin out D1N4148$/m)
+    expect(text).toMatch(/^c_x3 vin out 1e-7$/m)
+  })
+})
+
 describe('generateDeck: logic output stage and active-low controls (issues #12, #85)', () => {
   const FAMILY = {
     vHighDefault: 5.0,

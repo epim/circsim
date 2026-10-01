@@ -54,7 +54,7 @@
     },
     "stubbedPct": 22.2,
     "islands": 7,
-    "deckLines": 124,
+    "deckLines": 129,
     "outlineWarnings": 0,
     "supplyNode": "vcc",
     "supplyVolts": 0.83
@@ -93,7 +93,7 @@
     },
     "stubbedPct": 22.2,
     "islands": 7,
-    "deckLines": 124,
+    "deckLines": 129,
     "outlineWarnings": 0,
     "supplyNode": "vcc",
     "supplyVolts": 0.83
@@ -193,7 +193,7 @@
     },
     "stubbedPct": 22.2,
     "islands": 7,
-    "deckLines": 124,
+    "deckLines": 129,
     "outlineWarnings": 0,
     "supplyNode": "vcc",
     "supplyVolts": 0.83
@@ -233,7 +233,7 @@
     },
     "stubbedPct": 66,
     "islands": 17,
-    "deckLines": 362,
+    "deckLines": 367,
     "outlineWarnings": 1,
     "supplyNode": "_3v3",
     "supplyVolts": 4.26

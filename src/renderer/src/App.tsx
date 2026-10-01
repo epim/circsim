@@ -10,7 +10,7 @@
  * the MCU interactive-pins panel (McuPinsPanel) still lives in the right dock.
  */
 
-import React, { useCallback, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import Viewport from './viewport/Viewport'
 import PartsPanel from './panels/PartsPanel'
 import ModelDoctor from './panels/ModelDoctor'
@@ -25,7 +25,10 @@ import NetVoltages from './panels/NetVoltages'
 import Scope from './panels/Scope'
 import CriticPanel from './panels/CriticPanel'
 import About from './panels/About'
+import SetupBar from './panels/SetupBar'
+import ExportReport from './panels/ExportReport'
 import { NoBoardState } from './panels/EmptyStates'
+import GuidedStateHost from './panels/GuidedStateHost'
 import { AppStoreProvider, useApp, useAppStoreApi } from './store/storeContext'
 import type { AppStore } from './store/appStore'
 import { resolutionSummary } from './store/appStore'
@@ -95,6 +98,58 @@ function Shell(): React.ReactElement {
     [store],
   )
 
+  // Recent boards (issue #27): loaded once from userData, pruned of files that
+  // no longer exist, updated on every successful open.
+  const [recent, setRecent] = useState<string[]>([])
+  const [recentNotice, setRecentNotice] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const list = await window.circsim.getRecentBoards()
+        const present: string[] = []
+        for (const path of list) {
+          if (await window.circsim.fileExists(path)) present.push(path)
+        }
+        if (!cancelled) setRecent(present)
+      } catch {
+        // A missing or unreadable recent list just means an empty one.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  /**
+   * Open a board by path: board + sibling schematic + the saved setup beside it
+   * (restored by the store, with a visible note), then remember it as recent.
+   * Every open path (dialog, recent list, drag-drop) goes through here, so a
+   * reopen after editing the board in KiCad restores the bench (issue #27).
+   */
+  const openBoardPath = useCallback(
+    async (path: string) => {
+      const opened = await openProjectFromPath(
+        path,
+        window.circsim.readFile,
+        undefined,
+        window.circsim.fileExists,
+        window.circsim.readSidecar,
+      )
+      store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+        schematicText: opened.schematicText,
+        schematicFileName: opened.schematicFileName,
+        bomText: opened.bomText,
+        boardPath: opened.boardPath,
+        sidecarText: opened.sidecarText,
+        sidecarError: opened.sidecarError,
+      })
+      setRecentNotice(null)
+      void window.circsim.addRecentBoard(path).then(setRecent).catch(() => undefined)
+    },
+    [store],
+  )
+
   const handleOpen = useCallback(async () => {
     const res = await window.circsim.openFileDialog({
       title: 'Open KiCad board',
@@ -102,18 +157,26 @@ function Shell(): React.ReactElement {
       properties: ['openFile'],
     })
     if (res.cancelled || res.filePaths.length === 0) return
-    const opened = await openProjectFromPath(
-      res.filePaths[0],
-      window.circsim.readFile,
-      undefined,
-      window.circsim.fileExists,
-    )
-    store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
-      schematicText: opened.schematicText,
-      schematicFileName: opened.schematicFileName,
-      bomText: opened.bomText,
-    })
-  }, [store])
+    await openBoardPath(res.filePaths[0])
+  }, [openBoardPath])
+
+  const handleOpenRecent = useCallback(
+    async (path: string) => {
+      try {
+        await openBoardPath(path)
+      } catch (err) {
+        // The file moved or was deleted: say so and drop it from the list.
+        const msg = err instanceof Error ? err.message : String(err)
+        setRecentNotice(`Could not open ${path}: ${msg}`)
+        void window.circsim.removeRecentBoard(path).then(setRecent).catch(() => undefined)
+      }
+    },
+    [openBoardPath],
+  )
+
+  const handleClearRecent = useCallback(() => {
+    void window.circsim.clearRecentBoards().then(setRecent).catch(() => undefined)
+  }, [])
 
   /** Open the bundled sample project (first-run CTA — Spec §11, Task 26). */
   const handleOpenSample = useCallback(async () => {
@@ -202,17 +265,7 @@ function Shell(): React.ReactElement {
         // Electron File objects expose a real path; fall back to text() otherwise.
         const path = (boardFile as File & { path?: string }).path
         if (path) {
-          const opened = await openProjectFromPath(
-            path,
-            window.circsim.readFile,
-            undefined,
-            window.circsim.fileExists,
-          )
-          store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
-            schematicText: opened.schematicText,
-            schematicFileName: opened.schematicFileName,
-            bomText: opened.bomText,
-          })
+          await openBoardPath(path)
         } else {
           const text = await boardFile.text()
           store.getState().openBoardFromText(text, boardFile.name)
@@ -232,7 +285,7 @@ function Shell(): React.ReactElement {
         }
       }
     },
-    [store],
+    [store, openBoardPath],
   )
 
   return (
@@ -247,6 +300,7 @@ function Shell(): React.ReactElement {
         <button style={toolbarBtn} onClick={handleOpen} data-testid="open-board-header-btn">
           Open…
         </button>
+        <ExportReport />
         {board && (
           <span style={{ fontSize: 12, color: '#9ab' }}>
             {summary.total} parts · {summary.ok} ok
@@ -289,6 +343,9 @@ function Shell(): React.ReactElement {
         </div>
       )}
 
+      {/* Per-board setup file: restored note, save offer, autosave status (issue #27). */}
+      <SetupBar />
+
       {/* Honesty surfaces: fidelity banner + convergence card + bench/crash toasts. */}
       <WarningsBar />
 
@@ -317,10 +374,16 @@ function Shell(): React.ReactElement {
                   onOpen={handleOpen}
                   onOpenSample={handleOpenSample}
                   onOpenFirstLight={handleOpenFirstLight}
+                  recent={recent}
+                  onOpenRecent={path => void handleOpenRecent(path)}
+                  onClearRecent={handleClearRecent}
+                  notice={recentNotice}
                 />
               )}
               {/* Plain-language dark-LED coach (non-blocking overlay). */}
               {board && <CoachNotes />}
+              {/* Spec section 12 guided states: blocked Energize / Power On / Run. */}
+              {board && <GuidedStateHost />}
               {selectedRef && (
                 <div style={selectionBadge}>Selected: {selectedRef}</div>
               )}
