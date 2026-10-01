@@ -195,7 +195,7 @@ describe('clearance spatial index', () => {
       return best
     }
     const smallCtx = prepare(1250, 1000 / Math.sqrt(8))
-    const bigCtx = prepare(10000, 1000)
+    const bigCtx = prepare(40000, 2000) // 32x the tracks at the same density
     timeCheck(smallCtx, 1) // warm the JIT so the small run is not the cold one
     const small = timeCheck(smallCtx, 5)
     const big = timeCheck(bigCtx, 4)
@@ -203,11 +203,12 @@ describe('clearance spatial index', () => {
     // Intent: the indexed check stayed far from the old O(n squared) scan, which
     // was 500+ ms at 10k tracks. No absolute millisecond bound: CI runners are
     // up to 5x slower than a dev machine, so compare two sizes on the same
-    // machine. 8x the tracks costs about 8x the time when indexed (measured 5 to
-    // 9 locally) and about 64x when quadratic. The bound of 50 is over 5x the
-    // expected ratio, so a loaded runner does not trip it, and it still fails on
-    // the quadratic scan (about 64).
+    // machine. 32x the tracks costs about 32x the time when indexed, plus cache
+    // effects at the larger size (measured 74 to 78 locally), and about 1000x
+    // when quadratic. The bound of 400 is over 5x the highest measured ratio, so
+    // a loaded runner does not trip it, and it still fails on the quadratic scan
+    // with a wide margin (the step is large precisely so that it does).
     const ratio = big / small
-    expect(ratio).toBeLessThan(50)
+    expect(ratio).toBeLessThan(400)
   }, 60000)
 })

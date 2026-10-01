@@ -263,12 +263,13 @@ describe('RingBuffer.readWindow (issue #59)', () => {
     // depends on the window, not the ring size. No absolute millisecond bound: CI
     // runners are up to 5x slower than a dev machine, so compare two ring sizes
     // on the same machine. The window is identical, so the expected ratio is
-    // about 1. A whole-ring scan grows with capacity: on a 50x larger ring it
-    // would cost many times the shared window copy (expected ratio well above 10
-    // under that regression). The bound of 5 is 5x the expected ratio, leaving
-    // room for cache effects and runner noise, and still fails on the scan.
+    // about 1 (measured 0.93 to 1.05 locally). A whole-ring scan grows with
+    // capacity: on a 50x larger ring it would touch 2M points per frame against
+    // a 10k-point window copy (ratio in the tens or more). The bound of 8 is
+    // over 5x the highest measured ratio, leaving room for cache effects and
+    // runner noise, and still fails on the scan.
     const ratio = big.best / small.best
-    expect(ratio).toBeLessThan(5)
+    expect(ratio).toBeLessThan(8)
   })
 })
 

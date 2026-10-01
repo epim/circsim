@@ -275,42 +275,43 @@ describe('parseSexpr – performance', () => {
   }
 
   /** Best-of-N wall time (ms) to parse `text`, plus the last result. */
-  function timeParse(text: string, reps: number): { best: number; result: SExpr } {
-    // Each sample parses the text INNER times so the small input costs about ten
-    // milliseconds per sample, well above timer noise (one parse is about 1 ms).
-    const INNER = 10
+  function timeParse(text: string, reps: number, inner: number): { best: number; result: SExpr } {
+    // Each sample parses the text `inner` times so every sample costs tens of
+    // milliseconds, well above timer noise; the result is the time per parse.
+    const INNER = inner
     let best = Infinity
     let result: SExpr = []
     for (let r = 0; r < reps; r++) {
       const t0 = performance.now()
       for (let k = 0; k < INNER; k++) result = parseSexpr(text)
-      best = Math.min(best, performance.now() - t0)
+      best = Math.min(best, (performance.now() - t0) / INNER)
     }
     return { best, result }
   }
 
   it('parses a large synthetic file in time linear in its size', () => {
     const smallText = synthetic(50)
-    const bigText = synthetic(400)
-    // Guard the premise: the big input is large and about 8x the small one.
+    const bigText = synthetic(1600)
+    // Guard the premise: the big input is large and at least 20x the small one.
     expect(Buffer.byteLength(bigText, 'utf8') / 1024).toBeGreaterThan(100)
     const growth = bigText.length / smallText.length
-    expect(growth).toBeGreaterThan(6)
+    expect(growth).toBeGreaterThan(20)
 
     parseSexpr(smallText) // warm the JIT so the small run is not the cold one
-    const small = timeParse(smallText, 5)
-    const big = timeParse(bigText, 5)
+    const small = timeParse(smallText, 5, 40)
+    const big = timeParse(bigText, 5, 2)
     expect(Array.isArray(small.result)).toBe(true)
     expect(Array.isArray(big.result)).toBe(true)
 
     // Intent: guard against a parser that goes super-linear (string slicing per
     // token, repeated array copies). No absolute millisecond bound: CI runners
     // are up to 5x slower than a dev machine, so compare two sizes on the same
-    // machine. A linear parser scales time by about `growth` (about 7x, measured
-    // 5 to 6 locally); a quadratic one by growth^2 (about 50x). The bound is 5x
-    // the growth (about 35), so a loaded runner does not trip it, and it still
-    // fails on quadratic behavior because growth > 6 keeps growth^2 above it.
+    // machine. The input grows about 25x; a linear parser scales time by about
+    // `growth` (measured 26 to 28 locally); a quadratic one by growth^2 (about
+    // 600x). The bound is 6x the growth (about 148), over 5x the highest
+    // measured ratio, so a loaded runner does not trip it, and growth > 20 keeps
+    // growth^2 at least 3x above it, so quadratic behavior still fails.
     const ratio = big.best / small.best
-    expect(ratio).toBeLessThan(growth * 5)
+    expect(ratio).toBeLessThan(growth * 6)
   })
 })
