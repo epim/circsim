@@ -222,6 +222,8 @@ export class SimHost {
   private engineChain: Promise<void> = Promise.resolve()
   /** this.now() when the last bg_halt command completed. */
   private haltDoneAt = -Infinity
+  /** bg_halt / bg_resume commands queued or running on engineChain. */
+  private chainPending = 0
   private vectorsEmitted = false
 
   /** Active transient run parameters (null when not running a tran). */
@@ -294,12 +296,8 @@ export class SimHost {
     // commands run strictly in request order on engineChain, and a resume
     // waits for the old thread to be gone (see runResume).
     this.halt = new HaltCoordinator({
-      halt: () => {
-        this.engineChain = this.engineChain.then(() => this.runHalt())
-      },
-      resume: () => {
-        this.engineChain = this.engineChain.then(() => this.runResume())
-      }
+      halt: () => this.chain(() => this.runHalt()),
+      resume: () => this.chain(() => this.runResume())
     })
 
     // Wire the engine event stream now (registration only — no init required), so
@@ -402,6 +400,12 @@ export class SimHost {
     }
     this.tran = null
     try {
+      // Let the halt / resume commands already ordered finish first: a bg_halt
+      // issued here while one of them is mid-flight (a bg_resume still starting
+      // its thread) is the teardown crash seen under load (ngspice dies in the
+      // worker after the file's tests passed). A queued resume sees tran gone
+      // and skips itself.
+      await this.engineChain
       await this.waitBgSettled()
       await this.engine.command('bg_halt', false)
       await this.waitForHalt()
@@ -850,13 +854,32 @@ export class SimHost {
     }
   }
 
+  /**
+   * Whether the run is live from the user's side, which is what `status.running`
+   * tells the renderer (it maps false to Paused). Not the raw ngspice thread
+   * flag: with pacing the thread is halted and resumed all the time (at pace 1x
+   * it is halted most of the wall clock), and an alter batch halts it too.
+   * Those halts are the engine's own scheduling, the run is still going. Not
+   * live: finished, paused by the user, or the thread stopped with nothing
+   * ordered to restart it (the run ended or failed on its own).
+   */
+  private runIsLive(t: NonNullable<SimHost['tran']>): boolean {
+    if (t.finished || this.halt.isUserPaused()) return false
+    return (
+      this.engine.isRunning() ||
+      this.halt.getOwner() !== 'none' ||
+      this.chainPending > 0 ||
+      this.bgSettlingSince !== null
+    )
+  }
+
   private reportStatus(): void {
     if (!this.tran) return
     const wallElapsedS = (this.now() - this.tran.windowStartWall) / 1000
     const achieved = wallElapsedS > 0 ? this.tran.simTime / wallElapsedS : 0
     this.emit({
       type: 'status',
-      running: this.engine.isRunning(),
+      running: this.runIsLive(this.tran),
       simTimeSeconds: this.tran.simTime,
       realtimeFactor: achieved
     })
@@ -904,7 +927,7 @@ export class SimHost {
   private stopTransient(): void {
     // Through the chain: a resume still waiting out its settle gap must not run
     // after this halt (runResume also sees tran gone).
-    this.engineChain = this.engineChain.then(() => this.runHalt())
+    this.chain(() => this.runHalt())
     this.halt.clear()
     // Flush whatever remains so the renderer sees the tail. Reading a halting
     // plot is safe: the reads hold the realloc lock and the vectors only grow.
@@ -1097,6 +1120,14 @@ export class SimHost {
     while (this.bgSettlingSince !== null && this.now() < deadline) await sleep(5)
     const wait = this.lastBgStartAt + MIN_RUN_AFTER_START_MS - this.now()
     if (wait > 0) await sleep(wait)
+  }
+
+  /** Append a bg_halt / bg_resume command to engineChain (strict request order). */
+  private chain(run: () => Promise<void>): void {
+    this.chainPending++
+    this.engineChain = this.engineChain.then(run).finally(() => {
+      this.chainPending--
+    })
   }
 
   /** bg_halt, as ordered on engineChain. Never rejects: the chain must keep going. */

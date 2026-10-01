@@ -90,6 +90,9 @@ interface Measurement {
   batches: number
   /** simTime covered by the samples events (proves the channel kept up). */
   sampledUntil: number
+  /** status events received, and how many of them said running:false. */
+  statuses: number
+  notRunning: number
 }
 
 /** Run the bench for `warmMs + measureMs` of wall time and report the factor over the last `measureMs`. */
@@ -97,9 +100,15 @@ async function measure(bench: Bench, pace: number | 'max', warmMs: number, measu
   const status: { wall: number; simTime: number }[] = []
   let batches = 0
   let sampledUntil = 0
+  let statuses = 0
+  let notRunning = 0
   const host = new SimHost({
     emit: (e: SimEvent) => {
-      if (e.type === 'status') status.push({ wall: Date.now(), simTime: e.simTimeSeconds })
+      if (e.type === 'status') {
+        status.push({ wall: Date.now(), simTime: e.simTimeSeconds })
+        statuses++
+        if (!e.running) notRunning++
+      }
       if (e.type === 'samples') {
         batches++
         if (e.simTime.length > 0) sampledUntil = Math.max(sampledUntil, e.simTime[e.simTime.length - 1])
@@ -121,7 +130,7 @@ async function measure(bench: Bench, pace: number | 'max', warmMs: number, measu
     const startWall = end.wall - measureMs
     const start = [...status].reverse().find((s) => s.wall <= startWall) ?? status[0]
     const factor = (end.simTime - start.simTime) / ((end.wall - start.wall) / 1000)
-    return { factor, batches, sampledUntil }
+    return { factor, batches, sampledUntil, statuses, notRunning }
   } finally {
     await host.dispose()
   }
@@ -151,5 +160,10 @@ describe.skipIf(!haveNgspice)('live bench real-time factor (real libngspice, iss
     // The probe series kept flowing while the pacing halt toggled the run.
     expect(m.batches).toBeGreaterThan(50)
     expect(m.sampledUntil).toBeGreaterThan(2.5)
+    // The pacing halts are the engine's scheduling: the run is live, so no
+    // status may say running:false (the toolbar would show Paused while the
+    // scope streams).
+    expect(m.statuses).toBeGreaterThan(10)
+    expect(m.notRunning).toBe(0)
   }, 30_000)
 })

@@ -106,6 +106,65 @@ describe('SimHost pacing', () => {
   })
 })
 
+describe('SimHost status.running while pacing halts the thread', () => {
+  const lastStatus = (events: SimEvent[]): Extract<SimEvent, { type: 'status' }> =>
+    [...events].reverse().find((e) => e.type === 'status') as Extract<SimEvent, { type: 'status' }>
+
+  it('stays true while a pacing halt holds the thread, so the toolbar does not show Paused', async () => {
+    const engine = new StubEngine()
+    let t = 1000
+    const { host, events } = makeHost({ engine, now: () => t, benchWindowSeconds: 30 })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
+    await host.whenIdle()
+
+    t += 1000
+    engine.pushPoint({ time: 5, out: 1 })
+    host.sampleTick()
+    host.pacingTick()
+    await settle()
+    expect(host.getHaltOwner()).toBe('pacing')
+    expect(engine.isRunning()).toBe(false) // the thread really is halted
+    t += 1000
+    host.pacingTick()
+    expect(lastStatus(events).running).toBe(true)
+  })
+
+  it('stays true across the gap between releasing the pacing halt and the thread restarting', async () => {
+    const engine = new StubEngine()
+    let t = 1000
+    const { host, events } = makeHost({ engine, now: () => t, benchWindowSeconds: 30 })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
+    await host.whenIdle()
+    t += 1000
+    engine.pushPoint({ time: 5, out: 1 })
+    host.sampleTick()
+    host.pacingTick()
+    await settle()
+    // Wall time catches up with the plot: the halt is released, the bg_resume
+    // is queued but the thread has not started yet.
+    t += 10_000
+    host.sampleTick()
+    host.pacingTick()
+    expect(host.getHaltOwner()).toBe('none')
+    expect(engine.isRunning()).toBe(false)
+    expect(lastStatus(events).running).toBe(true)
+  })
+
+  it('is false while the user has paused', async () => {
+    const engine = new StubEngine()
+    let t = 1000
+    const { host, events } = makeHost({ engine, now: () => t, benchWindowSeconds: 30 })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
+    await host.whenIdle()
+    host.handleCommand({ type: 'halt' })
+    await host.whenIdle()
+    t += 1000
+    host.pacingTick()
+    expect(host.getHaltOwner()).toBe('user')
+    expect(lastStatus(events).running).toBe(false)
+  })
+})
+
 describe('SimHost bounded bench windows (Spec §7.5)', () => {
   it('restarts when sim-time reaches the bench window and emits benchRestarted', async () => {
     const engine = new StubEngine()

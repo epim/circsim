@@ -70,6 +70,8 @@ export type SimEvent =
       freq: Float64Array
       vectors: Record<string, { mag: Float64Array; phaseDeg: Float64Array }>
     }
+  // `running`: the run is live (false: finished, paused by the user, or ended on its own).
+  // Pacing and alter halts of the ngspice thread do not make it false.
   | { type: 'status'; running: boolean; simTimeSeconds: number; realtimeFactor: number }
   | { type: 'benchRestarted'; reason: 'window-elapsed' | 'memory' } // see §7.5 bench windows
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string } // ngspice stdout/stderr lines

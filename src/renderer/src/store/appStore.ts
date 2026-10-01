@@ -1892,7 +1892,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
             achievedRealtimeFactor: event.realtimeFactor,
             simTimeSeconds: event.simTimeSeconds,
             // A `status{running:false}` while we believe we're running means the
-            // engine self-halted (window end / pacing). Reflect it as paused, but
+            // run ended on its own (SimHost does not report its pacing halts as
+            // not running). Reflect it as paused, but
             // never override an explicit user pause/idle.
             simState: event.running
               ? 'running'
