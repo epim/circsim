@@ -24,6 +24,20 @@ export interface TermProps {
   capital?: boolean
 }
 
+/**
+ * Whether a blur on the term (or anything inside its popover) should close the
+ * popover. Focus moving between the term and its own Learn-more link stays
+ * inside the container, so the popover must stay open; otherwise the focused
+ * link would unmount and keyboard focus would fall to <body>.
+ */
+export function shouldCloseOnBlur(
+  container: { contains(node: unknown): boolean } | null,
+  relatedTarget: unknown,
+): boolean {
+  if (!container || relatedTarget == null) return true
+  return !container.contains(relatedTarget)
+}
+
 export default function Term({
   id,
   showTechnical = true,
@@ -53,10 +67,16 @@ export default function Term({
       onMouseEnter={open}
       onMouseLeave={close}
       onFocus={open}
-      onBlur={close}
+      onBlur={e => {
+        if (shouldCloseOnBlur(ref.current, e.relatedTarget)) close()
+      }}
       onKeyDown={e => {
-        if (e.key === 'Escape') close()
-        else if (e.key === 'Enter' || e.key === ' ') {
+        if (e.key === 'Escape') {
+          close()
+          // If focus was on the docs link, it is about to unmount: return it to the term.
+          if (e.target !== e.currentTarget) ref.current?.focus()
+        } else if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+          // Only for the term itself; the docs link button must keep its own Enter/Space.
           e.preventDefault()
           if (pos) close()
           else open()

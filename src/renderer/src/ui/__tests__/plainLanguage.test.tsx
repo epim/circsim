@@ -9,7 +9,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
-import Term from '../Term'
+import Term, { shouldCloseOnBlur } from '../Term'
 import DocsLink, { openDocsPage } from '../docsLink'
 import { GLOSSARY, TERM_IDS, termTitle, capitalized } from '../glossary'
 import { NoBoardState } from '../../panels/EmptyStates'
@@ -65,6 +65,23 @@ describe('<Term>', () => {
 
   it('renders no popover until it is hovered or focused', () => {
     expect(renderToStaticMarkup(<Term id="gmin" />)).not.toContain('term-popover')
+  })
+
+  it('keeps the popover open when focus moves to its own docs link (keyboard reachability)', () => {
+    const inside = {}
+    const outside = {}
+    const container = { contains: (n: unknown) => n === inside || n === container }
+    // Tab from the term to the Learn-more link: relatedTarget is inside, do not close.
+    expect(shouldCloseOnBlur(container, inside)).toBe(false)
+    // Tab out of the link, click elsewhere, or the window losing focus: close.
+    expect(shouldCloseOnBlur(container, outside)).toBe(true)
+    expect(shouldCloseOnBlur(container, null)).toBe(true)
+    expect(shouldCloseOnBlur(null, inside)).toBe(true)
+  })
+
+  it('does not swallow Enter/Space on the docs link inside the term', () => {
+    const src = readFileSync(join(__dirname, '..', 'Term.tsx'), 'utf8')
+    expect(src).toMatch(/e\.target === e\.currentTarget && \(e\.key === 'Enter'/)
   })
 })
 
