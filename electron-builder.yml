@@ -55,7 +55,7 @@ files:
 # Common resources for EVERY platform (copied to <resources>/ outside asar).
 #  - models  → <resources>/models   (bundled SPICE library; .lib + index.json)
 #  - sample  → <resources>/sample   (blinker-555 first-run project)
-#  - docs    → <resources>/docs      (what-circsim-can-tell-you.md, licensing.md
+#  - docs    → <resources>/docs      (what-circsim-can-tell-you.html, licensing.md
 #                                      — opened by openDocs / shown in About)
 extraResources:
   - from: resources/models
@@ -66,8 +66,8 @@ extraResources:
     to: sample
     filter:
       - "**/*"
-  - from: docs/what-circsim-can-tell-you.md
-    to: docs/what-circsim-can-tell-you.md
+  - from: docs/what-circsim-can-tell-you.html
+    to: docs/what-circsim-can-tell-you.html
   - from: docs/licensing.md
     to: docs/licensing.md
   - from: resources/ngspice/COPYING

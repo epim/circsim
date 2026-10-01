@@ -1,6 +1,6 @@
 # Open a routed board
 
-circsim's one required input is a routed **`.kicad_pcb`** file (KiCad 6 or newer). There are three ways to open one.
+circsim's one required input is a routed **`.kicad_pcb`** file (KiCad 6 to 10). There are three ways to open one.
 
 ## From the start screen
 
