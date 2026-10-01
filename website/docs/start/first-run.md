@@ -38,7 +38,7 @@ Energize is the one-click "make it work" button. Behind the scenes it designates
 - The copper **tints by voltage** (the overlay auto-switches to `Voltage`: blue is low, red is high).
 - Any **LED lights up** at a brightness that tracks its actual current.
 
-That "rail at 4.98 V, output at 2.49 V" readout is the reassurance moment: your board is doing something, and you can see *where*.
+That "rail at 4.98 V" readout is the reassurance moment: your board is doing something, and you can see *where*. (An oscillator has no steady state, so the 555's output in this frozen snapshot shows just one of its two levels, and its timing nodes sit wherever the solver parks them. The sample solves directly, with no "check these voltages" warning, because the bundled 555 model is written to be solved that way. Press **Run** below to watch it actually swing.)
 
 ::: tip Energize vs. Power On
 **Energize** rigs up ground and a supply for you and solves. That's great for a board you just opened. **Power On** never rigs anything; it stays disabled until *you've* set a ground and attached a source. Use Energize to get going fast, Power On once you're driving the bench yourself.

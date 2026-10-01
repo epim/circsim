@@ -25,6 +25,9 @@ This isn't fine print. It's the core of the product. circsim's job is to catch t
 Most ICs in circsim (op-amps, the 555, regulators) are **behavioral macromodels**. They reproduce the terminal behavior (gain, bandwidth, saturation voltages) without modeling the internal transistors. That means:
 
 - Op-amp slew rate and gain-bandwidth come from datasheet numbers, but high-frequency parasitic behavior is approximate.
+- **Supply pins carry the load.** An op-amp, the 555, a linear regulator, or a logic gate draws the current its output delivers, plus the datasheet quiescent current, from its supply pin. So a bench supply's series resistance, a reverse-protection diode, a polyfuse, or the rail copper sees the real load, and a current probe on the supply reads it.
+- **Saturation recovers on the datasheet clock.** An op-amp driven into a rail leaves it as soon as its input reverses, limited by its slew rate (a saturated LM358 comparator crosses mid-supply about 11 µs after its input crosses, not as long as it spent saturated). Its output low level meets the datasheet figure (an LM358 pulling down a 10 kΩ pull-up to 5 V reads about 15 mV).
+- **Dropout follows the load.** A linear regulator's dropout is the datasheet's light-load figure at light load and rises to the rated-load figure at full current (AMS1117: about 1.0 V at 100 mA, 1.2 V at 1 A; 78xx: about 1.5 V and 2 V), interpolated in a straight line between the two. An AMS1117-3.3 fed from a 4.2 V Li-ion cell at 90 mA reads about 3.2 V.
 - Thermal effects on bias current and offset are not modeled.
 - Power-supply and common-mode rejection (PSRR = power-supply rejection ratio, CMRR = common-mode rejection ratio: how well the part ignores noise on its supply and shifts in its input common-mode level) and output impedance differ from the real part.
 
@@ -67,7 +70,7 @@ Assign ground to the right net, stub out unresolved parts, and check for floatin
 - RC filters, voltage dividers, simple amplifiers
 - Spotting "the LED is always off because the base resistor is 10 MΩ" mistakes
 - The rough oscillation frequency of an astable timer
-- Whether a linear regulator is in dropout
+- Whether a linear regulator is in dropout (the dropout voltage follows the load, per the datasheet curves)
 :::
 
 ::: warning Be cautious about circsim for
