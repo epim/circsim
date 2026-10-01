@@ -524,11 +524,12 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
   it('SMAJ24A TVS: reverse clamp ~38.9V at the 10.3A datasheet surge current', async () => {
     // Reverse-drive the TVS: 10.3 A forced into the cathode with the anode
     // grounded → the diode operates in breakdown and v(k) is the clamp voltage.
-    // Datasheet: Vc=38.9V max @ Ipp=10.3A (10/1000us). Assert ±10%.
+    // Datasheet: Vc=38.9V max @ Ipp=10.3A (10/1000us). Assert ±10%. DSMAJ24A is a
+    // two-branch subcircuit (forward path and reverse clamp separate, issue #86).
     const deck = [
       '* SMAJ24A reverse clamp at the 10.3A datasheet surge current',
       'i1 0 k dc 10.3',
-      'd1 0 k DSMAJ24A',
+      'x1 0 k DSMAJ24A',
       ...diodesLib,
       '.op',
       '.end'
@@ -974,7 +975,7 @@ describe.skipIf(!haveNgspice)('M10 — supply-derived digital vHigh (CD40106 RC 
     // Schmitt B-source carries the 5 V-derived thresholds: mid=2.5, V_T+=3.0 (60%),
     // V_T-=2.0 (40%), rail=5.0 — not the 12 V family default.
     expect(text).toContain(
-      'b_u1_1 out 0 V = (v(osc) > (v(out) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000',
+      'b_u1_1 u1_o_1y 0 V = (v(osc) > (v(u1_o_1y) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000',
     )
     // The abandoned adc/dac path and the 12 V default are gone.
     expect(text).not.toContain('adc_bridge')

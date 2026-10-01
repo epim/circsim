@@ -6,7 +6,14 @@
  * engine in src/simhost/solveEngine.ts.
  */
 
-export { buildDeck, buildSolveInputs, mergeModelTexts, railOverridesByNetId } from './inputs'
+export {
+  buildDeck,
+  buildDeckWithUndriven,
+  buildSolveInputs,
+  mergeModelTexts,
+  railOverridesByNetId,
+  undrivenNetsOf,
+} from './inputs'
 export { mapOpResultToNetVoltages, runSolvePlan, SolveFailedError } from './plan'
 export { settleBistableOpAmps, type LatchedOpAmp, type SettleResult } from './bistable'
 export {
@@ -22,5 +29,6 @@ export type {
   SolveOverrides,
   SolveResult,
   TranResult,
+  UndrivenNet,
   UserModelText,
 } from './types'
