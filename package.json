@@ -28,10 +28,10 @@
     "license:check": "node scripts/license-hygiene.mjs",
     "package": "npm run build && electron-builder",
     "package:dir": "npm run build && electron-builder --dir",
-    "check:markers": "node scripts/check-known-bug-markers.mjs"
+    "check:markers": "node scripts/check-known-bug-markers.mjs",
+    "docs:fidelity": "node scripts/fidelity-doc.mjs"
   },
   "dependencies": {
-    "electron-updater": "^6.1.7",
     "koffi": "^3.1.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

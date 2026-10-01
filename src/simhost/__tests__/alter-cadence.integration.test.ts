@@ -151,6 +151,14 @@ describe.skipIf(!haveNgspice)('knob drags: an alter every 200 ms (real libngspic
     }, 60_000)
   }
 
+  // SimHost counts the saved vectors with a few-step probe (tran, 3 steps) before
+  // the run starts, and the probe logs its own "No. of Data Rows": only a row
+  // count of a whole run marks the end of the bench run.
+  const isRunEnd = (text: string): boolean => {
+    const m = /No\. of Data Rows\s*:\s*(\d+)/.exec(text)
+    return m !== null && Number(m[1]) > 100
+  }
+
   it('(2) a run that ends while the knob is still turning delivers its tail and reports done', async () => {
     const t = trace()
     const host = new SimHost({ emit: t.emit, disableWatchdog: true })
@@ -168,7 +176,7 @@ describe.skipIf(!haveNgspice)('knob drags: an alter every 200 ms (real libngspic
       let endedWall = -1
       let doneWall = -1
       const watchEnd = (e: SimEvent): void => {
-        if (endedWall < 0 && e.type === 'log' && /No\. of Data Rows/.test(e.text)) endedWall = Date.now()
+        if (endedWall < 0 && e.type === 'log' && isRunEnd(e.text)) endedWall = Date.now()
         if (doneWall < 0 && e.type === 'status' && !e.running && e.simTimeSeconds >= 30) doneWall = Date.now()
       }
       t.events.slice(runFrom).forEach(watchEnd)

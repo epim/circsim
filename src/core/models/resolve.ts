@@ -31,6 +31,7 @@ import {
   selectPinMap,
   pinMapFromSchematicPins,
   SCHEMATIC_PINMAP_NOTE,
+  POLARITY_UNVERIFIED_PREFIX,
   type SchematicPin,
 } from './libraryMatch'
 import type { PartDescriptor } from './libraryMatch'
@@ -147,22 +148,71 @@ function isElectrolytic(part: Part): boolean {
 // ─── Sim.Params parser ────────────────────────────────────────────────────────
 
 /**
- * Parse KiCad Sim.Params string into a key=value map.
- * Format: "R=10k C=100n" or "DC=5"
+ * Parse a KiCad Sim.Params string into a key=value map.
+ *
+ * KiCad writes lowercase keys and quotes values that are empty or hold spaces:
+ *   r=10k   c=""   dc="5"   type="C" model="100n" lib=""   r='TIME > 350m ? 8 : 89'
+ * Keys are lowercased (lookup is case-insensitive, so the older "R=10k" form
+ * still works); a quoted value keeps its spaces and loses its quotes; a bare
+ * token with no "=" is ignored. An empty value is kept as "" so callers can
+ * tell "key present but empty" (KiCad's `c=""`, meaning "use the Value field")
+ * from "key absent".
  */
 function parseSimParams(params: string): Record<string, string> {
   const result: Record<string, string> = {}
-  // Split on whitespace, then on '='
-  const tokens = params.trim().split(/\s+/)
-  for (const token of tokens) {
-    const eqIdx = token.indexOf('=')
-    if (eqIdx > 0) {
-      const key = token.slice(0, eqIdx).trim()
-      const val = token.slice(eqIdx + 1).trim()
-      result[key] = val
+  const n = params.length
+  let i = 0
+  while (i < n) {
+    while (i < n && /\s/.test(params[i])) i++
+    if (i >= n) break
+
+    let j = i
+    while (j < n && params[j] !== '=' && !/\s/.test(params[j])) j++
+    if (j >= n || params[j] !== '=') {
+      i = j // bare token
+      continue
     }
+    const key = params.slice(i, j).toLowerCase()
+    i = j + 1
+
+    let val = ''
+    if (i < n && (params[i] === '"' || params[i] === "'")) {
+      const quote = params[i]
+      i++
+      while (i < n && params[i] !== quote) {
+        if (params[i] === '\\' && i + 1 < n) {
+          val += params[i + 1]
+          i += 2
+          continue
+        }
+        val += params[i]
+        i++
+      }
+      i++ // closing quote
+    } else {
+      while (i < n && !/\s/.test(params[i])) {
+        val += params[i]
+        i++
+      }
+    }
+    if (key !== '') result[key] = val.trim()
   }
   return result
+}
+
+/** A Sim.Params value as a number, or undefined when empty, an expression, or not a plain value. */
+function simNumber(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined
+  return parseValue(raw, 'R')
+}
+
+/** First non-empty Sim.Params value among the given keys. */
+function pickParam(params: Record<string, string>, keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = params[k]
+    if (v !== undefined && v !== '') return v
+  }
+  return undefined
 }
 
 /**
@@ -221,6 +271,32 @@ function buildNodeList(part: Part, circuit: Circuit): string[] {
   return padNums.map(p => padNodeMap.get(p)!).filter(n => n !== undefined)
 }
 
+const POSITIVE_TERMINALS = new Set(['+', 'p', 'pos', 'a'])
+const NEGATIVE_TERMINALS = new Set(['-', 'n', 'neg', 'k', 'm'])
+
+/**
+ * Node list for a two-terminal primitive, honouring Sim.Pins ("1=+ 2=-",
+ * "1=- 2=+"): the positive terminal is written first, as SPICE expects. Sim.Pins
+ * that do not describe exactly this part's two pads with one positive and one
+ * negative terminal are ignored (pad order), never trusted.
+ */
+function buildTwoTerminalNodes(part: Part, circuit: Circuit, simPins: string | undefined): string[] {
+  const padOrder = buildNodeList(part, circuit)
+  if (!simPins) return padOrder
+  const pins = parseSimPins(simPins)
+  const padNodeMap = buildPadNodeMap(part, circuit)
+  const pads = [...padNodeMap.keys()]
+  if (pads.length !== 2 || !pads.every(p => p in pins)) return padOrder
+  const ranks = pads.map(p => {
+    const name = pins[p].toLowerCase()
+    return POSITIVE_TERMINALS.has(name) ? 0 : NEGATIVE_TERMINALS.has(name) ? 1 : -1
+  })
+  if (!(ranks.includes(0) && ranks.includes(1))) return padOrder
+  const positivePad = pads[ranks.indexOf(0)]
+  const negativePad = pads[ranks.indexOf(1)]
+  return [padNodeMap.get(positivePad)!, padNodeMap.get(negativePad)!]
+}
+
 // ─── Element name builder ─────────────────────────────────────────────────────
 
 /** Build the SPICE element name: "r_r1", "c_c1", "x_u1", etc. */
@@ -232,12 +308,23 @@ function elementName(deviceLetter: string, ref: string): string {
 
 /**
  * Attempt tier-1 resolution from schematic Sim.* fields.
- * Returns a Resolution or null if the schematic data doesn't cover this part.
+ *
+ * Returns a Resolution, or null when the schematic data does not give a
+ * COMPLETE, usable model for this part. null means "keep going down the tiers"
+ * (Value field, MPN, bundled library); it is never an error. Sim.Device is
+ * advisory unless the card it would produce is complete (issues #6, #7):
+ *   - R/C/L need a value (Sim.Params, else the Value field);
+ *   - V/I need a dc value;
+ *   - D/Q/M/J need a model, which a bare Sim.Device cannot supply;
+ *   - any Sim.Device outside the table (SPICE, NMOS, NPN, KIBIS, ...) is skipped.
+ * Why a tier-1 attempt was skipped is appended to `notes` so a part that ends up
+ * unresolved can say so.
  */
 function tryTier1(
   part: Part,
   circuit: Circuit,
   simInfo: { sim: Partial<Record<'Device' | 'Type' | 'Params' | 'Pins' | 'Library' | 'Name', string>> } | undefined,
+  notes: string[],
 ): Resolution | null {
   if (!simInfo) return null
   const { sim } = simInfo
@@ -256,13 +343,11 @@ function tryTier1(
   const isSubckt = device === 'SUBCKT' || type === 'SUBCKT'
 
   if (device && !PRIMITIVE_DEVICE_LETTERS[device] && !isSubckt) {
-    // Out-of-scope device (e.g. KIBIS, PSPICE, etc.)
-    return {
-      ref: part.ref,
-      status: 'unresolved',
-      tier: 1,
-      warnings: [`Sim.Device="${sim.Device}" is not supported (out-of-scope device type)`],
-    }
+    // Device type tier 1 cannot use (SPICE, NMOS, NPN, KIBIS, PSPICE, ...). Do
+    // not block the Value field and the library: the schematic author never
+    // chose this device for circsim.
+    notes.push(`Sim.Device="${sim.Device}" is not supported (out-of-scope device type)`)
+    return null
   }
 
   // SUBCKT type: resolve as subckt (handles both Sim.Device=SUBCKT and Sim.Type=SUBCKT)
@@ -302,50 +387,69 @@ function tryTier1(
   if (device && PRIMITIVE_DEVICE_LETTERS[device]) {
     const deviceLetter = PRIMITIVE_DEVICE_LETTERS[device]
     const elName = elementName(deviceLetter, part.ref)
-    const nodes = buildNodeList(part, circuit)
-    const nodesStr = nodes.join(' ')
-
-    // Parse params to get the value
     const params = sim.Params ? parseSimParams(sim.Params) : {}
 
-    let valueStr = ''
+    let valueStr: string | undefined
+    let nodes: string[]
 
-    // Common param keys by device type
-    const valueKey = device === 'R' ? 'R' :
-                     device === 'C' ? 'C' :
-                     device === 'L' ? 'L' :
-                     device === 'V' ? 'DC' :
-                     device === 'I' ? 'DC' : undefined
-
-    if (valueKey && params[valueKey]) {
-      // Parse and reformat to avoid letter suffixes
-      const parsed = parseValue(params[valueKey], device as 'R' | 'C' | 'L')
-      if (parsed !== undefined) {
-        valueStr = formatSpiceValue(parsed)
-      } else {
-        // Keep raw if parseValue can't handle it (e.g. complex expressions)
-        valueStr = params[valueKey]
+    if (device === 'R' || device === 'C' || device === 'L') {
+      // KiCad writes `c=""` when the value lives in the Value field, and an
+      // empty Sim.Params for plain passives: both mean "use the Value field".
+      const keys = device === 'R' ? ['r', 'resistance', 'value']
+        : device === 'C' ? ['c', 'capacitance', 'value']
+          : ['l', 'inductance', 'value']
+      const fromParams = simNumber(pickParam(params, keys))
+      const parsed = fromParams ?? parseValue(part.value, device)
+      if (parsed === undefined) {
+        notes.push(
+          `Sim.Device="${sim.Device}" gives no usable value (Sim.Params "${sim.Params ?? ''}", Value "${part.value}")`,
+        )
+        return null
       }
-    } else if (sim.Params) {
-      // Fallback: use raw params (may be an expression like "DC=5")
-      // Try to extract a plain numeric value
-      const paramEntries = Object.entries(params)
-      if (paramEntries.length === 1) {
-        const [, rawVal] = paramEntries[0]
-        // Try parsing
-        const parsed = parseValue(rawVal, 'R') // use 'R' as fallback kind
-        if (parsed !== undefined) {
-          valueStr = formatSpiceValue(parsed)
-        } else {
-          valueStr = rawVal
-        }
+      valueStr = formatSpiceValue(parsed)
+      nodes = buildTwoTerminalNodes(part, circuit, sim.Pins)
+    } else if (device === 'V' || device === 'I') {
+      // A source with no dc value is "DC 0 assumed" in ngspice: a voltage
+      // source becomes a hard short. Never emit one.
+      const parsed = simNumber(pickParam(params, ['dc', 'value', device.toLowerCase()]))
+      if (parsed === undefined) {
+        notes.push(
+          `Sim.Device="${sim.Device}" has no value (Sim.Params "${sim.Params ?? ''}"); a source with no value is not modeled`,
+        )
+        return null
+      }
+      valueStr = formatSpiceValue(parsed)
+      nodes = buildTwoTerminalNodes(part, circuit, sim.Pins)
+    } else if (device === 'D' || device === 'Q' || device === 'M' || device === 'J') {
+      // These cards need a .model name that a bare Sim.Device cannot supply
+      // (KiCad's own Simulation_SPICE:D carries only rs/cjo). Fall through to
+      // the Value field and the library.
+      notes.push(
+        `Sim.Device="${sim.Device}" has no model name, so no ${deviceLetter}_ card can be written from the schematic alone`,
+      )
+      return null
+    } else {
+      // Controlled sources (E/F/G/H/K): only with explicit params.
+      const entries = Object.entries(params)
+      if (entries.length === 0) {
+        notes.push(`Sim.Device="${sim.Device}" has no Sim.Params`)
+        return null
+      }
+      if (entries.length === 1) {
+        const parsed = simNumber(entries[0][1])
+        valueStr = parsed !== undefined ? formatSpiceValue(parsed) : entries[0][1]
       } else {
-        // Multiple params: emit as-is (e.g. for PULSE or SIN sources)
         valueStr = sim.Params
       }
+      nodes = buildNodeList(part, circuit)
     }
 
-    const card = `${elName} ${nodesStr} ${valueStr}`.trimEnd()
+    if (valueStr === undefined || valueStr.trim() === '' || valueStr.trim() === '""') {
+      notes.push(`Sim.Device="${sim.Device}" produced an empty value`)
+      return null
+    }
+
+    const card = `${elName} ${nodes.join(' ')} ${valueStr}`.trimEnd()
 
     return {
       ref: part.ref,
@@ -488,23 +592,24 @@ function tryTier3(
   library: LibraryEntry[],
   schematicPins?: SchematicPin[],
 ): Resolution | null {
-  // Build a PartDescriptor for the matcher
-  // MPN can come from part.properties['mpn'] or 'MPN' (case variants)
+  // Build a PartDescriptor for the matcher. The MPN is explicit when it comes
+  // from a BOM row (merged into properties by applyBomRow) or a board
+  // property; the key is matched case-insensitively.
+  const mpnKey = Object.keys(part.properties).find(k => k.toLowerCase() === 'mpn')
   const mpnProp: string | undefined =
-    part.properties['mpn'] ??
-    part.properties['MPN'] ??
-    part.properties['Mpn'] ??
-    undefined
+    mpnKey !== undefined && part.properties[mpnKey].trim() !== '' ? part.properties[mpnKey] : undefined
 
   // Value-as-MPN fallback: real boards often carry the MPN in the VALUE field
-  // ("1N4148W", "MMBT3904", "AO3401") with no mpn property at all. When the
-  // properties provide no MPN, pass the value as the MPN candidate —
-  // matchLibraryEntry normalizes it, and a plain R/C value like "10k" matches
-  // no entry's mpn list, so false positives are unlikely.
+  // ("1N4148W", "MMBT3904", "AO3401") with no mpn property at all. When there
+  // is no explicit MPN, pass the value as the MPN candidate and mark it as a
+  // guess: matchLibraryEntry refuses it on a refdes that is never a library
+  // device (issue #51), so "3V0" on a battery holder is never a zener.
+  const mpnIsValue = mpnProp === undefined
   const mpn = mpnProp ?? (part.value.trim() !== '' ? part.value : undefined)
 
   const descriptor: PartDescriptor = {
     mpn,
+    mpnIsValue,
     libId: part.libId,
     value: part.value,
     ref: part.ref,
@@ -544,6 +649,16 @@ function tryTier3(
   }
 
   const warnings: string[] = []
+
+  // A fallback-tier match knows only "an LED_ footprint on a D/LED part": say so,
+  // so a stand-in model (the generic LED is red) is never mistaken for a
+  // confirmed one.
+  if (matchResult.tier === 'fallback') {
+    warnings.push(
+      `library-fallback: ${part.ref} matched "${entry.id}" from its refdes and footprint only ` +
+      `(value "${part.value}" was not recognized); set the MPN or value if this is not the right model`,
+    )
+  }
 
   // Select pin map. Footprint-name regexes encode BELIEFS about pad-numbering
   // conventions; attached-schematic pin names (A/K) are the design files' own
@@ -609,8 +724,11 @@ function tryTier3(
  *
  * @param circuit         Extracted circuit (from core/netlist/extract.ts)
  * @param schematicSimData  Optional: schematic Sim.* fields per ref
- * @param bom             Optional: BOM rows (seam for tier 3 enrichment — unused in v1 tiers 1/2)
- * @param library         Optional: bundled library entries (seam for tier 3 — unused in Task 12)
+ * @param bom             Optional: BOM rows. A row's MPN and value win over the board's
+ *                        (the documented precedence): they replace the part's value and
+ *                        MPN property before tiers 1 to 3 run. The BOM footprint is not
+ *                        used; the placed footprint decides pin maps.
+ * @param library         Optional: bundled library entries (tier 3)
  * @param userOverrides   Optional: per-ref stub overrides from Model Doctor
  *
  * Returns one Resolution per Part, in the same order as circuit.parts.
@@ -624,12 +742,151 @@ export function resolveAll(
 ): Resolution[] {
   const resolutions: Resolution[] = []
 
+  // BOM refs are matched case-insensitively ("r1" names R1).
+  let bomByRef: BomData | undefined
+  if (bom && bom.size > 0) {
+    bomByRef = new Map()
+    for (const [ref, row] of bom) bomByRef.set(ref.toUpperCase(), row)
+  }
+
   for (const part of circuit.parts) {
-    const res = resolvePart(part, circuit, schematicSimData, bom, library, userOverrides)
+    const res = resolvePart(
+      part, circuit, schematicSimData, bomByRef?.get(part.ref.toUpperCase()), library, userOverrides,
+    )
     resolutions.push(res)
   }
 
   return resolutions
+}
+
+// ─── BOM application ──────────────────────────────────────────────────────────
+
+/**
+ * The value a BOM row gives an R/C/L part, in a form tier 2 can read. A JLCPCB
+ * "Comment" carries the rating after the value ("100nF 50V X7R",
+ * "4.7kOhm +-1% 1/10W"): when the whole string does not parse but its leading
+ * token does, that token is the value. Anything else is returned unchanged.
+ */
+function bomPrimitiveValue(ref: string, value: string): string {
+  const prefix = refdesPrefix(ref)
+  if (!TIER2_PRIMITIVE_PREFIXES.has(prefix)) return value
+  const kind = prefix as 'R' | 'C' | 'L'
+  if (parseValue(value, kind) !== undefined) return value
+  const lead = value.split(/\s+/)[0]
+  return lead !== value && parseValue(lead, kind) !== undefined ? lead : value
+}
+
+/**
+ * The part as the BOM describes it: the row's value replaces the board value,
+ * and the row's MPN replaces any board MPN property (whatever its case).
+ */
+function applyBomRow(part: Part, row: BomRow | undefined): Part {
+  if (!row) return part
+  const value = row.value?.trim()
+  const mpn = row.mpn?.trim()
+  if (!value && !mpn) return part
+
+  let properties = part.properties
+  if (mpn) {
+    properties = {}
+    for (const [k, v] of Object.entries(part.properties)) {
+      if (k.toLowerCase() !== 'mpn') properties[k] = v
+    }
+    properties.mpn = mpn
+  }
+  return { ...part, value: value ? bomPrimitiveValue(part.ref, value) : part.value, properties }
+}
+
+/**
+ * True when the value the BOM gives a part is the board's value: the same text,
+ * or, for R/C/L, the same number in another notation ("4.7kOhm" and "4k7").
+ * `bomValue` is the value as applied (bomPrimitiveValue), not the raw Comment.
+ */
+function sameValue(ref: string, bomValue: string, boardValue: string): boolean {
+  if (bomValue.trim() === boardValue.trim()) return true
+  const prefix = refdesPrefix(ref)
+  if (!TIER2_PRIMITIVE_PREFIXES.has(prefix)) return false
+  const kind = prefix as 'R' | 'C' | 'L'
+  const a = parseValue(bomValue, kind)
+  const b = parseValue(boardValue, kind)
+  return a !== undefined && b !== undefined && Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b))
+}
+
+/** Machine prefix of a note saying what a BOM row did to a part (issue #4). */
+export const BOM_NOTE_PREFIX = 'bom:'
+
+/**
+ * Tell the user what the BOM did to a part: a value that replaced the board's,
+ * and an MPN that chose (or failed to choose) a library model. A BOM value that
+ * names the board's own value (a JLCPCB Comment with its rating) changed
+ * nothing and gets no note. The notes reach the user through the Model Doctor
+ * card for a part that needs attention and through the sim log
+ * (resolutionNoteLines) for every part.
+ */
+function noteBomEffect(
+  part: Part,
+  row: BomRow | undefined,
+  res: Resolution,
+  boardValueUsed: boolean,
+): Resolution {
+  if (!row) return res
+  const extra: string[] = []
+  const bomValue = row.value?.trim()
+  if (bomValue && !sameValue(part.ref, bomPrimitiveValue(part.ref, bomValue), part.value)) {
+    if (boardValueUsed) {
+      // The BOM value found no model, the board's did: say which one decided.
+      extra.push(
+        `bom: value "${bomValue}" from the BOM found no model, so the board value "${part.value}" was used`,
+      )
+    } else if (res.model || res.status === 'unresolved') {
+      // An unresolved part names the BOM too: its value may be why nothing matched.
+      extra.push(`bom: value "${bomValue}" from the BOM replaces the board value "${part.value}"`)
+    }
+  }
+  const bomMpn = row.mpn?.trim()
+  if (bomMpn) {
+    const mpnKey = Object.keys(part.properties).find(k => k.toLowerCase() === 'mpn')
+    const boardMpn = mpnKey !== undefined ? part.properties[mpnKey].trim() : ''
+    const disagrees = boardMpn !== '' && boardMpn !== bomMpn
+    if (res.tier === 3 && (res.status === 'ok' || res.status === 'documented-open')) {
+      extra.push(
+        `bom: MPN "${bomMpn}" from the BOM selected this model` +
+        (disagrees ? ` (the board's MPN property "${boardMpn}" was overridden)` : ''),
+      )
+    } else if (res.status === 'unresolved') {
+      extra.push(`bom: MPN "${bomMpn}" from the BOM matched no library model`)
+    }
+  }
+  return extra.length === 0 ? res : { ...res, warnings: [...res.warnings, ...extra] }
+}
+
+// ─── Resolution notes for the sim log ─────────────────────────────────────────
+
+/**
+ * Sim-log lines for the resolution notes that a status does not show. The Model
+ * Doctor lists only parts whose status is not ok, so a part that resolved has no
+ * card; the store logs these when a board or BOM is loaded.
+ *
+ * - `'bom'`: what a BOM row did to each part, resolved or not (issue #4), as
+ *   `BOM: <ref>: <what changed>`.
+ * - `'polarity'`: each diode or LED that resolved but whose polarity is a guess
+ *   from a JLC/EasyEDA footprint name (issue #5), as `<ref>: <the warning>`.
+ */
+export function resolutionNoteLines(
+  resolutions: readonly Resolution[],
+  kind: 'bom' | 'polarity',
+): string[] {
+  const lines: string[] = []
+  for (const r of resolutions) {
+    for (const w of r.warnings) {
+      if (kind === 'bom' && w.startsWith(BOM_NOTE_PREFIX)) {
+        lines.push(`BOM: ${r.ref}: ${w.slice(BOM_NOTE_PREFIX.length).trim()}`)
+      } else if (kind === 'polarity' && r.status === 'ok' && w.startsWith(POLARITY_UNVERIFIED_PREFIX)) {
+        lines.push(`${r.ref}: ${w}`)
+      }
+    }
+  }
+  return lines
 }
 
 // ─── Per-part resolution ──────────────────────────────────────────────────────
@@ -638,8 +895,8 @@ function resolvePart(
   part: Part,
   circuit: Circuit,
   schematicSimData: SchematicSimData | undefined,
-  _bom: BomData | undefined,
-  _library: LibraryEntry[] | undefined,
+  bomRow: BomRow | undefined,
+  library: LibraryEntry[] | undefined,
   userOverrides: Map<string, UserStubOverride> | undefined,
 ): Resolution {
   // ── User overrides always win (highest priority) ───────────────────────────
@@ -648,9 +905,34 @@ function resolvePart(
     return makeTier6(part, override.mode)
   }
 
+  const applied = applyBomRow(part, bomRow)
+  let res = resolveFromTiers(applied, circuit, schematicSimData, library)
+
+  // The BOM wins, but a BOM value the resolver cannot use (a free-text Comment)
+  // must not cost a part the model its board value already earned: retry with the
+  // board value, keeping the BOM's MPN, and say so.
+  let boardValueUsed = false
+  if (res.status === 'unresolved' && applied.value !== part.value) {
+    const retry = resolveFromTiers({ ...applied, value: part.value }, circuit, schematicSimData, library)
+    if (retry.status !== 'unresolved') {
+      res = retry
+      boardValueUsed = true
+    }
+  }
+  return noteBomEffect(part, bomRow, res, boardValueUsed)
+}
+
+function resolveFromTiers(
+  part: Part,
+  circuit: Circuit,
+  schematicSimData: SchematicSimData | undefined,
+  library: LibraryEntry[] | undefined,
+): Resolution {
   // ── Tier 1: Schematic Sim.* fields ────────────────────────────────────────
+  // Why a part's Sim.* fields were not usable is kept so an unresolved part can say so.
+  const tier1Notes: string[] = []
   const simInfo = schematicSimData?.get(part.ref)
-  const tier1 = tryTier1(part, circuit, simInfo)
+  const tier1 = tryTier1(part, circuit, simInfo, tier1Notes)
   if (tier1) return tier1
 
   // ── Tier 2: R/C/L primitive inference ─────────────────────────────────────
@@ -663,9 +945,13 @@ function resolvePart(
   }
 
   // ── Tier 3: Bundled library match ─────────────────────────────────────────
-  if (_library && _library.length > 0) {
-    const tier3 = tryTier3(part, _library, schematicSimData?.get(part.ref)?.pins)
-    if (tier3) return tier3
+  if (library && library.length > 0) {
+    const tier3 = tryTier3(part, library, schematicSimData?.get(part.ref)?.pins)
+    if (tier3) {
+      return tier3.status === 'unresolved' && tier1Notes.length > 0
+        ? { ...tier3, warnings: [...tier1Notes, ...tier3.warnings] }
+        : tier3
+    }
   }
 
   // ── Tier 4: User .lib [seam] ──────────────────────────────────────────────
@@ -679,6 +965,109 @@ function resolvePart(
     ref: part.ref,
     status: 'unresolved',
     tier: 6,
-    warnings: [`No model found for ${part.ref} (${part.value}, ${part.libId})`],
+    warnings: [...tier1Notes, `No model found for ${part.ref} (${part.value}, ${part.libId})`],
   }
+}
+
+// ─── ngspice log lines → per-part status ──────────────────────────────────────
+
+/** A part ngspice refused or silently dropped, found in its log output. */
+export interface DeckDiagnostic {
+  ref: string
+  message: string
+}
+
+/** SimHost prefixes ngspice output with its stream name ("stderr d_d1 a 0"). */
+function cleanNgspiceLine(text: string): string {
+  return text.replace(/^\s*(?:stderr|stdout)\s+/i, '').trim()
+}
+
+/** "c_c17" / "v_bt1" -> the ref it was written for ("C17" / "BT1"). */
+function refForElement(element: string, refs: readonly string[]): string | undefined {
+  const lower = element.toLowerCase()
+  const stripped = /^[a-z]_(.+)$/.exec(lower)?.[1]
+  for (const candidate of stripped !== undefined ? [stripped, lower] : [lower]) {
+    const hit = refs.find(r => r.toLowerCase() === candidate)
+    if (hit !== undefined) return hit
+  }
+  return undefined
+}
+
+/**
+ * Turn one ngspice log line into a per-part diagnostic, or null.
+ *
+ * Recognized (ngspice 46):
+ *   Warning: 'c_c1 a 0' is not a valid capacitor instance line, ignored!   (level warn: the part is silently gone)
+ *   Note: v_bt1: has no value, DC 0 assumed                               (a source that is really a short)
+ *   <card line> then "could not find a valid modelname"                   (the whole deck fails to parse)
+ *
+ * The modelname message does not name the element; ngspice prints the card on
+ * the line before it, so the caller passes the previous log line. `refs` are the
+ * board's part refs; an element that is not one of them gives null.
+ */
+export function ngspiceLogDiagnostic(
+  line: string,
+  prevLine: string | undefined,
+  refs: readonly string[],
+): DeckDiagnostic | null {
+  const text = cleanNgspiceLine(line)
+
+  const ignored = /^Warning:\s*'([^'\s]+)[^']*'\s+is not a valid (.+?) instance line, ignored/i.exec(text)
+  if (ignored) {
+    const ref = refForElement(ignored[1], refs)
+    return ref === undefined ? null : {
+      ref,
+      message: `ngspice ignored this part (not a valid ${ignored[2]} instance line), so it is missing from the simulation`,
+    }
+  }
+
+  const noValue = /^Note:\s*(\S+?):\s*has no value, DC 0 assumed/i.exec(text)
+  if (noValue) {
+    const ref = refForElement(noValue[1], refs)
+    return ref === undefined ? null : {
+      ref,
+      message: 'ngspice found no value on this source and assumed DC 0 (a short for a voltage source)',
+    }
+  }
+
+  if (/^could not find a valid modelname/i.test(text) && prevLine !== undefined) {
+    const element = cleanNgspiceLine(prevLine).split(/\s+/)[0]
+    const ref = element ? refForElement(element, refs) : undefined
+    return ref === undefined ? null : {
+      ref,
+      message: 'ngspice could not find a valid modelname for this part, so it rejected the deck (could not find a valid modelname)',
+    }
+  }
+
+  return null
+}
+
+/**
+ * Apply ngspice's per-part complaints to the resolutions. A part that was
+ * status ok but that ngspice refused or dropped is demoted to unresolved, loses
+ * its model (so the next deck leaves it open instead of repeating the bad card),
+ * and carries ngspice's message. Other parts keep their resolution object.
+ * Returns the same array when nothing changes.
+ */
+export function applyDeckDiagnostics(
+  resolutions: Resolution[],
+  diagnostics: readonly DeckDiagnostic[],
+): Resolution[] {
+  if (diagnostics.length === 0) return resolutions
+  const byRef = new Map<string, string[]>()
+  for (const d of diagnostics) byRef.set(d.ref, [...(byRef.get(d.ref) ?? []), d.message])
+
+  let changed = false
+  const out = resolutions.map(r => {
+    const messages = byRef.get(r.ref)
+    if (!messages || r.status !== 'ok') return r
+    changed = true
+    const warnings = [...r.warnings]
+    for (const m of messages) if (!warnings.includes(m)) warnings.push(m)
+    const demoted: Resolution = { ...r, status: 'unresolved', warnings }
+    delete demoted.model
+    delete demoted.note
+    return demoted
+  })
+  return changed ? out : resolutions
 }

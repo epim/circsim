@@ -609,7 +609,10 @@ describe('tier 3 — schematic A/K pins override footprint-convention pin maps',
   }
 
   it('D7 replay: schematic (1=A,2=K) beats a wrong-confident regex map + note pushed', () => {
-    const circuit = makeCircuit([makePart('D7', 'SS54', 'SMC_L7.1-W6.2-LS8.1-R-RD')])
+    // A KiCad-named footprint (confident cathode-first key) on a part whose symbol
+    // says pin 1 = A: the schematic wins and the contradiction is reported.
+    // (JLC/EasyEDA-origin names are never confident any more: issue #5.)
+    const circuit = makeCircuit([makePart('D7', 'SS54', 'Diode_SMD:D_SMC')])
     const [r] = resolveAll(circuit, d7SchData(['A', 'K']), undefined, [KICAD_ONLY_SS54])
     expect(r.status).toBe('ok')
     expect(r.tier).toBe(3)
@@ -631,9 +634,9 @@ describe('tier 3 — schematic A/K pins override footprint-convention pin maps',
     expect(r.warnings.some(w => w.startsWith('schematic-pinmap:'))).toBe(false)
   })
 
-  it('agreement against the REAL index (JLC keys present): anode-first, NO note', async () => {
-    // Post-f6680b6 the real ss54 entry maps the bare EasyEDA name anode-first,
-    // agreeing with the schematic — the correction note must NOT appear.
+  it('EasyEDA footprint against the REAL index: the schematic decides, no correction note, no unverified warning', async () => {
+    // The footprint name cannot know polarity (issue #5); the attached schematic
+    // says pin 1 = A, so the map is anode-first and nothing needs flagging.
     const { readFileSync } = await import('node:fs')
     const { join } = await import('node:path')
     const entries = (

@@ -351,6 +351,42 @@ describe('orchestration — SimHost crash replay', () => {
     expect(mock.sent.some(c => c.type === 'runTransient')).toBe(true)
   })
 
+  it('replay after crash while PAUSED drops to idle with a notice, and Run then does a fresh start (#75)', () => {
+    store.getState().run()
+    mock.emit({ type: 'status', running: true, simTimeSeconds: 0.5, realtimeFactor: 1 })
+    store.getState().pause()
+    expect(store.getState().simState).toBe('paused')
+    expect(store.getState().deckDirty).toBe(false)
+    mock.clearSent()
+
+    store.getState().noteCrash(true)
+    store.getState().replayAfterCrash()
+
+    // The fresh process gets the deck but no transient, and the store no longer
+    // claims a pause it cannot honour.
+    const types = mock.sent.map(c => c.type)
+    expect(types).toEqual(['loadCircuit'])
+    expect(store.getState().simState).toBe('idle')
+    expect(store.getState().crashNotice).toMatchObject({ willRespawn: true, pausedRunLost: true })
+
+    // Run takes the fresh-start path (the pre-fix store sent a bare `resume`
+    // that the new process ignored, and claimed 'running').
+    mock.clearSent()
+    store.getState().run()
+    const after = mock.sent.map(c => c.type)
+    expect(after).not.toContain('resume')
+    expect(after).toContain('loadCircuit')
+    expect(after).toContain('runTransient')
+    expect(store.getState().simState).toBe('running')
+  })
+
+  it('a crash notice without a paused run does not claim one was lost', () => {
+    store.getState().run()
+    store.getState().noteCrash(true)
+    store.getState().replayAfterCrash()
+    expect(store.getState().crashNotice?.pausedRunLost).toBeUndefined()
+  })
+
   it('replay after crash while in OP re-sends loadCircuit + re-runs op', () => {
     const p = store.getState().powerOn()
     mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })

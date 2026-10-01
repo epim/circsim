@@ -1,0 +1,43 @@
+# Categories for GitHub's "Generate release notes" button (and for any release
+# step that sets generate_release_notes). Grouping is by PR label, first match
+# wins. See docs/release-notes-template.md for the hand-written part of a release.
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+    authors:
+      - dependabot
+  categories:
+    - title: Results that changed (simulation, models, Board Critic)
+      labels:
+        - methodology
+        - severity:critical
+    - title: Fixes
+      labels:
+        - bug
+        - severity:high
+        - severity:medium
+        - severity:low
+    - title: Features and product
+      labels:
+        - enhancement
+        - product
+        - ux
+    - title: Performance
+      labels:
+        - performance
+    - title: Security
+      labels:
+        - security
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Tests, CI, and structure
+      labels:
+        - testing
+        - architecture
+    - title: Other changes
+      labels:
+        - '*'

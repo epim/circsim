@@ -18,7 +18,7 @@ Press **`Run`**. circsim streams a live transient simulation and the scope start
 On a typical board `1×` is held steadily (a 1 Hz blinker takes one second per blink). If the readout next to Pace shows less than the pace you asked for, the circuit itself is the limit: a fast function generator needs a finer time step, and a stiff or switching circuit makes ngspice take many small steps. See [how the live bench keeps up](../reference/architecture#live-sample-channel).
 
 ::: info Why it "comes alive"
-The transient starts from the circuit's initial state rather than a pre-solved DC point, so you watch capacitors charge and oscillators start up: the "power on and see it come alive" moment. For very long runs, circsim restarts the window every ~30 seconds to bound memory; your scope history is kept.
+The transient starts from the circuit's initial state rather than a pre-solved DC point, so you watch capacitors charge and oscillators start up: the "power on and see it come alive" moment. For very long runs, circsim restarts the window every ~30 seconds to bound memory; your scope history is kept. A window is shorter than 30 seconds when its samples would not fit the simulator's 1.5 GB memory budget: a fast function generator sets a fine time step (1/200 of its period), and a board with many nets saves more per step. circsim then restarts at the shorter boundary and the log says how long the windows are (*"Transient windows are limited to …"*). At the default 10 µs step the bundled 555 blinker needs about 0.6 GB per window, so it keeps the full 30 seconds.
 :::
 
 ## Frame the waveform

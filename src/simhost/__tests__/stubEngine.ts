@@ -79,8 +79,13 @@ export class StubEngine implements SpiceEngine {
   currentPlot(): string {
     return 'tran1'
   }
+  /**
+   * Vector names a transient reports before any point exists (what SimHost's
+   * few-step probe counts to size a run); empty: the names of the fake plot.
+   */
+  vectors: string[] = []
   allVectors(): string[] {
-    return Object.keys(this.plot)
+    return this.vectors.length > 0 ? this.vectors : Object.keys(this.plot)
   }
   vectorData(name: string): Float64Array | undefined {
     const v = this.plot[name]
