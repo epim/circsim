@@ -157,10 +157,19 @@ test.describe('First Light E2E', () => {
     const clipY = Number(await clip.getAttribute('data-y'))
     const layerBox = (await page.locator('[data-testid="lead-layer"]').boundingBox())!
     const jackBox = (await openJack.boundingBox())!
-    await page.mouse.move(jackBox.x + jackBox.width / 2, jackBox.y + jackBox.height / 2)
-    await page.mouse.down()
-    await page.mouse.move(layerBox.x + clipX, layerBox.y + clipY, { steps: 10 })
-    await page.mouse.up()
+    // The clip anchor is projected from a point slightly above the pad, so on a
+    // tall viewport the pixel exactly under it can miss the copper by a few px
+    // (it only landed by luck on the old, very short canvas). Try the anchor and
+    // a few nearby pixels; the first pixel that raycasts onto the net wires the
+    // jack and ends the drag loop.
+    for (const [dx, dy] of [[0, 0], [0, -8], [0, -12], [0, -4], [0, 8], [8, 0], [-8, 0]]) {
+      if ((await openJack.count()) === 0) break
+      await page.mouse.move(jackBox.x + jackBox.width / 2, jackBox.y + jackBox.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(layerBox.x + clipX + dx, layerBox.y + clipY + dy, { steps: 10 })
+      await page.mouse.up()
+      await page.waitForTimeout(150)
+    }
     await expect(leadPaths).toHaveCount(leadCountBefore + 1, { timeout: 10_000 })
     await expect(openJack).toHaveCount(0) // the jack is now wired
 

@@ -23,7 +23,7 @@ A **net** is everything that's electrically connected together: think of it as o
 circsim is one screen, three columns, dark by design:
 
 - **Left** has the **Parts** list (every component, color-dotted by whether it has a model) and, below it, the **Model Doctor** (only appears when a part needs attention).
-- **Center** has the **3D board**, the **bench shelf** underneath it, and the **scope + logs** dock along the bottom.
+- **Center** has the **3D board**, the **bench shelf** underneath it, and the **scope + logs** dock along the bottom. The 3D board always keeps at least 240 px of height; the shelf and the dock give way first. Each has a **Hide** / **Show** button that collapses it to a thin strip, and circsim remembers the choice between launches. If the window is smaller than about 960 by 520 px, the page scrolls instead of squeezing the board.
 - **Right** has **Ground & Power** (where you designate the ground and supply nets) and the **Board Critic** (the read-only pre-fab audit).
 
 Across the top is the **simulation toolbar**: `⚡ Energize`, `Power On`, `Run`, a **Pace** control (`0.1×` / `1×` / `max`), and an **Overlay** switch (`Realistic` / `Voltage` / `Highlight`). The **Overlay** changes how the copper is colored. `Realistic` shows the bare board (components render as simple placeholder shapes, not photo-real 3D models); `Voltage` tints by voltage; `Highlight` emphasizes your selection.
