@@ -22,7 +22,13 @@
  * failure so the gate cannot pass by skipping.
  */
 
-import { test, expect, _electron as electron, type Page } from '@playwright/test'
+import {
+  test,
+  expect,
+  _electron as electron,
+  type ElectronApplication,
+  type Page,
+} from '@playwright/test'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { pipeAppOutput } from './util'
@@ -56,9 +62,16 @@ const OP_TIMEOUT_MS = 25_000
  * this gate is diagnosable from the log alone.
  */
 async function dumpDiagnostics(
+  app: ElectronApplication,
   page: Page,
   rendererLog: string[],
 ): Promise<void> {
+  try {
+    const gpu = await app.evaluate(({ app: a }) => a.getGPUFeatureStatus())
+    console.log(`[diag] gpu feature status: ${JSON.stringify(gpu)}`)
+  } catch (e) {
+    console.log(`[diag] could not read gpu status: ${String(e)}`)
+  }
   try {
     const state = await page.evaluate(() => ({
       text: document.body.innerText.slice(0, 4000),
@@ -100,7 +113,7 @@ async function withPackagedApp(
     try {
       await body(page)
     } catch (err) {
-      await dumpDiagnostics(page, rendererLog)
+      await dumpDiagnostics(app, page, rendererLog)
       throw err
     }
   } finally {
