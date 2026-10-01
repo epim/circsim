@@ -156,6 +156,18 @@ describe('buildCriticOpResult', () => {
     expect(op!.padCurrents!['R1']['1']).toBeCloseTo(0.012)
     expect(op!.unresolvedRefs).toEqual(['U9'])
   })
+
+  it('carries the supply entries (bench lead positions) in both op shapes (issue #47)', () => {
+    const board = parseBoard(readFixture('fixture-rc.kicad_pcb'))
+    const circuit = extract(board, { groundNetId: circuitGnd(board) })
+    const vin = circuit.nets.find(n => n.kicadName === 'VIN')!
+    const entries = [{ netId: vin.id, pos: { x: 3, y: 4 } }]
+    const bare = buildCriticOpResult(circuit, new Map([[vin.id, 5]]), new Map([['D1', 0.012]]), null, entries)
+    expect(bare!.supplyEntries).toEqual(entries)
+    const solved = buildCriticOpResult(circuit, new Map([[vin.id, 5]]), new Map(), { partCurrents: {}, padCurrents: {}, unresolvedRefs: [] }, entries)
+    expect(solved!.supplyEntries).toEqual(entries)
+    expect(buildCriticOpResult(circuit, new Map([[vin.id, 5]]), new Map())!.supplyEntries).toBeUndefined()
+  })
 })
 
 function circuitGnd(board: ReturnType<typeof parseBoard>): number {
