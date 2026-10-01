@@ -102,6 +102,10 @@ describe('classifyStubPart: which parts get a stub', () => {
     ['LPC1768FBD100', 'Package_QFP:LQFP-100'],
     ['GD32F103C8T6', 'Package_QFP:LQFP-48'],
     ['MCU', 'MCU_ST_STM32F1:LQFP-48'],
+    ['MAX32660GTK+', 'Package_DFN_QFN:TQFN-24'],
+    ['MAX32690GTK', 'Package_DFN_QFN:TQFN-24'],
+    ['nRF5340-QKAA', 'Package_DFN_QFN:aQFN-94'],
+    ['nRF9160-SICA', 'Package_LGA:LGA-102'],
   ])('%s (%s) is a controller with no bundled supply current', (value, libId) => {
     const cls = classifyStubPart(partOn('U1', value, libId, {}))
     expect(cls?.kind).toBe('controller')
@@ -117,6 +121,15 @@ describe('classifyStubPart: which parts get a stub', () => {
     ['U1', '74HC595', 'Package_SO:SOIC-16_3.9x9.9mm_P1.27mm'],
     ['Q1', '2N7002', 'Package_TO_SOT_SMD:SOT-23'],
     ['Y1', 'FOO', 'Package_TO_SOT_SMD:SOT-23'],
+    // Non-MCU parts whose names share a prefix with a controller family.
+    ['U1', 'MAX3232', 'Package_SO:SOIC-16_3.9x9.9mm_P1.27mm'],
+    ['U1', 'MAX3232ECDR', 'Package_SO:SOIC-16_3.9x9.9mm_P1.27mm'],
+    ['U1', 'MAX3221', 'Package_SO:SSOP-16_5.3x6.2mm_P0.65mm'],
+    ['U1', 'MAX3243', 'Package_SO:SSOP-28_5.3x10.2mm_P0.65mm'],
+    ['U1', 'MAX31855', 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm'],
+    ['U1', 'nRF24L01', 'Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm'],
+    ['U1', 'nRF24L01P', 'Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm'],
+    ['U1', 'NRF24L01+', 'Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm'],
   ])('%s %s (%s) is not stubbed', (ref, value, libId) => {
     expect(classifyStubPart(partOn(ref, value, libId, {}))).toBeNull()
   })
@@ -297,6 +310,52 @@ describe('resolveAll: automatic stubs', () => {
     expect(r.status).toBe('documented-open')
     expect(r.model).toEqual({ kind: 'stub', mode: 'open' })
     expect(r.note).toMatch(/Intentionally left open/)
+  })
+
+  it('a recognized controller on a generic package is stubbed, not claimed by the refdes+footprint fallback', () => {
+    const cases: Array<[string, string, string]> = [
+      // [value, libId, expected subckt name or "interactive-pins"]
+      ['ATtiny85-20PU', 'Package_DIP:DIP-8_W7.62mm', 'MCU_STUB_ATTINY'],
+      ['ATtiny85-20SU', 'Package_SO:SOIC-8W_5.3x5.3mm_P1.27mm', 'MCU_STUB_ATTINY'],
+      ['ATtiny84A-SSU', 'Package_SO:SOIC-14_3.9x8.7mm_P1.27mm', 'MCU_STUB_ATTINY'],
+      ['CH32V003J4M6', 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm', 'MCU_STUB_CH32V003'],
+      ['STM32F030F4P6', 'Package_SO:TSSOP-20_4.4x6.5mm_P0.65mm', 'MCU_STUB_STM32LP'],
+      ['PIC12F675-I/SN', 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm', 'interactive-pins'],
+      ['PIC12F675-I/P', 'Package_DIP:DIP-8_W7.62mm', 'interactive-pins'],
+    ]
+    for (const [value, libId, expected] of cases) {
+      const { circuit } = singlePart('U1', value, libId)
+      const [r] = resolveAll(circuit, undefined, undefined, library)
+      expect(r.status, value).toBe('stubbed')
+      expect(r.tier, value).toBe(6)
+      expect(r.warnings.join(' '), value).not.toMatch(/library-fallback|Ambiguous/)
+      if (expected === 'interactive-pins') {
+        expect(r.model, value).toEqual({ kind: 'stub', mode: 'interactive-pins' })
+      } else {
+        expect(r.model, value).toMatchObject({ kind: 'subckt', subcktName: expected })
+      }
+    }
+  })
+
+  it('a fallback-only IC that is not a controller keeps its library-fallback match', () => {
+    const { circuit } = singlePart('U1', 'FOO1234', 'Package_SO:SOIC-14_3.9x8.7mm_P1.27mm')
+    const [r] = resolveAll(circuit, undefined, undefined, library)
+    expect(r.status).not.toBe('stubbed')
+  })
+
+  it('an MPN-matched library model still beats the stub for a controller-shaped name', () => {
+    const { circuit } = singlePart('U1', 'ATtiny85-20PU', 'Package_DIP:DIP-8_W7.62mm')
+    const userModel: LibraryEntry = {
+      id: 'user-model-ATtiny85',
+      match: { mpn: ['ATTINY85-20PU'] },
+      model: { type: 'subckt', file: '__user_model__:ATtiny85', name: 'MYTINY' },
+      pinMaps: { '.*': { '4': 'gnd', '8': 'vdd' } },
+      defaultPinMap: { '4': 'gnd', '8': 'vdd' },
+      provenance: 'test',
+    }
+    const [r] = resolveAll(circuit, undefined, undefined, [userModel, ...library])
+    expect(r.status).toBe('ok')
+    expect(r.tier).toBe(3)
   })
 
   it('an unrecognized part is still unresolved (no blanket stubbing)', () => {

@@ -149,7 +149,7 @@ An input LED, a transistor, and a current-controlled current source: the collect
 
 ## Automatic stubs: supply loads for controllers and similar parts {#automatic-stubs}
 
-These parts have no simulable model. Rather than leave them red, circsim stubs them by name (MPN property, BOM MPN, value or footprint) as a two-terminal **supply load**: the figure below is drawn from the supply pad to the ground pad once the rail is above the minimum operating voltage, and nothing else happens. They are matched after the library and your own models, so a real model always wins. The status is **stubbed** (amber). How the pads are chosen and what the stub does and does not do is on the [Models page](../concepts/models#supply-load-stubs).
+These parts have no simulable model. Rather than leave them red, circsim stubs them by name (MPN property, BOM MPN, value or footprint) as a two-terminal **supply load**: the figure below is drawn from the supply pad to the ground pad once the rail is above the minimum operating voltage, and nothing else happens. They are matched after the library and your own models, so a real model always wins. A library entry chosen only because a part has an IC refdes and a generic package (a SOIC-8 or SOIC-14) does not count as a model for these parts: an ATtiny85 in a DIP-8 or an ATtiny84 in a SOIC-14 is stubbed, not given an op-amp. The status is **stubbed** (amber). How the pads are chosen and what the stub does and does not do is on the [Models page](../concepts/models#supply-load-stubs).
 
 | Family | Matches | Load | Datasheet condition |
 | --- | --- | --- | --- |

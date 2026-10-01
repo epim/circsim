@@ -35,7 +35,7 @@ import {
   type SchematicPin,
 } from './libraryMatch'
 import type { PartDescriptor } from './libraryMatch'
-import { resolveStubPart } from './stubRules'
+import { classifyStubPart, resolveStubPart } from './stubRules'
 
 // ─── BOM type seam ───────────────────────────────────────────────────────────
 
@@ -587,11 +587,18 @@ function pinMapsEqual(a: PinMap, b: PinMap): boolean {
  *
  * Returns a Resolution or null if no match / ambiguous.
  * Ambiguous → unresolved with candidate list in warnings.
+ *
+ * `yieldFallbackToStub`: the part is a recognized controller, LED or bridge that
+ * the stub rules handle. Its refdes + footprint fallback match (tier 'fallback',
+ * matched or ambiguous) says nothing about the device, only about the package, so
+ * it must not claim the part ahead of the stub rules: an ATtiny84 on SOIC-14 is
+ * not an LM324. A named match (MPN or value) still wins.
  */
 function tryTier3(
   part: Part,
   library: LibraryEntry[],
   schematicPins?: SchematicPin[],
+  yieldFallbackToStub = false,
 ): Resolution | null {
   // Build a PartDescriptor for the matcher. The MPN is explicit when it comes
   // from a BOM row (merged into properties by applyBomRow) or a board
@@ -619,6 +626,7 @@ function tryTier3(
   const matchResult = matchLibraryEntry(descriptor, library)
 
   if (matchResult.kind === 'none') return null
+  if (yieldFallbackToStub && matchResult.tier === 'fallback') return null
 
   if (matchResult.kind === 'ambiguous') {
     return {
@@ -947,7 +955,13 @@ function resolveFromTiers(
 
   // ── Tier 3: Bundled library match ─────────────────────────────────────────
   if (library && library.length > 0) {
-    const tier3 = tryTier3(part, library, schematicSimData?.get(part.ref)?.pins)
+    const stubClass = classifyStubPart(part)
+    const tier3 = tryTier3(
+      part,
+      library,
+      schematicSimData?.get(part.ref)?.pins,
+      stubClass !== null && stubClass.kind !== 'crystal',
+    )
     if (tier3) {
       return tier3.status === 'unresolved' && tier1Notes.length > 0
         ? { ...tier3, warnings: [...tier1Notes, ...tier3.warnings] }

@@ -22,8 +22,11 @@
  * frequency for a value) resolve to a documented open: their resonance matters
  * only to the oscillator that the missing controller model would provide.
  *
- * Rules run after the bundled library and user models (tier 3), so a real model
- * or a user binding always wins, and before the final `unresolved` fallback.
+ * Rules run after the bundled library and user models matched by MPN or value
+ * (tier 3), so a real model or a user binding always wins. A tier-3 match made only
+ * from the refdes and footprint ("some IC in a SOIC-8") does not: it says nothing
+ * about the device, so a recognized controller is stubbed instead. The rules run
+ * before the final `unresolved` fallback.
  *
  * Pure: no electron, react, or three imports. The supply current of every family
  * lives in resources/models/stubs.lib (the deck text) and is repeated in `supplyMa`
@@ -123,12 +126,12 @@ const GENERIC_CONTROLLER_PATTERNS: readonly RegExp[] = [
   /(^|[^A-Z0-9])D?SPIC\d/i, /(^|[^A-Z0-9])PIC(10|12|16|18|24|32)[A-Z]/i, /PIC\d\d[A-Z]*\d/i,
   /(^|[^A-Z0-9])LPC\d/i, /(^|[^A-Z0-9])GD32/i, /(^|[^A-Z0-9])CH32/i, /(^|[^A-Z0-9])CH5\d\d/i,
   /(^|[^A-Z0-9])PY32/i, /(^|[^A-Z0-9])HT32/i, /(^|[^A-Z0-9])AT32/i, /(^|[^A-Z0-9])MM32/i,
-  /(^|[^A-Z0-9])NRF\d/i, /(^|[^A-Z0-9])ESP/i, /(^|[^A-Z0-9])W806/i, /(^|[^A-Z0-9])BL[678]0\d/i,
+  /(^|[^A-Z0-9])NRF(5\d|91)/i, /(^|[^A-Z0-9])ESP/i, /(^|[^A-Z0-9])W806/i, /(^|[^A-Z0-9])BL[678]0\d/i,
   /(^|[^A-Z0-9])MK[LEMV]?\d\d[A-Z]/i, /(^|[^A-Z0-9])S32K/i, /(^|[^A-Z0-9])EFM32/i,
   /(^|[^A-Z0-9])EFR32/i, /(^|[^A-Z0-9])CC(13|26|32)\d\d/i, /(^|[^A-Z0-9])TM4C/i,
   /(^|[^A-Z0-9])PSOC/i, /(^|[^A-Z0-9])CY8C/i, /(^|[^A-Z0-9])R7FA/i, /(^|[^A-Z0-9])RL78/i,
   /(^|[^A-Z0-9])ATXMEGA/i, /(^|[^A-Z0-9])AT90/i, /(^|[^A-Z0-9])ATMEGA/i, /(^|[^A-Z0-9])ATTINY/i,
-  /(^|[^A-Z0-9])TEENSY/i, /(^|[^A-Z0-9])XIAO/i, /(^|[^A-Z0-9])MAX32/i,
+  /(^|[^A-Z0-9])TEENSY/i, /(^|[^A-Z0-9])XIAO/i, /(^|[^A-Z0-9])MAX32\d{3}/i,
 ]
 
 /** Symbol or footprint library prefixes KiCad uses for controllers (`MCU_ST_STM32F1:...`). */
