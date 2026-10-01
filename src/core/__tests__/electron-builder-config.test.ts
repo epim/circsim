@@ -132,12 +132,12 @@ describe('electron-builder.yml — per-platform ngspice bundling (Spec §15)', (
     expect(nsis!.arch).toContain('x64')
   })
 
-  it('macOS bundles its own darwin arch dirs and is unsigned (identity:null)', () => {
+  it('macOS bundles its own darwin arch dirs and leaves signing to the release job (no identity key)', () => {
     const mac = tos(cfg.mac?.extraResources)
     expect(mac).toContain('ngspice/darwin-x64')
     expect(mac).toContain('ngspice/darwin-arm64')
     expect(mac.some((t) => /win32|linux/.test(t))).toBe(false)
-    expect(cfg.mac?.identity).toBeNull()
+    expect(cfg.mac?.identity).toBeUndefined()
   })
 
   it('macOS target is dmg with NO arch list (host arch only)', () => {

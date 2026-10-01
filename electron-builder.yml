@@ -88,6 +88,10 @@ win:
       filter:
         - "**/*"
 
+# Windows signing: electron-builder signs the installer and the app exe
+# automatically when WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD (or the shared
+# CSC_LINK / CSC_KEY_PASSWORD) are set by the release job; no config needed.
+# Without them the installer is unsigned and SmartScreen warns on first run.
 nsis:
   oneClick: false
   perMachine: false
@@ -121,9 +125,17 @@ mac:
       to: ngspice/darwin-arm64
       filter:
         - "**/*"
-  # Signing/notarization is a documented release-blocker TODO (Spec §15);
-  # unsigned dmg is the v1 distribution form.
-  identity: null
+  # Signing and notarization are driven by the release job (ci.yml), not
+  # hard-coded here (issue #40). No `identity:` key on purpose:
+  #  - with CSC_LINK / CSC_KEY_PASSWORD present, electron-builder imports the
+  #    Developer ID Application certificate and signs the app (hardened runtime
+  #    is on by default, with electron-builder's default entitlements);
+  #  - the release job then adds `-c.mac.notarize.teamId=$APPLE_TEAM_ID` and
+  #    exports APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD so the signed app is
+  #    notarized with notarytool (the object form is required: a bare
+  #    `notarize: true` selects the retired altool path in electron-builder 24);
+  #  - with no secrets the job sets CSC_IDENTITY_AUTO_DISCOVERY=false and the
+  #    build is unsigned, exactly as before. Nothing here breaks that path.
 
 dmg:
   artifactName: ${productName}-${version}-${arch}.${ext}
@@ -150,5 +162,6 @@ appImage:
 deb:
   artifactName: ${productName}-${version}-${arch}.${ext}
 
-# Unsigned builds for v1; publish is wired to GitHub releases on tags (CI).
+# Publishing is wired to GitHub releases on tags (CI); signing is conditional on
+# release secrets, see the mac and win blocks above and the release job.
 publish: null

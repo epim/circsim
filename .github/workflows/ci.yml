@@ -354,8 +354,17 @@ jobs:
   # Builds the installer matrix and attaches the artifacts to the GitHub release
   # for the pushed tag. Each runner fetches/builds ONLY its own ngspice, then
   # electron-builder bundles that platform's binaries (per electron-builder.yml's
-  # per-platform extraResources). Builds are UNSIGNED for v1 (signing is the one
-  # documented deferral — see docs/licensing.md).
+  # per-platform extraResources).
+  #
+  # Signing (issue #40): the pipeline signs and notarizes when repository
+  # secrets exist and builds unsigned, with a notice, when they do not. No
+  # certificates exist yet, so today every release is unsigned. Secrets:
+  #   macOS:   CSC_LINK, CSC_KEY_PASSWORD (Developer ID Application .p12),
+  #            APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID (notarization)
+  #   Windows: WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD (Authenticode .pfx)
+  # A partial set is treated as unsigned (with a warning), never as a
+  # half-configured signing attempt. The `checksums` job after the matrix
+  # attaches one SHA256SUMS covering every installer to the draft release.
   #
   # Matrix:
   #   windows-latest   → NSIS .exe (x64)
@@ -464,13 +473,90 @@ jobs:
       - name: Build app bundles
         run: npm run build
 
-      - name: Package installers (electron-builder)
-        # GH_TOKEN lets electron-builder publish artifacts to the release when
-        # invoked with --publish; we publish explicitly below via softprops to
-        # keep the matrix outputs in one release. Here we only build (--publish never).
+      # Decide whether this leg can sign. Secrets are read into step env only
+      # to test that they are non-empty; nothing is echoed. Linux never signs.
+      - name: Detect signing secrets
+        id: signing
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          sign=false
+          case "$RUNNER_OS" in
+            macOS)
+              if [ -n "$CSC_LINK" ] && [ -n "$CSC_KEY_PASSWORD" ] && [ -n "$APPLE_ID" ] && [ -n "$APPLE_APP_SPECIFIC_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+                sign=true
+              elif [ -n "$CSC_LINK$CSC_KEY_PASSWORD$APPLE_ID$APPLE_APP_SPECIFIC_PASSWORD$APPLE_TEAM_ID" ]; then
+                echo "::warning::partial macOS signing secrets (need CSC_LINK, CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID); building UNSIGNED"
+              fi
+              ;;
+            Windows)
+              if [ -n "$WIN_CSC_LINK" ] && [ -n "$WIN_CSC_KEY_PASSWORD" ]; then
+                sign=true
+              elif [ -n "$WIN_CSC_LINK$WIN_CSC_KEY_PASSWORD" ]; then
+                echo "::warning::partial Windows signing secrets (need WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD); building UNSIGNED"
+              fi
+              ;;
+          esac
+          if [ "$sign" = true ]; then
+            echo "::notice::signing secrets present for $RUNNER_OS; build will be signed"
+          else
+            echo "::notice::no complete signing secrets for $RUNNER_OS; build will be UNSIGNED"
+          fi
+          echo "sign=${sign}" >> "$GITHUB_OUTPUT"
+
+      # GH_TOKEN lets electron-builder publish artifacts to the release when
+      # invoked with --publish; we publish explicitly below via softprops to
+      # keep the matrix outputs in one release. Here we only build (--publish never).
+      - name: Package installers (signed)
+        if: steps.signing.outputs.sign == 'true'
+        shell: bash
+        # notarize.teamId selects notarytool; see the mac block in
+        # electron-builder.yml. Notarization only runs when the app was signed.
+        # On Windows legs the option is inert (no mac target is built).
+        run: npx electron-builder --publish never -c.mac.notarize.teamId="${APPLE_TEAM_ID:-unused}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+          WIN_CSC_LINK: ${{ runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+
+      - name: Package installers (unsigned)
+        if: steps.signing.outputs.sign != 'true'
         run: npx electron-builder --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No identity lookup: keeps a certificate that happens to sit in a
+          # runner keychain from signing a build that was meant to be unsigned.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      # Fail the leg if a signed build did not actually come out signed and
+      # notarized, rather than shipping an installer that only claims to be.
+      - name: Verify macOS signature and notarization
+        if: runner.os == 'macOS' && steps.signing.outputs.sign == 'true'
+        shell: bash
+        run: |
+          APP="$(ls -d dist/mac*/circsim.app | head -1)"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute --verbose=2 "$APP"
+
+      - name: Verify Windows signature
+        if: runner.os == 'Windows' && steps.signing.outputs.sign == 'true'
+        shell: pwsh
+        run: |
+          $bad = Get-ChildItem dist/*.exe | Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' }
+          if ($bad) { $bad | ForEach-Object { Write-Error "unsigned or invalid signature: $($_.Name)" }; exit 1 }
 
       # Guard against the cross-arch dmg regression: electron-builder.yml must
       # build HOST arch only (no mac arch list), because each runner has ngspice
@@ -526,5 +612,57 @@ jobs:
             dist/*.deb
           draft: true
           fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ===========================================================================
+  # Checksums (issue #40): one SHA256SUMS for every installer in the release.
+  #
+  # Runs after the whole release matrix (a failed leg skips it, and the release
+  # stays a draft). Collects the per-leg artifacts uploaded above, hashes them
+  # with scripts/sha256sums.mjs, self-checks with sha256sum -c, and attaches
+  # SHA256SUMS to the same draft release.
+  # ===========================================================================
+  checksums:
+    name: Release checksums
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # attach SHA256SUMS to the GitHub release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download installers from every release leg
+        uses: actions/download-artifact@v4
+        with:
+          pattern: circsim-*
+          path: installers
+          merge-multiple: true
+
+      - name: Build and verify SHA256SUMS
+        shell: bash
+        run: |
+          # 1 exe + 2 dmg + 1 AppImage + 1 deb; update if the matrix changes.
+          EXPECTED=5
+          COUNT="$(find installers -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \) | wc -l | tr -d ' ')"
+          if [ "$COUNT" != "$EXPECTED" ]; then
+            echo "::error::expected $EXPECTED installers, found $COUNT"
+            find installers -type f
+            exit 1
+          fi
+          node scripts/sha256sums.mjs installers --out SHA256SUMS
+          cat SHA256SUMS
+          (cd installers && sha256sum -c ../SHA256SUMS)
+
+      - name: Attach SHA256SUMS to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SHA256SUMS
+          draft: true
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
