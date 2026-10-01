@@ -32,7 +32,7 @@ The checks split into two groups by what they need.
 **Static checks** run the moment you open a board (no power, no simulation):
 
 - **Floating / dangling connectivity**: pads on no net, likely-unconnected exposed pads, nets that reach only one pad.
-- **Copper clearance**: different-net tracks too close together or too near the board edge.
+- **Copper clearance**: different-net tracks whose copper (track width included) is too close together or too near the board edge. Pads, vias and zones are not assessed.
 - **Decoupling proximity**: IC power pins whose nearest bypass capacitor is missing or too far away.
 - **Loop area**: a coarse estimate of how much area high-speed signal nets enclose against their ground return.
 

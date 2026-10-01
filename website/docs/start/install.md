@@ -78,6 +78,14 @@ chmod +x circsim-*-x86_64.AppImage
 ./circsim-*-x86_64.AppImage
 ```
 On some distros you may need FUSE (`sudo apt install libfuse2`).
+
+The Debian package (`.deb`) and the AppImage bundle everything circsim needs beyond the standard C and C++ runtime.
+
+**Already on v0.2.x?** Those Linux builds link the FFTW library without shipping it. If the app opens but never powers on (the log shows `SimHost start failed` and a missing `libfftw3.so.3`), install it once and relaunch:
+```sh
+sudo apt install libfftw3-double3
+```
+Newer builds no longer need it.
 :::
 
 ## What you'll need to feed it

@@ -159,6 +159,13 @@ linux:
 appImage:
   artifactName: ${productName}-${version}-${arch}.${ext}
 
+# No `depends:` here on purpose: electron-builder's default Depends (GTK, NSS,
+# etc.) is what Electron needs, and setting the key would replace it. The
+# bundled libngspice.so links only glibc and the C++ runtime, enforced by the
+# dependency gate in scripts/build-ngspice.sh (issue #15: it once needed
+# libfftw3.so.3, which neither the deb nor the AppImage provided). If a
+# third-party library is ever intended, bundle it under extraResources or list
+# it here together with the defaults.
 deb:
   artifactName: ${productName}-${version}-${arch}.${ext}
 
