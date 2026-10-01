@@ -7,6 +7,12 @@ Every other hobbyist simulator wants a schematic. circsim starts from the finish
 📖 **Documentation: [epim.github.io/circsim](https://epim.github.io/circsim/)** — install guide, the First Light tutorial, task how-tos, and full reference.
 ⬇️ **Download: [latest release](https://github.com/epim/circsim/releases/latest)** (Windows `.exe`, macOS `.dmg` ×2, Linux `.AppImage` / `.deb`).
 
+![circsim with the First Light board energized: the LED glowing red on the 3D board, a supply lead clipped to the copper, the bench shelf with a 5 V PSU panel, and the read-only Board Critic on the right.](website/docs/public/img/hero-first-light.png)
+
+![A short recording of circsim opening the bundled 555 sample, energizing it, and listing Board Critic findings.](website/docs/public/img/demo-open-energize-critic.gif)
+
+More screenshots, and what circsim reads out of sixteen KiCad-written boards from KiCad 6 through 10, are in the [gallery](https://epim.github.io/circsim/gallery).
+
 ## What it does
 
 - **Reads a routed board, not a schematic.** Full net connectivity comes straight out of the `.kicad_pcb` (KiCad 6–9). An optional `.kicad_sch` adds `Sim.*` fields and pin names; an optional BOM CSV pins down exact parts.
