@@ -1,6 +1,6 @@
 # Drive a microcontroller's pins
 
-circsim can't run your firmware: a microcontroller (ESP32, STM32, RP2040, ATmega, …) has no SPICE model, and the code that would run on it isn't executed. But that doesn't make an MCU board un-checkable. circsim turns the chip into a panel of **interactive pins** you drive by hand, so you can answer the questions that actually matter for the *hardware*:
+circsim can't run your firmware: a microcontroller (ESP32, STM32, RP2040, ATmega, …) has no SPICE model, and the code that would run on it isn't executed. circsim recognizes the common ones by name and stubs them as an amber [supply load](../concepts/models#supply-load-stubs) (the chip draws its datasheet supply current and does nothing else). That doesn't make an MCU board un-checkable: you can turn the chip into a panel of **interactive pins** you drive by hand, so you can answer the questions that actually matter for the *hardware*:
 
 > "If I drive GPIO5 high, does the LED (or the relay, or the MOSFET gate) on that net actually turn on?"
 > "Will the pull-up on this I²C line hold the bus high?"
@@ -10,7 +10,7 @@ This is the MCU equivalent of the [First Light](../start/first-light) walkthroug
 
 ## The idea
 
-When a part has no model, circsim doesn't fake one. For a microcontroller you tell it to treat the chip as **interactive pins**: the chip contributes no circuitry of its own, and instead each of its pins becomes a control with four modes:
+When a part has no model, circsim doesn't fake one. For a microcontroller you tell it to treat the chip as **interactive pins** (the supply-load stub it starts with draws a supply current but leaves every pin unconnected, so there is nothing to drive): the chip contributes no circuitry of its own, not even its supply current, and instead each of its pins becomes a control with four modes:
 
 - **Hi-Z**: high-impedance, i.e. floating / disconnected. This is the **default for every pin**: the chip starts out doing nothing, exactly like an unpowered MCU.
 - **0**: drive the pin low (0 V).
@@ -25,7 +25,7 @@ You'll need one of your own boards with a microcontroller on it (the bundled dem
 
 ### 1. Open the board and find the MCU
 
-[Open your `.kicad_pcb`](./open-board). The microcontroller will show in the **Parts** panel, usually as a red **"no model"** part, since no SPICE model matches it. Click it to reveal its card in the **[Model Doctor](./model-doctor)**.
+[Open your `.kicad_pcb`](./open-board). The microcontroller will show in the **Parts** panel as an amber **"stubbed"** part if circsim recognizes it by name (a supply-load stub, with a note saying so), or as a red **"no model"** part if it does not. Click it to reveal its card in the **[Model Doctor](./model-doctor)**.
 
 ### 2. Switch it to Interactive pins
 

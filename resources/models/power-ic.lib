@@ -82,3 +82,41 @@ rset vin set 10Meg
 * quiescent trickle so the part draws a bench-visible ~uA from vin
 rq vin gnd 1Meg
 .ends AL8860
+
+* ---------------------------------------------------------------------------
+* TP4056 (Nanjing Top Power) 1 A linear Li-ion charger, SOP-8 (pins 1 TEMP,
+* 2 PROG, 3 GND, 4 VCC, 5 BAT, 6 STDBY, 7 CHRG, 8 CE) as a CC/CV charge stub.
+* Nodes: vcc bat prog gnd ce chrg stdby temp
+* Datasheet basis: programmed charge current Ibat = (Vprog / Rprog) x 1200 with
+* Vprog = 1.0 V in constant-current mode (Rprog = 1.2 k gives 1 A); constant
+* voltage at 4.2 V (4.137 to 4.263 V); trickle charge at one tenth of the
+* programmed current below 2.9 V; the charge-complete (STDBY) state is entered
+* when the current tapers to one tenth of the programmed value; CHRG and STDBY
+* are open-drain pulldowns; automatic shutdown when VCC falls below the UVLO
+* (3.7 V typ) or within 30 mV of BAT; supply current about 150 uA while charging.
+* How it works: a source holds PROG at 1.0 V (a 0 V ammeter senses the current
+* Rprog draws), a controlled current source moves 1200 x Iprog from VCC to BAT,
+* tapered smoothly to zero as v(bat) approaches 4.2 V (5 mV wide) and cut to 10
+* percent below 2.9 V. CE has a 1 Meg pull-up, so a floating CE is enabled (the
+* usual modules tie it to VCC).
+* SIMPLIFICATIONS: TEMP is ignored (high impedance; modules tie it to GND), no
+* thermal foldback, no 2 hour timer, no recharge threshold hysteresis, STDBY and
+* CHRG follow the smoothed current ratio rather than a latched state machine.
+.subckt TP4056 vcc bat prog gnd ce chrg stdby temp
+* operating gate: VCC above UVLO and above BAT by 30 mV, and CE high
+bon on gnd v = 0.5*(1 + tanh((v(vcc,gnd) - 3.7)/0.05)) * 0.5*(1 + tanh((v(vcc,bat) - 0.03)/0.01)) * 0.5*(1 + tanh((v(ce,gnd) - 1.0)/0.1))
+* PROG pin held at 1.0 V while operating; vsns senses the current Rprog draws
+bprog pint gnd v = v(on,gnd)
+vsns prog pint 0
+* programmed current: 1200 x Iprog (Iprog = -i(vsns): it flows from pint to prog)
+bicc icc gnd v = max(0, -1200*i(vsns))
+* delivered current: CC tapering to CV at 4.2 V, one tenth below 2.9 V
+bchg vcc bat i = v(icc,gnd) * 0.5*(1 - tanh((v(bat,gnd) - 4.2)/0.005)) * (0.1 + 0.9*0.5*(1 + tanh((v(bat,gnd) - 2.9)/0.05)))
+biq vcc gnd i = 150u*v(on,gnd)
+rce vcc ce 1Meg
+* charge state: charging while the delivered current is above one tenth of the programmed current
+bchs chs gnd v = v(on,gnd) * 0.5*(1 + tanh(((v(icc,gnd) * 0.5*(1 - tanh((v(bat,gnd) - 4.2)/0.005)))/(v(icc,gnd) + 1u) - 0.1)/0.02))
+bchrg chrg gnd i = v(chrg,gnd)/50 * v(chs,gnd)
+bstby stdby gnd i = v(stdby,gnd)/50 * v(on,gnd) * (1 - v(chs,gnd)) * 0.5*(1 + tanh((v(bat,gnd) - 4.0)/0.05))
+rtemp temp gnd 1e9
+.ends TP4056
