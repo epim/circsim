@@ -76,7 +76,7 @@ test.describe('Model Doctor E2E', () => {
     await expect(doctor).toBeVisible({ timeout: 10_000 })
     const card = doctor.locator('[data-ref="U9"]')
     await expect(card).toBeVisible()
-    await expect(card).toContainText('no model')
+    await expect(card.getByTestId('doctor-status-pill')).toHaveAttribute('data-status', 'no-model')
     await expect(card).toContainText('UNKNOWN-IC-9000')
     await expect(doctor.locator('[data-ref]')).toHaveCount(1) // R1 resolved, not listed
 
@@ -85,14 +85,13 @@ test.describe('Model Doctor E2E', () => {
     await expect(page.locator('[data-testid="status-badge-ok"]')).toHaveCount(1)
 
     // Stub open: the card flips to "stubbed" and a Reset action appears.
-    await card.getByRole('button', { name: 'Stub open' }).click()
-    await expect(card).toContainText('stubbed', { timeout: 10_000 })
-    await expect(card).not.toContainText('no model')
+    await card.getByTestId('doctor-stub-open').click()
+    await expect(card.getByTestId('doctor-status-pill')).toHaveAttribute('data-status', 'stubbed', { timeout: 10_000 })
     await expect(page.locator('[data-testid="status-badge-red"]')).toHaveCount(0)
 
     // Reset: the override is cleared and the part is unresolved again.
-    await card.getByRole('button', { name: 'Reset' }).click()
-    await expect(card).toContainText('no model', { timeout: 10_000 })
+    await card.getByTestId('doctor-reset').click()
+    await expect(card.getByTestId('doctor-status-pill')).toHaveAttribute('data-status', 'no-model', { timeout: 10_000 })
     await expect(page.locator('[data-testid="status-badge-red"]')).toHaveCount(1)
   })
 })

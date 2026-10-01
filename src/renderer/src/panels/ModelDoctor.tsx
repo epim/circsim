@@ -319,8 +319,11 @@ function DoctorRow({
   // selection. All hooks above run either way, so a card keeps its local state
   // (open LLM panel, pin editor) while collapsed.
   const collapsed = collapsible && !isSelected
+  const pillKind = isOpenByDesign ? 'open-by-design' : isStubbed ? 'stubbed' : 'no-model'
   const pill = (
     <span
+      data-testid="doctor-status-pill"
+      data-status={pillKind}
       style={{
         ...pillStyle,
         background: isOpenByDesign ? '#95a5a6' : isStubbed ? '#f1c40f' : '#e74c3c',
@@ -444,6 +447,7 @@ function DoctorRow({
           <button
             style={btnGhostStyle}
             title="Undo your changes to this part and go back to the automatic result"
+            data-testid="doctor-reset"
             onClick={() => store.getState().clearPartOverride(res.ref)}
           >
             Reset
