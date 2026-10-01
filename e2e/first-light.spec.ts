@@ -182,6 +182,11 @@ test.describe('First Light E2E', () => {
     //    fully dark, which is well past the margin the waitForFunction below
     //    already requires.
     const knob = page.locator('[data-testid="supply-volts-knob"]')
+    // Adding the probe scrolls the shelf row to its far end so the new jack is
+    // reachable; in a narrow window (CI's ~1008 px client) that pushes the PSU
+    // knob off the left edge, and page.mouse never scrolls. Bring the knob back
+    // into view first, as a user would by scrolling the shelf.
+    await knob.scrollIntoViewIfNeeded()
     const knobBox = (await knob.boundingBox())!
     const kx = knobBox.x + knobBox.width / 2
     const ky = knobBox.y + knobBox.height / 2
