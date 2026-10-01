@@ -4,10 +4,12 @@
  * Oscilloscope panel — multi-trace, autoscale, follow/pause, cursors.
  *
  * Architecture:
- *   - One RingBuffer per voltage-probe (keyed by probe id, stored in a
- *     useRef Map so it outlives renders without triggering them).
- *   - SimHost 'samples' events flow into ring buffers via the store's simClient
- *     event listener (registered once on mount, torn down on unmount).
+ *   - One RingBuffer per voltage-probe, owned and fed by the store
+ *     (getProbeRingBuffer); the scope only reads them. The store resets them
+ *     on a fresh run and each ring starts a new epoch when bench-window
+ *     restart sends sim time back to 0.
+ *   - The latest time for follow mode is the newest stored time across the
+ *     probe rings, read each frame (no per-batch listener, no net search).
  *   - Canvas is drawn each animation frame via requestAnimationFrame, calling
  *     drawScope from render2d.ts (pure function, no state).
  *   - Probe colors match the instrument definition in the store.
@@ -28,8 +30,6 @@ import React, {
 import { useApp, useAppStoreApi } from '../store/storeContext'
 import type { AppState } from '../store/appStore'
 import type { Instrument } from '../../../core/spicegen/instruments'
-import { createRingBuffer, feedSamples, type RingBuffer } from '../scope/ringBuffer'
-import { scopeSamplesEmitter } from '../scope/sampleEmitter'
 import {
   minMaxDecimate,
   measureVpp,
@@ -44,7 +44,6 @@ import {
 
 // ─── constants ────────────────────────────────────────────────────────────────
 
-const DEFAULT_RING_CAPACITY = 1_000_000
 const DEFAULT_TIME_PER_DIV = 0.001 // 1ms/div
 const DEFAULT_H_DIVS = 10
 const DEFAULT_V_DIVS = 8
@@ -100,9 +99,8 @@ const Scope: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const storeApi = useAppStoreApi()
 
-  // Per-probe ring buffers — keyed by probe id. Mutable ref, not state.
-  const ringsRef = useRef<Map<string, RingBuffer>>(new Map())
-  // Latest sim-time seen (for follow mode). Mutable ref.
+  // Latest stored time across the probe rings (for follow mode). Updated each
+  // frame. Mutable ref.
   const latestTimeRef = useRef<number>(0)
   // Animation frame handle
   const rafRef = useRef<number>(0)
@@ -119,104 +117,6 @@ const Scope: React.FC = () => {
   const scopeStateRef = useRef(scopeState)
   useEffect(() => { scopeStateRef.current = scopeState }, [scopeState])
 
-  // ── Ring buffer management ─────────────────────────────────────────────────
-  // Keep ring buffers in sync with probe list from store.
-  useEffect(() => {
-    const unsubscribe = storeApi.subscribe((state, _prev) => {
-      const probes = probesFromState(state)
-      const rings = ringsRef.current
-      // Add new probes
-      for (const p of probes) {
-        if (!rings.has(p.id)) {
-          rings.set(p.id, createRingBuffer(DEFAULT_RING_CAPACITY))
-        }
-      }
-      // Remove removed probes
-      const activeIds = new Set(probes.map(p => p.id))
-      for (const id of rings.keys()) {
-        if (!activeIds.has(id)) rings.delete(id)
-      }
-    })
-    return unsubscribe
-  }, [storeApi])
-
-  // ── SimEvent listener — feed samples into ring buffers ─────────────────────
-  useEffect(() => {
-    // We need to access the store's simClient. The simClient is not stored in
-    // state, but the store registers its own onEvent. We tap into the store's
-    // ingestEvent dispatch by subscribing to the raw simClient via the store API.
-    //
-    // The store exposes events through `ingestEvent`. We add a parallel listener
-    // by subscribing directly to the simClient via the store's internal reference.
-    // Since simClient is injected at store creation, we use a store subscription
-    // that fires on state changes to detect new 'samples' — but that's too slow.
-    //
-    // Better: the store already calls ingestEvent on every SimEvent. We need
-    // the raw SimEvent, so we subscribe to the simClient stored in the closure
-    // of createAppStore. We expose this via a dedicated store action below.
-    //
-    // For Task 23 we use the store's __simClient field (we will add it).
-    // Since this is a UI concern, we subscribe to the store's simClient through
-    // the __onSimEvent hook we define below.
-    //
-    // Practical approach: the store provides `ingestEvent`. We call it BUT we
-    // also need the raw samples here. The cleanest solution is to store the
-    // simClient on the store state as a non-reactive ref. We achieve this by
-    // augmenting the state with a `_simClientRef` that the store populates.
-    //
-    // To avoid Task 21 regressions, we use a simpler approach: subscribe to the
-    // store and watch for `simState` changes, but that misses samples. Instead,
-    // we add a lightweight side-channel: the store's `ingestEvent` is a public
-    // method; we monkey-patch a listener there. But that's fragile.
-    //
-    // Cleanest: task instructions say "scope panel subscribes to store.instruments
-    // for probe list, and ring buffers are fed from 'samples' events". The
-    // simClient must be accessible. We'll add a getSampleFeed() method to the
-    // store that returns an unsubscribe function. Since we can't modify the store
-    // without risking regressions, we'll use an alternate approach: we listen
-    // to the store's log of samples via a custom event on the store.
-    //
-    // SIMPLEST workable solution that doesn't touch Task 21/22 code:
-    // Expose a global event emitter for scope samples from App.tsx. The scope
-    // registers itself here. This is done via a module-level EventTarget:
-
-    const handler = (e: Event): void => {
-      const { vectorNames, columns, simTime } = (e as CustomEvent<{
-        vectorNames: string[]
-        columns: Float64Array[]
-        simTime: Float64Array
-      }>).detail
-
-      // Update latest time
-      if (simTime.length > 0) {
-        const last = simTime[simTime.length - 1]
-        if (last > latestTimeRef.current) latestTimeRef.current = last
-      }
-
-      // Route each column to the matching probe's ring buffer
-      const state = storeApi.getState()
-      const probes = probesFromState(state)
-      const rings = ringsRef.current
-
-      for (let ci = 0; ci < vectorNames.length; ci++) {
-        const vecName = vectorNames[ci]
-        // Match vector name to probe: probes use netId → look up spiceNode
-        const circuit = state.circuit
-        if (!circuit) continue
-        const net = circuit.nets.find(n => n.spiceNode === vecName || n.spiceNode === vecName.toLowerCase())
-        if (!net) continue
-        const probe = probes.find(p => p.netId === net.id)
-        if (!probe) continue
-        const ring = rings.get(probe.id)
-        if (!ring) continue
-        feedSamples(ring, simTime, columns[ci])
-      }
-    }
-
-    scopeSamplesEmitter.addEventListener('samples', handler)
-    return () => scopeSamplesEmitter.removeEventListener('samples', handler)
-  }, [storeApi])
-
   // ── Canvas rendering loop ──────────────────────────────────────────────────
   const drawFrame = useCallback(() => {
     const canvas = canvasRef.current
@@ -228,14 +128,23 @@ const Scope: React.FC = () => {
     const { mode, timePerDiv, scrollOffset, cursors } = scopeStateRef.current
     const state = storeApi.getState()
     const probes = probesFromState(state)
-    const rings = ringsRef.current
     const width = canvas.width
     const height = canvas.height
+
+    // Latest stored time across the probe rings. Ring times stay continuous
+    // across bench-window restarts, so this only moves forward within a run and
+    // returns to ~0 when the store resets the rings for a fresh run.
+    let latest = 0
+    for (const probe of probes) {
+      const ring = state.getProbeRingBuffer(probe.id)
+      if (ring && ring.length > 0 && ring.newestTime > latest) latest = ring.newestTime
+    }
+    latestTimeRef.current = latest
 
     // Compute visible window
     const win = computeVisibleWindow({
       mode,
-      latestTime: latestTimeRef.current,
+      latestTime: latest,
       scrollOffset,
       timePerDiv,
       divCount: DEFAULT_H_DIVS,
@@ -248,7 +157,7 @@ const Scope: React.FC = () => {
     }[] = []
 
     for (const probe of probes) {
-      const ring = rings.get(probe.id)
+      const ring = state.getProbeRingBuffer(probe.id)
       if (!ring || ring.length === 0) continue
 
       // Read the visible window
@@ -312,7 +221,7 @@ const Scope: React.FC = () => {
   const measurements = React.useMemo(() => {
     const result: Record<string, { vpp: number; mean: number; freq: number | null }> = {}
     for (const probe of probes) {
-      const ring = ringsRef.current.get(probe.id)
+      const ring = storeApi.getState().getProbeRingBuffer(probe.id)
       if (!ring || ring.length === 0) continue
       // Read all available data (up to last 1000 for quick measurement)
       const readLen = Math.min(ring.length, 1000)
@@ -324,7 +233,7 @@ const Scope: React.FC = () => {
       }
     }
     return result
-  }, [probes]) // re-compute when probes change; each frame measurement happens in RAF
+  }, [probes, storeApi]) // re-compute when probes change; each frame measurement happens in RAF
 
   // ── Cursor handlers ────────────────────────────────────────────────────────
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -347,7 +256,7 @@ const Scope: React.FC = () => {
     // Find a voltage at this time from the first probe
     let value = 0
     for (const probe of probes) {
-      const ring = ringsRef.current.get(probe.id)
+      const ring = storeApi.getState().getProbeRingBuffer(probe.id)
       if (!ring || ring.length === 0) continue
       const { values: _wv } = ring.readWindow(t - 1e-6, t + 1e-6)
       if (_wv.length > 0) { value = _wv[0]; break }
@@ -362,7 +271,7 @@ const Scope: React.FC = () => {
         activeCursor: prev.activeCursor === 0 ? 1 : 0,
       }
     })
-  }, [probes])
+  }, [probes, storeApi])
 
   // ── Cursor delta display ───────────────────────────────────────────────────
   const cursorDelta = React.useMemo(() => {
@@ -501,9 +410,9 @@ const Scope: React.FC = () => {
 // ─── Module-level samples event emitter ──────────────────────────────────────
 //
 // As of Task 24 the store's `ingestSamples` dispatches raw 'samples' batches on
-// this emitter; the Scope subscribes (see the effect above). The emitter now
-// lives in its own React-free module so the store can import it without pulling
-// React into the store core. Re-exported here for existing import sites.
+// this emitter. The Scope no longer subscribes (it reads the store-owned rings
+// directly, issue #59); the emitter stays for other consumers. It lives in its own React-free
+// module so the store can import it without pulling React into the store core. Re-exported here for existing import sites.
 
 export { scopeSamplesEmitter } from '../scope/sampleEmitter'
 
