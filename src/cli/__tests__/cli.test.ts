@@ -7,13 +7,13 @@
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, parse } from 'node:path'
 
 import { afterAll, describe, expect, it } from 'vitest'
 
 import { buildCriticOpFromSolve } from '../criticOp'
 import { loadModelLibrary, resolveModelsDir } from '../modelLibrary'
-import { runCli, type CliIo } from '../main'
+import { isInside, runCli, type CliIo } from '../main'
 import type { SolveResult } from '../../core/solve'
 
 const FIXTURES = join(process.cwd(), 'fixtures')
@@ -94,6 +94,22 @@ describe('circsim CLI without ngspice', () => {
   it('audit reports a missing ngspice as exit 3 with the static report, not a clean pass', async () => {
     const c = capture()
     const code = await runCli(['audit', BOARD, '--json', '--ngspice-dir', join(tmp, 'no-ngspice')], c.io)
+    const report = JSON.parse(c.out())
+    expect(report.solve.ran).toBe(false)
+    expect(report.solve.reason).toMatch(/ngspice library not found/)
+    expect(code).toBe(report.critic.summary.error > 0 ? 1 : 3)
+  })
+
+  it('an override on another drive than the repo is reported missing, not silently replaced by the repo ngspice', async () => {
+    // path.relative returns an absolute path across Windows drives; the repo
+    // fallback must still count as outside the override (the CI runner keeps
+    // its temp dir on C: and the checkout on D:).
+    const here = parse(process.cwd()).root
+    const otherRoot = process.platform === 'win32' ? (here.toUpperCase().startsWith('Z') ? 'Y:\\' : 'Z:\\') : '/'
+    const base = join(otherRoot, 'circsim-no-ngspice-here')
+    if (process.platform === 'win32') expect(isInside(base, join(here, 'resources', 'ngspice'))).toBe(false)
+    const c = capture()
+    const code = await runCli(['audit', BOARD, '--json', '--ngspice-dir', base], c.io)
     const report = JSON.parse(c.out())
     expect(report.solve.ran).toBe(false)
     expect(report.solve.reason).toMatch(/ngspice library not found/)

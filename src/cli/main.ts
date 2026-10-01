@@ -12,7 +12,7 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 
 import { runCritic } from '../core/critic/run'
 import type { CriticReport } from '../core/critic/types'
@@ -180,6 +180,16 @@ interface SolveOutcome {
   ngspiceErrors: string[]
 }
 
+/**
+ * True when `target` lies under `base`. path.relative returns an absolute path
+ * (not a "..") when the two sit on different Windows drives, so that case is
+ * outside as well.
+ */
+export function isInside(base: string, target: string): boolean {
+  const rel = relative(resolve(base), target)
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
 /** Start the in-process engine, run the two-pass plan, and always release ngspice. */
 async function solveSession(opts: CliOptions, session: Session, io: CliIo): Promise<SolveOutcome> {
   const ngspiceErrors: string[] = []
@@ -188,7 +198,7 @@ async function solveSession(opts: CliOptions, session: Session, io: CliIo): Prom
   // missing; an explicit directory that does not hold ngspice is an error, not
   // a silent switch to a different ngspice.
   const found = ngspiceResourcesAvailable(baseDir)
-  const insideOverride = baseDir === undefined || !relative(resolve(baseDir), resolveNgspicePaths(baseDir).libPath).startsWith('..')
+  const insideOverride = baseDir === undefined || isInside(baseDir, resolveNgspicePaths(baseDir).libPath)
   if (!found || !insideOverride) {
     const where = baseDir ? `under ${baseDir}` : 'in the default resources/ngspice location'
     return {
