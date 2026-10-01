@@ -12,6 +12,7 @@ import type { Resolution } from '../models/types'
 import type { Circuit } from '../netlist/extract'
 import type { Instrument } from '../spicegen/instruments'
 import type { OpSolveMethod } from '../../simhost/protocol'
+import type { LatchedOpAmp } from './bistable'
 
 // ─── engine ───────────────────────────────────────────────────────────────────
 
@@ -139,4 +140,11 @@ export interface SolveResult {
   measuredRails: Map<number, number>
   /** Chips whose VDD rail measured near 0 V; the family default was kept. */
   gatedOff: GatedOffRail[]
+  /**
+   * Op-amps the committed op's pass first found balanced on an unstable point
+   * (a Schmitt trigger inside its hysteresis band), each with the state it was
+   * re-solved to: its power-up state, or null when no re-solve could move it
+   * (bistable.ts). Empty for most boards.
+   */
+  latched: LatchedOpAmp[]
 }
