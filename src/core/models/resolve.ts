@@ -6,14 +6,14 @@
  * Tier cascade (first hit wins):
  *   1 — Schematic Sim.* fields (R/C/L/V/I primitives + SUBCKT)
  *   2 — Built-in primitive inference (R/C/L from refdes prefix + parseValue)
- *   3 — Bundled library match [seam — library param, not yet implemented]
- *   4 — User .lib import [not yet implemented]
- *   5 — LLM-assist paste [not yet implemented]
- *   6 — Stub (open/short/interactive-pins) — fallback for everything else
- *
- * Task 12 implements tiers 1, 2, and 6.
- * Tiers 3 and 4 are clean seams: the library and userLib parameters exist
- * but are currently unused (returns unresolved for now).
+ *   3 - Library match: the bundled library, and the user's own models, which
+ *       the store injects ahead of the bundled entries as tier-3 entries
+ *       (tier 4 .lib import and tier 5 LLM paste both bind a model that way,
+ *       by MPN, so there is no separate resolver for them)
+ *   6 - Stub: automatic supply-load or interactive-pins stubs for controllers
+ *       and similar parts (stubRules.ts), the connector open stub, and the
+ *       user's Model Doctor stub overrides (open/short/interactive-pins)
+ *   Parts that reach the end unclaimed are `unresolved` (tier 6, no model).
  *
  * No imports from electron, react, or three. Model validation is injected
  * as a callback (validateModel) — the actual ngspice call is wired by the
@@ -27,6 +27,7 @@ import type { SchematicSimData } from '../kicad/schematic'
 import type { LibraryEntry, PinMap, ResolvedModel, Resolution } from './types'
 import { parseValue } from '../values/parseValue'
 import {
+  buildLibraryIndex,
   matchLibraryEntry,
   selectPinMap,
   pinMapFromSchematicPins,
@@ -34,7 +35,35 @@ import {
   POLARITY_UNVERIFIED_PREFIX,
   type SchematicPin,
 } from './libraryMatch'
-import type { PartDescriptor } from './libraryMatch'
+import type { LibraryIndex, PartDescriptor } from './libraryMatch'
+import { classifyStubPart, netsById, resolveStubPart, type NetsById } from './stubRules'
+
+/**
+ * A library with its lookup structures, built once per resolveAll (issue #76):
+ * the match index for tier 3, and the entries by id for the stub rules, which
+ * name their stub entry by id. Both would otherwise be a library scan per part.
+ */
+interface IndexedLibrary {
+  entries: LibraryEntry[]
+  index: LibraryIndex
+  /** First entry per id (the order a linear find returned). */
+  byId: ReadonlyMap<string, LibraryEntry>
+}
+
+/** Per-resolveAll lookups shared by every part, so no part scans the nets or the library. */
+interface ResolveLookups {
+  /** netId to spiceNode. */
+  netNodes: ReadonlyMap<number, string>
+  /** netId to net, for the stub rules' rail names and ground nets. */
+  nets: NetsById
+  library: IndexedLibrary | undefined
+}
+
+function buildIndexedLibrary(library: LibraryEntry[]): IndexedLibrary {
+  const byId = new Map<string, LibraryEntry>()
+  for (const e of library) if (!byId.has(e.id)) byId.set(e.id, e)
+  return { entries: library, index: buildLibraryIndex(library), byId }
+}
 
 // ─── BOM type seam ───────────────────────────────────────────────────────────
 
@@ -237,14 +266,22 @@ function parseSimPins(pinsStr: string): PinMap {
 // ─── Node name resolution ─────────────────────────────────────────────────────
 
 /**
- * Build a padNumber → spiceNode map for a part by joining padNet + circuit nets.
+ * netId → spiceNode for every net of a circuit. resolveAll builds it once and
+ * hands it down: rebuilding it per part made resolveAll parts x nets (issue #76).
  */
-function buildPadNodeMap(part: Part, circuit: Circuit): Map<string, string> {
+function buildNetNodeMap(circuit: Circuit): Map<number, string> {
   const netIdToSpiceNode = new Map<number, string>()
   for (const net of circuit.nets) {
     netIdToSpiceNode.set(net.id, net.spiceNode)
   }
+  return netIdToSpiceNode
+}
 
+/**
+ * Build a padNumber → spiceNode map for a part by joining padNet + the
+ * circuit's netId → spiceNode map.
+ */
+function buildPadNodeMap(part: Part, netIdToSpiceNode: ReadonlyMap<number, string>): Map<string, string> {
   const result = new Map<string, string>()
   for (const [padNum, netId] of part.padNet) {
     const node = netIdToSpiceNode.get(netId)
@@ -259,8 +296,8 @@ function buildPadNodeMap(part: Part, circuit: Circuit): Map<string, string> {
  * Build a SPICE node list from padNet in ascending pad-number order.
  * For a 2-pad R/C/L: pads "1" and "2" → ["vin", "out"].
  */
-function buildNodeList(part: Part, circuit: Circuit): string[] {
-  const padNodeMap = buildPadNodeMap(part, circuit)
+function buildNodeList(part: Part, netNodes: ReadonlyMap<number, string>): string[] {
+  const padNodeMap = buildPadNodeMap(part, netNodes)
   // Sort pad numbers numerically where possible, then alphabetically
   const padNums = Array.from(padNodeMap.keys()).sort((a, b) => {
     const na = parseInt(a, 10)
@@ -280,11 +317,11 @@ const NEGATIVE_TERMINALS = new Set(['-', 'n', 'neg', 'k', 'm'])
  * that do not describe exactly this part's two pads with one positive and one
  * negative terminal are ignored (pad order), never trusted.
  */
-function buildTwoTerminalNodes(part: Part, circuit: Circuit, simPins: string | undefined): string[] {
-  const padOrder = buildNodeList(part, circuit)
+function buildTwoTerminalNodes(part: Part, netNodes: ReadonlyMap<number, string>, simPins: string | undefined): string[] {
+  const padOrder = buildNodeList(part, netNodes)
   if (!simPins) return padOrder
   const pins = parseSimPins(simPins)
-  const padNodeMap = buildPadNodeMap(part, circuit)
+  const padNodeMap = buildPadNodeMap(part, netNodes)
   const pads = [...padNodeMap.keys()]
   if (pads.length !== 2 || !pads.every(p => p in pins)) return padOrder
   const ranks = pads.map(p => {
@@ -322,7 +359,7 @@ function elementName(deviceLetter: string, ref: string): string {
  */
 function tryTier1(
   part: Part,
-  circuit: Circuit,
+  netNodes: ReadonlyMap<number, string>,
   simInfo: { sim: Partial<Record<'Device' | 'Type' | 'Params' | 'Pins' | 'Library' | 'Name', string>> } | undefined,
   notes: string[],
 ): Resolution | null {
@@ -407,7 +444,7 @@ function tryTier1(
         return null
       }
       valueStr = formatSpiceValue(parsed)
-      nodes = buildTwoTerminalNodes(part, circuit, sim.Pins)
+      nodes = buildTwoTerminalNodes(part, netNodes, sim.Pins)
     } else if (device === 'V' || device === 'I') {
       // A source with no dc value is "DC 0 assumed" in ngspice: a voltage
       // source becomes a hard short. Never emit one.
@@ -419,7 +456,7 @@ function tryTier1(
         return null
       }
       valueStr = formatSpiceValue(parsed)
-      nodes = buildTwoTerminalNodes(part, circuit, sim.Pins)
+      nodes = buildTwoTerminalNodes(part, netNodes, sim.Pins)
     } else if (device === 'D' || device === 'Q' || device === 'M' || device === 'J') {
       // These cards need a .model name that a bare Sim.Device cannot supply
       // (KiCad's own Simulation_SPICE:D carries only rs/cjo). Fall through to
@@ -441,7 +478,7 @@ function tryTier1(
       } else {
         valueStr = sim.Params
       }
-      nodes = buildNodeList(part, circuit)
+      nodes = buildNodeList(part, netNodes)
     }
 
     if (valueStr === undefined || valueStr.trim() === '' || valueStr.trim() === '""') {
@@ -468,7 +505,7 @@ function tryTier1(
 /**
  * Attempt tier-2 resolution for R/C/L parts by refdes prefix + parseValue.
  */
-function tryTier2(part: Part, circuit: Circuit): Resolution | null {
+function tryTier2(part: Part, netNodes: ReadonlyMap<number, string>): Resolution | null {
   const prefix = refdesPrefix(part.ref)
 
   if (!TIER2_PRIMITIVE_PREFIXES.has(prefix)) return null
@@ -505,7 +542,7 @@ function tryTier2(part: Part, circuit: Circuit): Resolution | null {
 
   const deviceLetter = kind.toLowerCase()
   const elName = elementName(deviceLetter, part.ref)
-  const nodes = buildNodeList(part, circuit)
+  const nodes = buildNodeList(part, netNodes)
   const nodesStr = nodes.join(' ')
   const valueStr = formatSpiceValue(parsed)
 
@@ -586,11 +623,18 @@ function pinMapsEqual(a: PinMap, b: PinMap): boolean {
  *
  * Returns a Resolution or null if no match / ambiguous.
  * Ambiguous → unresolved with candidate list in warnings.
+ *
+ * `yieldFallbackToStub`: the part is a recognized controller, LED or bridge that
+ * the stub rules handle. Its refdes + footprint fallback match (tier 'fallback',
+ * matched or ambiguous) says nothing about the device, only about the package, so
+ * it must not claim the part ahead of the stub rules: an ATtiny84 on SOIC-14 is
+ * not an LM324. A named match (MPN or value) still wins.
  */
 function tryTier3(
   part: Part,
-  library: LibraryEntry[],
+  library: IndexedLibrary,
   schematicPins?: SchematicPin[],
+  yieldFallbackToStub = false,
 ): Resolution | null {
   // Build a PartDescriptor for the matcher. The MPN is explicit when it comes
   // from a BOM row (merged into properties by applyBomRow) or a board
@@ -615,9 +659,10 @@ function tryTier3(
     ref: part.ref,
   }
 
-  const matchResult = matchLibraryEntry(descriptor, library)
+  const matchResult = matchLibraryEntry(descriptor, library.entries, library.index)
 
   if (matchResult.kind === 'none') return null
+  if (yieldFallbackToStub && matchResult.tier === 'fallback') return null
 
   if (matchResult.kind === 'ambiguous') {
     return {
@@ -749,9 +794,15 @@ export function resolveAll(
     for (const [ref, row] of bom) bomByRef.set(ref.toUpperCase(), row)
   }
 
+  const lookups: ResolveLookups = {
+    netNodes: buildNetNodeMap(circuit),
+    nets: netsById(circuit),
+    library: library && library.length > 0 ? buildIndexedLibrary(library) : undefined,
+  }
+
   for (const part of circuit.parts) {
     const res = resolvePart(
-      part, circuit, schematicSimData, bomByRef?.get(part.ref.toUpperCase()), library, userOverrides,
+      part, lookups, schematicSimData, bomByRef?.get(part.ref.toUpperCase()), userOverrides,
     )
     resolutions.push(res)
   }
@@ -893,10 +944,9 @@ export function resolutionNoteLines(
 
 function resolvePart(
   part: Part,
-  circuit: Circuit,
+  lookups: ResolveLookups,
   schematicSimData: SchematicSimData | undefined,
   bomRow: BomRow | undefined,
-  library: LibraryEntry[] | undefined,
   userOverrides: Map<string, UserStubOverride> | undefined,
 ): Resolution {
   // ── User overrides always win (highest priority) ───────────────────────────
@@ -906,14 +956,14 @@ function resolvePart(
   }
 
   const applied = applyBomRow(part, bomRow)
-  let res = resolveFromTiers(applied, circuit, schematicSimData, library)
+  let res = resolveFromTiers(applied, lookups, schematicSimData)
 
   // The BOM wins, but a BOM value the resolver cannot use (a free-text Comment)
   // must not cost a part the model its board value already earned: retry with the
   // board value, keeping the BOM's MPN, and say so.
   let boardValueUsed = false
   if (res.status === 'unresolved' && applied.value !== part.value) {
-    const retry = resolveFromTiers({ ...applied, value: part.value }, circuit, schematicSimData, library)
+    const retry = resolveFromTiers({ ...applied, value: part.value }, lookups, schematicSimData)
     if (retry.status !== 'unresolved') {
       res = retry
       boardValueUsed = true
@@ -924,19 +974,19 @@ function resolvePart(
 
 function resolveFromTiers(
   part: Part,
-  circuit: Circuit,
+  lookups: ResolveLookups,
   schematicSimData: SchematicSimData | undefined,
-  library: LibraryEntry[] | undefined,
 ): Resolution {
+  const { netNodes, library } = lookups
   // ── Tier 1: Schematic Sim.* fields ────────────────────────────────────────
   // Why a part's Sim.* fields were not usable is kept so an unresolved part can say so.
   const tier1Notes: string[] = []
   const simInfo = schematicSimData?.get(part.ref)
-  const tier1 = tryTier1(part, circuit, simInfo, tier1Notes)
+  const tier1 = tryTier1(part, netNodes, simInfo, tier1Notes)
   if (tier1) return tier1
 
   // ── Tier 2: R/C/L primitive inference ─────────────────────────────────────
-  const tier2 = tryTier2(part, circuit)
+  const tier2 = tryTier2(part, netNodes)
   if (tier2) return tier2
 
   // ── Connector auto-resolution (J/P + connector-ish libId → open stub) ─────
@@ -945,8 +995,14 @@ function resolveFromTiers(
   }
 
   // ── Tier 3: Bundled library match ─────────────────────────────────────────
-  if (library && library.length > 0) {
-    const tier3 = tryTier3(part, library, schematicSimData?.get(part.ref)?.pins)
+  if (library) {
+    const stubClass = classifyStubPart(part)
+    const tier3 = tryTier3(
+      part,
+      library,
+      schematicSimData?.get(part.ref)?.pins,
+      stubClass !== null && stubClass.kind !== 'crystal',
+    )
     if (tier3) {
       return tier3.status === 'unresolved' && tier1Notes.length > 0
         ? { ...tier3, warnings: [...tier1Notes, ...tier3.warnings] }
@@ -954,13 +1010,17 @@ function resolveFromTiers(
     }
   }
 
-  // ── Tier 4: User .lib [seam] ──────────────────────────────────────────────
-  // Not yet implemented (Task 15 seam: user bindings lookup will go here).
+  // ── Tiers 4 and 5: user .lib import and LLM paste ─────────────────────────
+  // Both bind a model to an MPN, and the store feeds those bindings in as
+  // library entries ahead of the bundled ones, so they are resolved in tier 3.
 
-  // ── Tier 5: LLM-assist paste [seam] ──────────────────────────────────────
-  // Not yet implemented.
+  // ── Tier 6: automatic stubs ───────────────────────────────────────────────
+  // A controller, addressable LED or USB-serial bridge with no model becomes a
+  // supply-load stub (or interactive pins), never an unexplained red part.
+  const stub = resolveStubPart(part, lookups.nets, library?.byId, simInfo?.pins)
+  if (stub) return stub
 
-  // ── Tier 6: Stub (fallback for everything unresolvable) ───────────────────
+  // ── Nothing claimed the part ──────────────────────────────────────────────
   return {
     ref: part.ref,
     status: 'unresolved',

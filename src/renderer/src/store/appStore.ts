@@ -27,11 +27,9 @@
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { useStore } from 'zustand'
 
-import { parseBoard } from '../../../core/kicad/board'
 import { parseSchematicSimData, type SchematicSimData } from '../../../core/kicad/schematic'
 import { extract, suggestGround, suggestSupplies, type Circuit } from '../../../core/netlist/extract'
 import {
-  resolveAll,
   ngspiceLogDiagnostic,
   applyDeckDiagnostics,
   resolutionNoteLines,
@@ -72,8 +70,18 @@ import {
 } from '../../../core/live/coach'
 import { parseBom, describeBomImport, type BomParseResult } from '../../../core/bom/parseBom'
 import type { BoardModel } from '../../../core/kicad/types'
-import { runCritic } from '../../../core/critic/run'
+import { primeStaticOutputs, runCritic } from '../../../core/critic/run'
 import type { CriticReport, Finding, OpResult } from '../../../core/critic/types'
+import {
+  buildEffectiveLibrary,
+  openBoardPipeline,
+  resolveWithOverrides,
+  type OpenedBoard,
+  type OpenOutcome,
+  type OpenRequest,
+  type OpenStage,
+} from '../boardOpen/pipeline'
+import { createInlineRunner, type BoardOpenRunner } from '../boardOpen/runner'
 import { deriveSolvedCurrents, type SolvedCurrents } from '../../../core/critic/solvedCurrents'
 
 import {
@@ -81,10 +89,10 @@ import {
   buildSidecar,
   GROUND_LEAD_KEY,
   leadKey,
-  loadSidecar,
   overwriteIsSafe,
   serializeSidecar,
   type LeadPosition,
+  type LoadOutcome,
   type SidecarStatus,
   type UserModelRecord,
 } from '../../../core/persist/sidecar'
@@ -93,7 +101,13 @@ import { sha256Hex } from '../../../core/persist/hash'
 
 import type { SimClient } from '../ipc/simClient'
 import { splitPath, type ReadFileFn } from '../ipc/fileOpen'
-import { normalizeVectorKey, type OpSolveMethod, type SimCommand, type SimEvent } from '../../../simhost/protocol'
+import {
+  BENCH_TSTEP_MAX_SECONDS,
+  normalizeVectorKey,
+  type OpSolveMethod,
+  type SimCommand,
+  type SimEvent,
+} from '../../../simhost/protocol'
 import { parseConvergenceCulprit, type ConvergenceCulprit } from './convergenceCulprit'
 import { createRingBuffer, feedSamples, type RingBuffer } from '../scope/ringBuffer'
 import { scopeSamplesEmitter } from '../scope/sampleEmitter'
@@ -316,14 +330,22 @@ function dropLeadPositionsOf(map: Map<string, LeadPosition>, instId: string): Ma
 /** Default bench window in sim-seconds (Spec §7.5). NEVER unbounded. */
 export const BENCH_WINDOW_SECONDS = 30
 
-/** Hard cap on the transient time-step (Spec §7.5 / Task 24). */
-export const MAX_TSTEP_SECONDS = 10e-6
+/**
+ * Coarsest transient time-step (issue #25): what a bench with no fast source
+ * runs at. It was a 10 µs cap on every bench, which alone held the live bench
+ * under real time; ngspice refines below the step by itself wherever the
+ * circuit demands it (a PULSE edge, a switching node), and the scope decimates
+ * to pixel columns anyway, so a bench with nothing fast on it needs no finer
+ * step.
+ */
+export const MAX_TSTEP_SECONDS = BENCH_TSTEP_MAX_SECONDS
 
 /**
- * Compute the transient time-step from the fastest function-gen present:
- *   tstep = min( 1 / (200 · fmax), 10 µs )
- * When there is no function-gen, fmax is undefined and tstep falls back to the
- * 10 µs cap (Spec §7.5, Task 24).
+ * Compute the transient time-step from the signal bandwidth on the bench: the
+ * fastest function-gen sets it at 200 points per cycle,
+ *   tstep = min( 1 / (200 · fmax), 100 µs )
+ * and with no function-gen (nothing periodic to resolve) it is the 100 µs
+ * ceiling (Spec §7.5, Task 24, issue #25).
  */
 export function computeTstep(instruments: Instrument[]): number {
   let fmax = 0
@@ -434,7 +456,15 @@ export interface AppState {
     schematicFileName: string | null
     /** Absolute path of the open board; null for bundled samples and raw-text opens. */
     boardPath: string | null
-    /** sha256 of boardText, filled in shortly after open (async). */
+    /**
+     * sha256 of boardText. Null means "not hashed yet" (or no board), never
+     * "unknown for good": Web Crypto is async, so openBoardFromText returns
+     * before the hash lands. openBoard resolves only after it has landed, and
+     * awaitBoardHash waits for it after either open. Consumers that can run
+     * right after an open (setup-file write, diagnostics, report) treat null as
+     * pending: they omit the hash or say "not computed", and must not treat it
+     * as a final answer.
+     */
     boardSha256: string | null
   }
 
@@ -568,6 +598,13 @@ export interface AppState {
   /** Vector names from the latest run (`vectors` event) — drives sample routing. */
   vectorNames: string[]
 
+  /**
+   * Set while a board is opening (openBoard): which file, and which stage the
+   * pipeline is in. null when idle. 'auditing' means the board is already on
+   * screen and only the Board Critic is still running.
+   */
+  openProgress: { fileName: string; stage: OpenStage } | null
+
   // ── error / honesty state (Spec §12) ─────────────────────────────────────────
   parseError: ParseErrorInfo | null
   /** True when the board renders but simulation can't proceed (Spec §12). */
@@ -652,8 +689,28 @@ export interface AppState {
   fidelityMinimizedSig: string | null
 
   // ── actions ────────────────────────────────────────────────────────────────
-  /** Parse + extract + resolve a board from raw .kicad_pcb text. */
+  /**
+   * Parse + extract + resolve + audit a board from raw .kicad_pcb text, all on
+   * the calling thread, and return when it is done. Kept for headless callers
+   * and tests; the app opens boards with openBoard so a large one cannot freeze
+   * the window.
+   */
   openBoardFromText(boardText: string, fileName: string, opts?: OpenOpts): void
+  /**
+   * Open a board through the store's BoardOpenRunner (a Worker in the app):
+   * parse, extract, resolve and the Board Critic audit run off the UI thread
+   * with `openProgress` set, the board appears as soon as it is resolved, and
+   * the audit lands after. A newer open supersedes this one. Resolves when the
+   * run is over (audit applied, parse error shown, or superseded).
+   */
+  openBoard(boardText: string, fileName: string, opts?: OpenOpts): Promise<void>
+  /**
+   * Resolve with the sha256 of the open board once it has been computed (it is
+   * also in project.boardSha256 by then); null when no board is open or Web
+   * Crypto is unavailable. Resolves at once when the hash already landed. For
+   * callers that open synchronously and need the hash (issue #144).
+   */
+  awaitBoardHash(): Promise<string | null>
   /** Attach a sibling schematic's Sim.* data (re-resolves). */
   setSchematicFromText(schText: string, fileName: string): void
   /**
@@ -902,12 +959,19 @@ export interface CreateAppStoreOptions {
   library?: LibraryEntry[]
   /** Bundled model-library texts (filename → contents). Optional; defaults to none. */
   modelTexts?: Record<string, string>
+  /**
+   * Runs the board-open pipeline for openBoard. The app passes a Worker-backed
+   * runner (createRendererStore); the default runs inline, which is what tests
+   * and a Worker-less environment get.
+   */
+  openRunner?: BoardOpenRunner
 }
 
 export type AppStore = StoreApi<AppState>
 
 export function createAppStore(options: CreateAppStoreOptions): AppStore {
   const { simClient } = options
+  const openRunner = options.openRunner ?? createInlineRunner()
   /** The solve seam's engine over this store's SimHost client (src/core/solve). */
   const solveEngine = createSimClientEngine(simClient)
 
@@ -1030,6 +1094,27 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   }
 
   /**
+   * The vectors the scope needs as full series: one per fully-wired voltage
+   * probe, by SPICE node name. Every other net is only tinted from the display
+   * rate snapshot SimHost sends in `samples.latest` (issue #25).
+   */
+  function watchedNodes(): string[] {
+    const { circuit, instruments } = store.getState()
+    if (!circuit) return []
+    const nodes = new Set<string>()
+    for (const inst of instruments) {
+      if (inst.kind !== 'voltage-probe' || !isFullyWired(inst)) continue
+      const net = circuit.nets.find(n => n.id === inst.netId)
+      if (net) nodes.add(net.spiceNode)
+    }
+    return [...nodes]
+  }
+
+  function sendWatch(): void {
+    simClient.send({ type: 'watch', vectors: watchedNodes() })
+  }
+
+  /**
    * Snapshot the current bench as SolveInputs: the ONE place this store gathers
    * deck inputs (powerOn, run and replayAfterCrash all load a deck built from
    * it). null when there is no circuit or no ground to solve against.
@@ -1044,6 +1129,239 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       railOverrides: s.railOverrides,
       measuredRails: s.measuredRails,
     })
+  }
+
+  // ── board open (issue #55) ────────────────────────────────────────────────────
+  /** Bumped by every open; a run whose token no longer matches is superseded. */
+  let openToken = 0
+  /** Bumped by every runCriticAudit; lets an in-flight open audit see it was overtaken. */
+  let auditEpoch = 0
+
+  /** Start a new open: cancel whatever is running and return this open's token. */
+  function supersedeOpen(): number {
+    openRunner.cancel()
+    return ++openToken
+  }
+
+  function openRequest(boardText: string, opts: OpenOpts | undefined): OpenRequest {
+    const s = store.getState()
+    return {
+      boardText,
+      schematicText: opts?.schematicText,
+      schematicFileName: opts?.schematicFileName,
+      bomText: opts?.bomText,
+      // Restored in the pipeline (it can name the ground and the overrides the
+      // resolution must see). A setup file that could not be read never reaches it.
+      sidecarText:
+        opts?.boardPath && !opts.sidecarError && typeof opts.sidecarText === 'string'
+          ? opts.sidecarText
+          : undefined,
+      library: buildEffectiveLibrary(s.userModels.values(), s.library),
+    }
+  }
+
+  /** Drop everything that depends on the previous project. */
+  function resetForOpen(): void {
+    ringBuffers.clear()
+    store.setState({
+      openProgress: null,
+      parseError: null,
+      viewerOnly: false,
+      opVoltages: null,
+      opVoltagesStale: false,
+      voltageRange: null,
+      currentsByRef: new Map(),
+      criticCurrents: null,
+      coachNotes: [],
+      measuredRails: null,
+      railNotes: [],
+      undrivenNets: [],
+      instruments: [],
+      selectedInstrumentId: null,
+      autoAttachedSupplyId: null,
+      guidedBlock: null,
+      stubOverrides: new Map(),
+      pinMapOverrides: new Map(),
+      railOverrides: new Map(),
+      leadPositions: new Map(),
+      // Stop saving the previous board's setup before anything else changes.
+      sidecar: INITIAL_SIDECAR_STATE,
+      simState: 'idle',
+      deckDirty: false,
+      selectedRef: null,
+      selectedNetId: null,
+      revealDoctorRequest: null,
+      criticReport: null,
+      selectedFindingId: null,
+      logLines: [],
+      benchRestartToast: null,
+      convergenceCard: null,
+      opCaveat: null,
+      fidelityMinimizedSig: null,
+      vectorNames: [],
+      simTimeSeconds: 0,
+      achievedRealtimeFactor: null,
+    })
+  }
+
+  /**
+   * Commit a pipeline outcome. Returns false (after recording the parse error)
+   * when the board did not parse.
+   */
+  /** The in-flight (or finished) hash of the current board; null when there is none. */
+  let boardHashJob: Promise<string | null> | null = null
+
+  function applyOpenOutcome(
+    outcome: OpenOutcome,
+    boardText: string,
+    fileName: string,
+    opts: OpenOpts | undefined,
+  ): boolean {
+    if (!outcome.ok) {
+      const e = outcome.error
+      boardHashJob = null
+      store.setState({
+        parseError: { message: e.message, line: e.line, col: e.col, fileName },
+        // A parse failure of the board means we cannot extract a netlist either.
+        viewerOnly: false,
+        board: null,
+        circuit: null,
+        resolutions: [],
+        project: {
+          boardFileName: fileName, boardText, schematicFileName: null, boardPath: null, boardSha256: null,
+        },
+      })
+      return false
+    }
+    const o = outcome.opened
+
+    // Per-board setup file (issue #27): the pipeline restored what it could
+    // (o.restore; never throws, never blocks the open). A file that exists but
+    // could not be read arrives as opts.sidecarError and becomes an 'unreadable'
+    // restore with a note. The state is derived here and set with the board, so
+    // the sync module saves only once the open has built a consistent state.
+    const sidecarPath = opts?.boardPath ? sidecarPathFor(opts.boardPath) : null
+    const sidecarFileName = sidecarPath ? baseName(sidecarPath) : ''
+    let restore: LoadOutcome | null = null
+    if (sidecarPath) {
+      if (opts?.sidecarError) {
+        restore = {
+          status: 'unreadable',
+          plan: null,
+          restored: 0,
+          notes: [`Could not read ${sidecarFileName} (${opts.sidecarError}); the board opened without its saved setup.`],
+        }
+      } else {
+        restore = o.restore
+      }
+    }
+    const plan = restore?.plan ?? null
+    let sidecarState: SidecarState = {
+      ...INITIAL_SIDECAR_STATE,
+      path: sidecarPath,
+      diskStatus: sidecarPath ? (restore ? restore.status : 'absent') : null,
+    }
+    if (sidecarPath && restore) {
+      const autosave = autosaveAllowed(restore.status)
+      sidecarState = {
+        ...sidecarState,
+        autosave,
+        backupFirst: autosave && !overwriteIsSafe(restore.status),
+        note:
+          restore.restored > 0 || restore.notes.length > 0
+            ? { restored: restore.restored, messages: restore.notes, status: restore.status, fileName: sidecarFileName }
+            : null,
+      }
+    }
+
+    // Auto-attach a default DC supply on the top suggested supply net so the
+    // bench is immediately usable ("see it work in 60 seconds", Spec 4): the
+    // user lands with a designated ground AND a source, so Power On / Run are
+    // live without manual rigging. The supply is editable/removable. We only
+    // do this when a supply net was suggested AND it isn't the ground net.
+    // A restored bench replaces the auto supply: the sidecar's instrument list
+    // (even an empty one: the user removed the supply) is the user's own rigging.
+    const restoredBench = plan?.instruments
+    const instruments: Instrument[] = restoredBench ? [...restoredBench] : []
+    if (restoredBench) reserveBenchIds(restoredBench)
+    const topSupplyNetId = restoredBench
+      ? undefined
+      : o.suggestedSupplyNetIds.find(id => id !== o.groundNetId)
+    if (topSupplyNetId !== undefined) {
+      instruments.push({
+        kind: 'dc-supply',
+        id: AUTO_SUPPLY_ID,
+        netId: topSupplyNetId,
+        volts: 5,
+        seriesOhms: 0.1, // Spec 9 default
+      })
+    }
+
+    // Viewer-only iff the netlist is unusable for simulation (no parts / no nets).
+    const usable = o.circuit.parts.length > 0 && o.circuit.nets.length > 0
+
+    store.setState(st => ({
+      project: {
+        boardFileName: fileName,
+        boardText,
+        schematicFileName: o.schematicFileName,
+        boardPath: opts?.boardPath ?? null,
+        boardSha256: null,
+      },
+      board: o.board,
+      circuit: o.circuit,
+      schematicSimData: o.schematicSimData,
+      bom: o.bom,
+      groundNetId: o.groundNetId,
+      suggestedSupplyNetIds: o.suggestedSupplyNetIds,
+      instruments,
+      // The resolution already saw the restored overrides and user models; they
+      // are set together with the board so state and resolution agree. User
+      // models merge over any imported earlier this session.
+      resolutions: o.resolutions,
+      ...(plan
+        ? {
+            stubOverrides: new Map(plan.stubOverrides),
+            pinMapOverrides: new Map(plan.pinMapOverrides),
+            railOverrides: new Map(plan.railOverrides),
+            leadPositions: new Map(plan.leadPositions),
+            userModels: new Map([...st.userModels, ...plan.userModels]),
+          }
+        : {}),
+      viewerOnly: !usable,
+      // Reveal the auto supply's properties right away (the rack mirrors this).
+      selectedInstrumentId: topSupplyNetId !== undefined ? AUTO_SUPPLY_ID : null,
+      // Announce the silent auto-attach on the supply's card (M7 F7).
+      autoAttachedSupplyId: topSupplyNetId !== undefined ? AUTO_SUPPLY_ID : null,
+      sidecar: sidecarState,
+    }))
+
+    // Keep ring buffers in sync with the (possibly auto-attached) instruments.
+    syncRingBuffers(instruments)
+
+    // A BOM that failed to parse, or whose rows match no board ref, says so in
+    // the log instead of silently doing nothing, and so do the BOM changes and
+    // polarity guesses on parts that resolved (issues #4, #5).
+    logLoadNotes(o.bomParsed, true)
+
+    // Tie results to the exact file: hash the board text in the background.
+    // The state above carries a null hash until this lands (see AppState).
+    const job: Promise<string | null> = sha256Hex(boardText).then(hash => {
+      if (hash && boardHashJob === job && store.getState().project.boardText === boardText) {
+        store.setState(st => ({ project: { ...st.project, boardSha256: hash } }))
+      }
+      return hash
+    })
+    boardHashJob = job
+    return true
+  }
+
+  /** Store a critic report, drop a stale selection, and push findings to the overlay. */
+  function applyCriticReport(report: CriticReport): void {
+    store.setState({ criticReport: report })
+    const sel = store.getState().selectedFindingId
+    if (sel && !report.findings.some(f => f.id === sel)) store.setState({ selectedFindingId: null })
+    boardHooks?.setCriticFindings?.(report.findings)
   }
 
   /** Set (or with null, clear) one lead position; no state change when already equal. */
@@ -1096,6 +1414,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     achievedRealtimeFactor: null,
     simTimeSeconds: 0,
     vectorNames: [],
+    openProgress: null,
     parseError: null,
     viewerOnly: false,
     selectedRef: null,
@@ -1114,221 +1433,103 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     // ── open flow ────────────────────────────────────────────────────────────
     openBoardFromText(boardText, fileName, opts) {
-      // Reset everything that depends on the old project.
-      ringBuffers.clear()
-      set({
-        parseError: null,
-        viewerOnly: false,
-        opVoltages: null,
-        opVoltagesStale: false,
-        voltageRange: null,
-        currentsByRef: new Map(),
-        criticCurrents: null,
-        coachNotes: [],
-        measuredRails: null,
-        railNotes: [],
-        undrivenNets: [],
-        instruments: [],
-        selectedInstrumentId: null,
-        autoAttachedSupplyId: null,
-        guidedBlock: null,
-        stubOverrides: new Map(),
-        pinMapOverrides: new Map(),
-        railOverrides: new Map(),
-        leadPositions: new Map(),
-        // Stop saving the previous board's setup before anything else changes.
-        sidecar: INITIAL_SIDECAR_STATE,
-        simState: 'idle',
-        deckDirty: false,
-        selectedRef: null,
-        selectedNetId: null,
-        revealDoctorRequest: null,
-        criticReport: null,
-        selectedFindingId: null,
-        logLines: [],
-        benchRestartToast: null,
-        convergenceCard: null,
-        opCaveat: null,
-        fidelityMinimizedSig: null,
-        vectorNames: [],
-        simTimeSeconds: 0,
-        achievedRealtimeFactor: null,
-      })
-
-      let board: BoardModel
-      try {
-        board = parseBoard(boardText)
-      } catch (err) {
-        const e = err as { message?: string; line?: number; col?: number }
-        set({
-          parseError: { message: e.message ?? String(err), line: e.line, col: e.col, fileName },
-          // A parse failure of the board means we cannot extract a netlist either.
-          viewerOnly: false,
-          board: null,
-          circuit: null,
-          resolutions: [],
-          project: {
-            boardFileName: fileName, boardText, schematicFileName: null, boardPath: null, boardSha256: null,
-          },
-        })
-        return
-      }
-
-      // Optional schematic (sibling auto-detected by the caller / file-open flow).
-      let schematicSimData: SchematicSimData | null = null
-      let schematicFileName: string | null = null
-      if (opts?.schematicText) {
-        try {
-          schematicSimData = parseSchematicSimData(opts.schematicText)
-          schematicFileName = opts.schematicFileName ?? null
-        } catch {
-          // A bad schematic should not block the board; resolve without Sim.* data.
-          schematicSimData = null
-        }
-      }
-
-      // Optional BOM.
-      let bom: BomData | null = null
-      let bomParsed: BomParseResult | null = null
-      if (opts?.bomText) {
-        bomParsed = parseBom(opts.bomText)
-        bom = bomParsed.rows
-      }
-
-      // Extract once (no ground) to run the ground heuristic, then re-extract
-      // WITH the designated ground so circuit.nets[].spiceNode is "0" for ground
-      // (generateDeck relies on this — Spec §8.8).
-      const probe = extract(board)
-      const gnd = suggestGround(probe.nets)
-      const supplies = suggestSupplies(probe.nets)
-
-      // Per-board setup file (issue #27): restore ground, bench, overrides and
-      // user models saved beside the board. loadSidecar never throws and never
-      // blocks the open: a v0, truncated, damaged or newer file yields whatever
-      // could be restored plus notes on the rest.
-      const sidecarPath = opts?.boardPath ? sidecarPathFor(opts.boardPath) : null
-      const sidecarFileName = sidecarPath ? baseName(sidecarPath) : ''
-      let restore: ReturnType<typeof loadSidecar> | null = null
-      if (sidecarPath) {
-        if (opts?.sidecarError) {
-          restore = {
-            status: 'unreadable',
-            plan: null,
-            restored: 0,
-            notes: [`Could not read ${sidecarFileName} (${opts.sidecarError}); the board opened without its saved setup.`],
-          }
-        } else if (typeof opts?.sidecarText === 'string') {
-          restore = loadSidecar(opts.sidecarText, {
-            nets: probe.nets,
-            partRefs: new Set(probe.parts.map(p => p.ref)),
-          })
-        }
-      }
-      const plan = restore?.plan ?? null
-      let sidecarState: SidecarState = {
-        ...INITIAL_SIDECAR_STATE,
-        path: sidecarPath,
-        diskStatus: sidecarPath ? (restore ? restore.status : 'absent') : null,
-      }
-      if (sidecarPath && restore) {
-        const autosave = autosaveAllowed(restore.status)
-        sidecarState = {
-          ...sidecarState,
-          autosave,
-          backupFirst: autosave && !overwriteIsSafe(restore.status),
-          note:
-            restore.restored > 0 || restore.notes.length > 0
-              ? { restored: restore.restored, messages: restore.notes, status: restore.status, fileName: sidecarFileName }
-              : null,
-        }
-      }
-
-      const groundNetId = plan?.ground ? plan.ground.netId : (gnd?.id ?? null)
-      const circuit = groundNetId !== null ? extract(board, { groundNetId }) : probe
-      const suggestedSupplyNetIds = supplies.map(s => s.id)
-
-      // Auto-attach a default DC supply on the top suggested supply net so the
-      // bench is immediately usable ("see it work in 60 seconds" — Spec §4): the
-      // user lands with a designated ground AND a source, so Power On / Run are
-      // live without manual rigging. The supply is editable/removable. We only
-      // do this when a supply net was suggested AND it isn't the ground net.
-      // A restored bench replaces the auto supply: the sidecar's instrument list
-      // (even an empty one: the user removed the supply) is the user's own rigging.
-      const restoredBench = plan?.instruments
-      const instruments: Instrument[] = restoredBench ? [...restoredBench] : []
-      if (restoredBench) reserveBenchIds(restoredBench)
-      const topSupplyNetId = restoredBench ? undefined : suggestedSupplyNetIds.find(id => id !== groundNetId)
-      if (topSupplyNetId !== undefined) {
-        instruments.push({
-          kind: 'dc-supply',
-          id: AUTO_SUPPLY_ID,
-          netId: topSupplyNetId,
-          volts: 5,
-          seriesOhms: 0.1, // Spec §9 default
-        })
-      }
-
-      set({
-        project: {
-          boardFileName: fileName,
-          boardText,
-          schematicFileName,
-          boardPath: opts?.boardPath ?? null,
-          boardSha256: null,
-        },
-        board,
-        circuit,
-        schematicSimData,
-        bom,
-        groundNetId,
-        suggestedSupplyNetIds,
-        instruments,
-        // Restored overrides, set together with the board so the resolve below
-        // sees them. User models merge over any imported earlier this session.
-        ...(plan
-          ? {
-              stubOverrides: new Map(plan.stubOverrides),
-              pinMapOverrides: new Map(plan.pinMapOverrides),
-              railOverrides: new Map(plan.railOverrides),
-              leadPositions: new Map(plan.leadPositions),
-              userModels: new Map([...get().userModels, ...plan.userModels]),
-            }
-          : {}),
-        // Reveal the auto supply's properties right away (the rack mirrors this).
-        selectedInstrumentId: topSupplyNetId !== undefined ? AUTO_SUPPLY_ID : null,
-        // Announce the silent auto-attach on the supply's card (M7 F7).
-        autoAttachedSupplyId: topSupplyNetId !== undefined ? AUTO_SUPPLY_ID : null,
-      })
-
-      // Keep ring buffers in sync with the (possibly auto-attached) instruments.
-      syncRingBuffers(instruments)
-
-      // Resolve with the current overrides (restored from the setup file, if any).
-      get().reResolve()
-
-      // A BOM that failed to parse, or whose rows match no board ref, says so in
-      // the log instead of silently doing nothing, and so do the BOM changes and
-      // polarity guesses on parts that resolved (issues #4, #5).
-      logLoadNotes(bomParsed, true)
-
-      // Viewer-only iff the netlist is unusable for simulation (no parts / no nets).
-      const usable = circuit.parts.length > 0 && circuit.nets.length > 0
-      // The setup-file state goes in last: the sync module saves only once the
-      // open has finished building a consistent state.
-      set({ viewerOnly: !usable, sidecar: sidecarState })
-
-      // Tie results to the exact file: hash the board text in the background.
-      void sha256Hex(boardText).then(hash => {
-        if (hash && get().project.boardText === boardText) {
-          set(st => ({ project: { ...st.project, boardSha256: hash } }))
-        }
-      })
-
+      supersedeOpen()
+      resetForOpen()
+      const outcome = openBoardPipeline(openRequest(boardText, opts))
+      if (!applyOpenOutcome(outcome, boardText, fileName, opts)) return
       // Auto-run the read-only critic audit (Spec §7 trigger): the no-sim checks
       // (floating / clearance / decoupling) run immediately on open; the
       // sim-dependent ones (ampacity / thermal) are reported as skipped until an
       // operating-point solve lands (which re-runs the audit with real currents).
       get().runCriticAudit()
+    },
+
+    async awaitBoardHash() {
+      return boardHashJob ?? get().project.boardSha256
+    },
+
+    async openBoard(boardText, fileName, opts) {
+      const token = supersedeOpen()
+      const live = (): boolean => token === openToken
+      resetForOpen()
+      boardHashJob = null
+      // No project while the next one is being built: leaving the old board up
+      // would let Power On and the panels act on a circuit whose bench state was
+      // just reset. The progress strip stands in for it.
+      set({
+        board: null,
+        circuit: null,
+        resolutions: [],
+        schematicSimData: null,
+        bom: null,
+        groundNetId: null,
+        suggestedSupplyNetIds: [],
+        project: {
+          boardFileName: null, boardText: null, schematicFileName: null, boardPath: null, boardSha256: null,
+        },
+        openProgress: { fileName, stage: 'parsing' },
+      })
+
+      let opened: OpenedBoard | null = null
+      let auditEpochAtOpen = 0
+      let auditApplied = false
+
+      try {
+        await openRunner.run(openRequest(boardText, opts), {
+          onStage(stage) {
+            if (live()) set({ openProgress: { fileName, stage } })
+          },
+          onOpened(outcome) {
+            if (!live()) return
+            if (!applyOpenOutcome(outcome, boardText, fileName, opts)) {
+              set({ openProgress: null })
+              return
+            }
+            opened = outcome.ok ? outcome.opened : null
+            auditEpochAtOpen = auditEpoch
+            // The board is on screen; only the audit is outstanding.
+            set({ openProgress: { fileName, stage: 'auditing' } })
+          },
+          onAudit(report, staticOutputs) {
+            if (!live() || !opened) return
+            auditApplied = true
+            // A worker's audit memoised the no-sim checks (clearance is the slow
+            // one) against ITS copy of the circuit. Prime this thread's critic
+            // cache so the re-audit after an operating point reuses them (#97).
+            if (staticOutputs) primeStaticOutputs(opened.board, opened.circuit, staticOutputs)
+            // An audit that ran while this one was in flight (an operating point
+            // landed, say) is newer than this report, and a changed circuit
+            // (new ground) makes it stale. Keep the newer state in either case.
+            const unchanged = auditEpoch === auditEpochAtOpen && get().circuit === opened.circuit
+            if (unchanged) {
+              applyCriticReport(report)
+            } else if (get().criticReport === null) {
+              get().runCriticAudit()
+            }
+            set({ openProgress: null })
+          },
+        })
+      } catch (err) {
+        if (live()) {
+          set({
+            openProgress: null,
+            parseError: {
+              message: `Opening the board failed: ${err instanceof Error ? err.message : String(err)}`,
+              fileName,
+            },
+          })
+        }
+        return
+      }
+
+      if (!live()) return
+      // The run ended without an audit (the worker died mid-audit): the board is
+      // up, so audit it here rather than leave the Critic empty.
+      if (opened && !auditApplied && get().criticReport === null) get().runCriticAudit()
+      if (get().openProgress !== null) set({ openProgress: null })
+      // The open is not over until the board is tied to its file: no consumer
+      // that waits for openBoard can observe a null hash (issue #144).
+      if (opened) await get().awaitBoardHash()
     },
 
     setSchematicFromText(schText, fileName) {
@@ -1397,51 +1598,17 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         return
       }
 
-      // Convert in-memory user models → LibraryEntry objects for tier 3/4 matching.
-      // These are injected ahead of the bundled library so user models win.
-      const userModelEntries: LibraryEntry[] = []
-      for (const um of userModels.values()) {
-        userModelEntries.push({
-          id: `user-model-${um.mpn}`,
-          match: { mpn: [um.mpn] },
-          model: {
-            type: 'subckt',
-            // Use an in-memory virtual path: the spicegen reads this via the
-            // library entry; the actual text is stored in um.subcktText and
-            // injected by the spicegen when generating the deck.
-            file: `__user_model__:${um.mpn}`,
-            name: um.subcktName,
-          },
-          pinMaps: { '.*': um.pinMap },
-          defaultPinMap: um.pinMap,
-          provenance: um.provenance,
-        })
-      }
-
-      const effectiveLibrary = [...userModelEntries, ...library]
-      const resolved = resolveAll(
+      // User models become library entries ahead of the bundled library, so a
+      // user model wins tier 3/4 matching (shared with the board-open pipeline).
+      const effectiveLibrary = buildEffectiveLibrary(userModels.values(), library)
+      const resolutions = resolveWithOverrides(
         circuit,
-        schematicSimData ?? undefined,
-        bom ?? undefined,
-        effectiveLibrary.length > 0 ? effectiveLibrary : undefined,
-        stubOverrides.size > 0 ? stubOverrides : undefined,
+        schematicSimData,
+        bom,
+        effectiveLibrary,
+        stubOverrides,
+        pinMapOverrides,
       )
-
-      // Apply the Model Doctor's manual pin-map overrides. resolveAll doesn't take
-      // them (they correct a resolved model's terminal mapping, not which model is
-      // chosen), so we override model.pinMap post-resolution for every part the
-      // user has re-mapped — otherwise a Pin-map edit is stored but never reaches
-      // the deck (only pinmaps bundled inside a saveUserModel took effect before).
-      const resolutions =
-        pinMapOverrides.size > 0
-          ? resolved.map((r) => {
-              const override = pinMapOverrides.get(r.ref)
-              if (override && r.model && 'pinMap' in r.model) {
-                return { ...r, model: { ...r.model, pinMap: override } }
-              }
-              return r
-            })
-          : resolved
       set({ resolutions })
     },
 
@@ -1519,13 +1686,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // op result is present). Without it runCritic SKIPS ampacity/thermal — which
       // is fine: opening re-audits no-sim checks, the post-op re-audit feeds reals.
       const opResult = buildCriticOpResult(circuit, opVoltages, currentsByRef, criticCurrents)
-      const report = runCritic(board, circuit, opResult)
-      set({ criticReport: report })
-      // Drop a stale selection if the finding no longer exists.
-      const sel = get().selectedFindingId
-      if (sel && !report.findings.some(f => f.id === sel)) set({ selectedFindingId: null })
-      // Push the located findings to the read-only viewport overlay.
-      boardHooks?.setCriticFindings?.(report.findings)
+      auditEpoch++
+      applyCriticReport(runCritic(board, circuit, opResult))
     },
 
     selectFinding(id) {
@@ -1722,6 +1884,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     // ── sim orchestration ──────────────────────────────────────────────────────
     setBoardHooks(hooks) {
       boardHooks = hooks
+      // The audit can land before the viewport (and so its hooks) exists; hand
+      // it the report that is already in the store.
+      const report = get().criticReport
+      if (hooks && report) hooks.setCriticFindings?.(report.findings)
     },
 
     async powerOn() {
@@ -1917,6 +2083,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       const tstopSeconds = BENCH_WINDOW_SECONDS
 
       simClient.send({ type: 'loadCircuit', deckLines })
+      sendWatch()
       simClient.send({ type: 'setPace', realtimeFactor: get().paceFactor })
       simClient.send({ type: 'runTransient', tstepSeconds, tstopSeconds })
       set({
@@ -2024,6 +2191,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         // initial conditions — acceptable per Spec §7.5; scope ring buffers keep
         // their history). Re-apply the pace so the fresh process honours it.
         resetRingBuffers(instruments)
+        sendWatch()
         simClient.send({ type: 'setPace', realtimeFactor: paceFactor })
         simClient.send({
           type: 'runTransient',
@@ -2261,7 +2429,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
             achievedRealtimeFactor: event.realtimeFactor,
             simTimeSeconds: event.simTimeSeconds,
             // A `status{running:false}` while we believe we're running means the
-            // engine self-halted (window end / pacing). Reflect it as paused, but
+            // run ended on its own (SimHost does not report its pacing halts as
+            // not running). Reflect it as paused, but
             // never override an explicit user pause/idle.
             simState: event.running
               ? 'running'
@@ -2280,6 +2449,13 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   // Wire the client's events into the store. The store owns this subscription so
   // a respawn (which calls attachPort on a PortSimClient) keeps delivering events.
   simClient.onEvent(event => store.getState().ingestEvent(event))
+
+  // A probe added, removed or re-wired while the bench runs changes which nets
+  // the scope needs as full series; tell SimHost (the watch is sticky there).
+  store.subscribe((state, prev) => {
+    if (state.instruments === prev.instruments) return
+    if (state.simState === 'running' || state.simState === 'paused') sendWatch()
+  })
 
   return store
 }
@@ -2727,6 +2903,25 @@ export function ingestSamples(
   // no sense column — the common no-LED case pays nothing and the glow path
   // (store + scene) is left completely untouched.
   let ledCurrents: Map<string, number> | null = null
+
+  // Unwatched vectors arrive as one newest value each (SimHost's display-rate
+  // snapshot): the same two jobs as the newest point of a full column, nothing
+  // to feed to a ring buffer.
+  if (event.latest) {
+    const { vectorNames, values } = event.latest
+    for (let i = 0; i < vectorNames.length; i++) {
+      const v = values[i]
+      if (!Number.isFinite(v)) continue
+      const ledRef = mapVectorNameToLedRef(vectorNames[i])
+      if (ledRef !== null) {
+        ledCurrents ??= new Map(state.currentsByRef)
+        ledCurrents.set(ledRef, Math.abs(v))
+        continue
+      }
+      const netId = nodeToNet.get(vectorNames[i]) ?? nodeToNet.get(vectorNames[i].toLowerCase())
+      if (netId !== undefined) liveVoltages.set(netId, v)
+    }
+  }
 
   for (let ci = 0; ci < event.vectorNames.length; ci++) {
     const vecName = event.vectorNames[ci]

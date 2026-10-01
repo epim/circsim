@@ -39,7 +39,7 @@ vi.mock('../checks/ampacity', async (importOriginal) => {
   }
 })
 
-import { runCritic } from '../run'
+import { exportStaticOutputs, primeStaticOutputs, runCritic } from '../run'
 
 const fixturesDir = join(__dirname, '../../../../fixtures')
 const load = () => parseBoard(readFileSync(join(fixturesDir, 'fixture-rc.kicad_pcb'), 'utf-8'))
@@ -84,5 +84,34 @@ describe('runCritic no-sim result reuse', () => {
     // Same circuit, same (changed) options: served from the cache.
     runCritic(board, circuit, undefined, { minClearanceMm: 0.5 })
     expect(calls.clearance - before).toBe(4)
+  })
+})
+
+describe('no-sim result hand-off between threads (issue #55 with #97)', () => {
+  it('outputs computed for one circuit prime another, which then skips the checks', () => {
+    const board = load()
+    const worker = extract(board)
+    const direct = runCritic(board, worker)
+    const outputs = exportStaticOutputs(worker)
+    expect(outputs).not.toBeNull()
+
+    // What the worker boundary does: structured-clone the board, circuit and outputs.
+    const clonedBoard = structuredClone(board)
+    const clonedCircuit = structuredClone(worker)
+    const before = calls.clearance
+    primeStaticOutputs(clonedBoard, clonedCircuit, structuredClone(outputs!))
+    const primed = runCritic(clonedBoard, clonedCircuit)
+    expect(calls.clearance - before).toBe(0)
+    expect(primed).toEqual(direct)
+  })
+
+  it('priming never replaces an entry the circuit already has', () => {
+    const board = load()
+    const circuit = extract(board)
+    runCritic(board, circuit)
+    const before = calls.clearance
+    primeStaticOutputs(board, circuit, [])
+    runCritic(board, circuit)
+    expect(calls.clearance - before).toBe(0)
   })
 })

@@ -58,7 +58,7 @@ Sometimes the right answer is "take this part out of the picture":
 
 ### Interactive pins {#interactive-pins}
 
-For microcontrollers and complex digital ICs (which have no SPICE model and whose firmware doesn't run), choose **Interactive pins** (⋮ menu). This turns the part into a control panel (right dock) where each pin has a **Hi-Z / 0 / 1 / Watch** mode:
+For microcontrollers and complex digital ICs (which have no SPICE model and whose firmware doesn't run), choose **Interactive pins** (⋮ menu). A microcontroller circsim recognizes by name already carries an amber [supply-load stub](../concepts/models#supply-load-stubs); choosing Interactive pins replaces that load with the pin panel, so the part then draws no supply current. This turns the part into a control panel (right dock) where each pin has a **Hi-Z / 0 / 1 / Watch** mode:
 
 - **Hi-Z**: floating (high impedance).
 - **0** / **1**: drive the pin low or high.

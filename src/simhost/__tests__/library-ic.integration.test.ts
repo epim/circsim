@@ -45,6 +45,8 @@ const t555Lib = libLines('timer555.lib')
 const mosfetLib = libLines('mosfet.lib')
 const diodesLib = libLines('diodes.lib')
 const powerIcLib = libLines('power-ic.lib')
+const stubsLib = libLines('stubs.lib')
+const optoLib = libLines('opto.lib')
 
 interface IndexEntry {
   id: string
@@ -233,11 +235,29 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
               ? mosfetLib
               : e.model.file === 'power-ic.lib'
                 ? powerIcLib
-                : t555Lib
+                : e.model.file === 'stubs.lib'
+                  ? stubsLib
+                  : e.model.file === 'opto.lib'
+                    ? optoLib
+                    : t555Lib
       // A minimal bias deck per class. All subckts get rails + a probe load.
       let deck: string[]
       const name = e.model.name
-      if (e.model.file === 'opamp.lib' && name !== 'LM393' && name !== 'LM339_QUAD') {
+      if (name === 'MCP6002' || name === 'NE5532') {
+        // Dual op-amps (terminals inap inan outa inbp inbn outb vcc vee): both channels as followers.
+        deck = ['* dual op', 'vcc vcc 0 dc 12', 'vin in 0 dc 6', `x1 in out out in out2 out2 vcc 0 ${name}`, ...lib, '.op', '.end']
+      } else if (name === 'AP2112K-3.3') {
+        // LDO with enable (terminals vin gnd vout en): enable tied to the input.
+        deck = ['* ldo en', 'vin vin 0 dc 5', `x1 vin 0 vout vin ${name}`, 'rl vout 0 200', ...lib, '.op', '.end']
+      } else if (name === 'TP4056') {
+        deck = ['* charger', 'vcc vcc 0 dc 5', 'vb bat 0 dc 3.7', 'rprog prog 0 1.2k', `x1 vcc bat prog 0 vcc chrg stdby 0 ${name}`, 'rc vcc chrg 10k', 'rs vcc stdby 10k', ...lib, '.op', '.end']
+      } else if (e.model.file === 'stubs.lib') {
+        // Supply-load stub (terminals vdd gnd).
+        deck = ['* supply-load stub', 'vdd vdd 0 dc 5', `x1 vdd 0 ${name}`, ...lib, '.op', '.end']
+      } else if (e.model.file === 'opto.lib') {
+        // Optocoupler (terminals a k c e): LED driven from a source and a resistor, output pulled up.
+        deck = ['* opto', 'vin in 0 dc 5', 'rin in a 330', 'vcc vcc 0 dc 5', 'rl vcc c 4.7k', `x1 a 0 c 0 ${name}`, ...lib, '.op', '.end']
+      } else if (e.model.file === 'opamp.lib' && name !== 'LM393' && name !== 'LM339_QUAD') {
         deck = ['* op', 'vcc vcc 0 dc 12', 'vin in 0 dc 6', `x1 in out out vcc 0 ${name}`, ...lib, '.op', '.end']
       } else if (name === 'LM393') {
         deck = ['* cmp', 'vcc vcc 0 dc 5', 'rpu vcc out 10k', 'vp p 0 dc 3', 'vn n 0 dc 1', `x1 p n out vcc 0 ${name}`, ...lib, '.op', '.end']

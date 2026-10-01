@@ -162,4 +162,38 @@ describe('live transient LED glow — samples batches drive currentsByRef + the 
     })
     expect(store.getState().currentsByRef.get('D1')).toBeCloseTo(1e-9, 12)
   })
+
+  it('the LED current also arrives through the display-rate latest snapshot (unwatched vector)', () => {
+    // With a `watch` in place (issue #25) the sense ammeter is not a full
+    // series any more: its newest value rides in `latest`, same glow path.
+    mock.emit({
+      type: 'samples',
+      vectorNames: [],
+      columns: [],
+      simTime: new Float64Array([1e-3]),
+      latest: { vectorNames: ['vin', 'vsense_d1#branch'], values: new Float64Array([5, -0.007]) },
+    })
+    expect(store.getState().currentsByRef.get('D1')).toBeCloseTo(0.007, 9)
+    const last = glow.ledCalls[glow.ledCalls.length - 1]
+    expect(last.get('D1')).toBeCloseTo(0.007, 9)
+  })
+
+  it('a NaN in the latest snapshot (unreadable vector) leaves the LED current alone', () => {
+    mock.emit({
+      type: 'samples',
+      vectorNames: [],
+      columns: [],
+      simTime: new Float64Array([1e-3]),
+      latest: { vectorNames: ['vsense_d1#branch'], values: new Float64Array([0.007]) },
+    })
+    const seeded = store.getState().currentsByRef
+    mock.emit({
+      type: 'samples',
+      vectorNames: [],
+      columns: [],
+      simTime: new Float64Array([2e-3]),
+      latest: { vectorNames: ['vsense_d1#branch'], values: new Float64Array([NaN]) },
+    })
+    expect(store.getState().currentsByRef).toBe(seeded)
+  })
 })
