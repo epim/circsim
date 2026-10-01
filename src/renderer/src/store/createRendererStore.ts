@@ -61,8 +61,8 @@ export function createRendererStore(): AppStore {
   // Crash recovery notice: when SimHost dies, surface the toast. The fresh port
   // arrives via the window 'message' listener above (which also replays), so we
   // only record the crash notice here.
-  window.circsim.onSimhostCrashed(({ willRespawn }) => {
-    store.getState().noteCrash(willRespawn)
+  window.circsim.onSimhostCrashed(({ willRespawn, exitCode, reason }) => {
+    store.getState().noteCrash(willRespawn, { exitCode, reason })
   })
 
   // Per-board setup file (issue #27): once the user has opted in (or a setup file
