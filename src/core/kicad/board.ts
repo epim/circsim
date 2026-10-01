@@ -499,6 +499,15 @@ function parseZone(node: SExpr, nets: NetIndex): Zone | null {
   const netId = netNode ? nets.resolve(netNode) : undefined
 
   const layer = parseLayer(node)
+  // A multi-layer zone has `(layers "F.Cu" "B.Cu" ...)` and no `(layer ...)`.
+  const layersNode = find(node, 'layers')
+  const layers: string[] = []
+  if (layersNode && Array.isArray(layersNode)) {
+    for (let i = 1; i < layersNode.length; i++) {
+      const l = strAtom(layersNode, i)
+      if (l) layers.push(l)
+    }
+  }
 
   // polygon pts
   const polygon: Vec2[][] = []
@@ -514,7 +523,7 @@ function parseZone(node: SExpr, nets: NetIndex): Zone | null {
     if (pts.length > 0) polygon.push(pts)
   }
 
-  return { netId, layer, polygon }
+  return layers.length > 0 ? { netId, layer, layers, polygon } : { netId, layer, polygon }
 }
 
 // ─── main parse function ──────────────────────────────────────────────────────

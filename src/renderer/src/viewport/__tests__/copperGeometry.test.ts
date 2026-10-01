@@ -16,7 +16,8 @@ import { describe, it, expect } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import { parseBoard } from '../../../../core/kicad/board'
-import { buildCopper, buildViaInstances } from '../copperGeometry'
+import type { BoardModel } from '../../../../core/kicad/types'
+import { buildCopper, buildCopperLayers, buildViaInstances } from '../copperGeometry'
 
 // ─── fixture-rc copper map ────────────────────────────────────────────────────
 
@@ -263,5 +264,104 @@ describe('buildCopper — zone polygon', () => {
     const pos = entry.F!.getAttribute('position')
     expect(pos).toBeDefined()
     expect(pos.count).toBeGreaterThan(0)
+  })
+})
+
+// ─── layered copper: one geometry per side (#57) ───────────────────────────────
+
+describe('buildCopperLayers', () => {
+  const fixturePath = path.resolve(__dirname, '../../../../../fixtures/fixture-rc.kicad_pcb')
+  const board = parseBoard(fs.readFileSync(fixturePath, 'utf-8'))
+
+  it('has the same triangles as the per-net geometry, in one geometry per side', () => {
+    const perNet = buildCopper(board)
+    const layers = buildCopperLayers(board)
+
+    let expectedF = 0
+    for (const entry of perNet.values()) expectedF += entry.F?.getAttribute('position').count ?? 0
+    expect(layers.F).toBeDefined()
+    expect(layers.F!.getAttribute('position').count).toBe(expectedF)
+    expect(layers.netIds.slice().sort()).toEqual([...perNet.keys()].sort())
+  })
+
+  it('tags every vertex with the index of its net and keeps nets contiguous', () => {
+    const layers = buildCopperLayers(board)
+    const idx = layers.F!.getAttribute('netIndex')
+    const pos = layers.F!.getAttribute('position')
+    expect(idx.count).toBe(pos.count)
+    let last = -1
+    const seen = new Set<number>()
+    for (let i = 0; i < idx.count; i++) {
+      const n = idx.getX(i)
+      expect(Number.isInteger(n)).toBe(true)
+      expect(n).toBeGreaterThanOrEqual(0)
+      expect(n).toBeLessThan(layers.netIds.length)
+      if (n !== last) {
+        // a net's vertices form one run
+        expect(seen.has(n)).toBe(false)
+        seen.add(n)
+        last = n
+      }
+    }
+  })
+
+  it('per-net triangle counts match buildCopper net by net', () => {
+    const perNet = buildCopper(board)
+    const layers = buildCopperLayers(board)
+    const idx = layers.F!.getAttribute('netIndex')
+    const counts = new Map<number, number>()
+    for (let i = 0; i < idx.count; i++) {
+      const net = layers.netIds[idx.getX(i)]
+      counts.set(net, (counts.get(net) ?? 0) + 1)
+    }
+    for (const [netId, entry] of perNet) {
+      if (entry.F) expect(counts.get(netId)).toBe(entry.F.getAttribute('position').count)
+    }
+  })
+
+  it('is position and netIndex only, non-indexed', () => {
+    const layers = buildCopperLayers(board)
+    expect(Object.keys(layers.F!.attributes).sort()).toEqual(['netIndex', 'position'])
+    expect(layers.F!.getIndex()).toBeNull()
+  })
+
+  it('omits a side with no copper', () => {
+    const layers = buildCopperLayers(board)
+    expect(layers.B).toBeUndefined()
+  })
+
+  it('merges indexed circle pads with non-indexed tracks on one net', () => {
+    const mixed: BoardModel = {
+      netById: new Map([[1, { id: 1, name: 'N1' }]]),
+      footprints: [{
+        ref: 'TP1', value: 'TP', libId: 'TestPoint:TP', layer: 'F', at: { x: 5, y: 5, rotDeg: 0 }, properties: {},
+        pads: [{ number: '1', type: 'smd', shape: 'circle', at: { x: 0, y: 0, rotDeg: 0 }, size: { w: 1, h: 1 }, layers: ['F.Cu'], netId: 1 }],
+      }],
+      tracks: [{ kind: 'segment', start: { x: 5, y: 5 }, end: { x: 9, y: 5 }, widthMm: 0.25, layer: 'F.Cu', netId: 1 }],
+      vias: [], zones: [], edgeCuts: [],
+      outline: { outer: [], holes: [], warnings: [] },
+      silkscreen: [], boardThicknessMm: 1.6,
+    }
+    const layers = buildCopperLayers(mixed)
+    expect(layers.netIds).toEqual([1])
+    // 24-segment disc (72 vertices) plus a track (2 quad triangles + 2 caps of 12) = 6 + 72 vertices
+    expect(layers.F!.getAttribute('position').count).toBe(72 + (2 + 24) * 3)
+  })
+
+  it('puts back-side copper in its own geometry', () => {
+    const back: BoardModel = {
+      netById: new Map([[1, { id: 1, name: 'N1' }]]),
+      footprints: [], vias: [], zones: [], edgeCuts: [],
+      tracks: [
+        { kind: 'segment', start: { x: 0, y: 0 }, end: { x: 3, y: 0 }, widthMm: 0.2, layer: 'F.Cu', netId: 1 },
+        { kind: 'segment', start: { x: 0, y: 1 }, end: { x: 3, y: 1 }, widthMm: 0.2, layer: 'B.Cu', netId: 1 },
+      ],
+      outline: { outer: [], holes: [], warnings: [] },
+      silkscreen: [], boardThicknessMm: 1.6,
+    }
+    const layers = buildCopperLayers(back)
+    expect(layers.F).toBeDefined()
+    expect(layers.B).toBeDefined()
+    expect(layers.F!.getAttribute('position').count).toBe(layers.B!.getAttribute('position').count)
   })
 })

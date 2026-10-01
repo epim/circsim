@@ -7,6 +7,12 @@ Open the board and press Energize. You do not assign `Sim.*` fields first, and t
 Documentation: **[epim.github.io/circsim](https://epim.github.io/circsim/)**. It has the install guide, the First Light tutorial, task how-tos, and the full reference.
 Download: **[latest release](https://github.com/epim/circsim/releases/latest)** (Windows `.exe`, macOS `.dmg` x2, Linux `.AppImage` / `.deb`).
 
+![circsim with the First Light board energized: the LED glowing red on the 3D board, a supply lead clipped to the copper, the bench shelf with a 5 V PSU panel, and the read-only Board Critic on the right.](website/docs/public/img/hero-first-light.png)
+
+![A short recording of circsim opening the bundled 555 sample, energizing it, and listing Board Critic findings.](website/docs/public/img/demo-open-energize-critic.gif)
+
+More screenshots, and what circsim reads out of sixteen KiCad-written boards from KiCad 6 through 10, are in the [gallery](https://epim.github.io/circsim/gallery).
+
 ## What it does
 
 - **Starts from the routed board.** Net connectivity comes straight out of the `.kicad_pcb`, KiCad 6 to 10. The board can come from your own KiCad project, a contractor, or an autorouter such as [Quilter](https://quilter.ai) that returns a KiCad board; circsim has no Quilter-specific code. The [supported files](https://epim.github.io/circsim/reference/file-formats#kicad-version-support) page lists the KiCad-written boards behind the version range, including the one it rejects.

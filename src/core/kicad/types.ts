@@ -68,7 +68,9 @@ export interface Via {
 /** Filled copper zone */
 export interface Zone {
   netId?: number;
-  layer: string;
+  layer: string;       // '' for a multi-layer zone (KiCad 7+ writes `(layers ...)` instead)
+  /** Every copper layer of a multi-layer zone, as `(layers "F.Cu" "B.Cu" ...)` lists them. */
+  layers?: string[];
   polygon: Vec2[][];   // outer + holes
 }
 

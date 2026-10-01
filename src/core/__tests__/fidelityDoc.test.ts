@@ -41,7 +41,10 @@ describe('fidelity doc: single source', () => {
     expect(html).not.toContain('0.07 Ω')
     expect(html).toContain('27 °C')
     expect(html).toContain('Board Critic</a> does estimate copper resistance')
-    expect(html).toContain('Triangle-wave sources')
+    expect(html).not.toContain('Triangle-wave sources')
+    expect(html).toContain('Supply pins carry the load')
+    expect(html).toContain('Dropout follows the load')
+    expect(html).toContain('a source resistance plus a drive-current limit')
     expect(html).toContain('minimize the banner')
   })
 

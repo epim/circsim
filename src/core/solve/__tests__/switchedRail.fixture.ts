@@ -24,9 +24,9 @@ export const VGATED_NET = 2
 export const GROUND_NET = 5
 
 /** Pass-1 (12 V family default) Schmitt swing, as it appears in the B-source. */
-export const SWING_12V = '(v(out) > 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000'
+export const SWING_12V = '(v(u1_o_1y) > 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000'
 /** The swing a measured 5 V rail produces. */
-export const SWING_5V = '(v(out) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000'
+export const SWING_5V = '(v(u1_o_1y) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000'
 
 export function switchedRailFixture(supplyV = 12): {
   circuit: Circuit
