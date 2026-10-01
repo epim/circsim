@@ -48,7 +48,8 @@ export async function gatherDiagnosticsInput(
       pass2Status: solve?.pass2 ?? null,
       run: state.lastRunDeck,
     },
-    op: solve
+    solve: solve ? { status: solve.status, at: solve.at } : null,
+    op: solve && solve.status === 'solved'
       ? { values: solve.opValues, ...(solve.opMethod ? { method: solve.opMethod } : {}) }
       : null,
     resolutions: state.resolutions,

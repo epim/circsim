@@ -61,7 +61,13 @@ export interface DiagnosticsInput {
     /** The deck the last transient run or crash replay loaded. */
     run: string[] | null
   }
-  /** The committed operating point (the one the readouts show). */
+  /**
+   * How the latest operating-point solve ended, and when. `pass1-failed` means
+   * the deck in decks.pass1 is the one that did not solve (convergence failure
+   * or timeout); there is no op for it. Null when no solve has been attempted.
+   */
+  solve: { status: 'solved' | 'pass1-failed'; at: number } | null
+  /** The operating point of the latest successful solve; null when the latest solve failed. */
   op: DiagnosticsOp | null
   resolutions: Resolution[]
   instruments: Instrument[]
@@ -103,7 +109,9 @@ warning looks wrong.
 Contents
   manifest.json      App and ngspice versions, board file name and sha256,
                      KiCad file version, latest SimHost crash, deck summary.
-  decks/pass1.cir    The SPICE deck of the first operating-point solve.
+  decks/pass1.cir    The SPICE deck of the first operating-point solve. When
+                     manifest.json says solve.status is pass1-failed, this is
+                     the deck that failed to solve and op.json is null.
   decks/pass2.cir    The second solve, when a measured rail changed the deck.
   decks/run.cir      The deck the last transient run or crash replay loaded.
   ngspice.log        The Sim Log ring (up to 2000 lines), oldest first.
@@ -164,6 +172,9 @@ export function buildDiagnosticsFiles(input: DiagnosticsInput): DiagnosticsFile[
         pass2Status: input.decks.pass2Status,
         run: deckInfo(input.decks.run),
       },
+      solve: input.solve
+        ? { status: input.solve.status, at: new Date(input.solve.at).toISOString() }
+        : null,
       opMethod: input.op ? (input.op.method ?? 'direct') : null,
       logLines: input.log.length,
     }),

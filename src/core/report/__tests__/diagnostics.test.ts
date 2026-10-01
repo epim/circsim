@@ -24,6 +24,7 @@ function input(over: Partial<DiagnosticsInput> = {}): DiagnosticsInput {
       pass2Status: 'solved',
       run: null,
     },
+    solve: { status: 'solved', at: Date.UTC(2026, 8, 30, 11, 59, 0) },
     op: { values: { a: 1.5 }, method: 'gmin' },
     resolutions: [
       { ref: 'R1', status: 'ok', tier: 1, warnings: [], model: { kind: 'primitive', card: 'r_r1 a 0 1k' } },
@@ -70,6 +71,7 @@ describe('buildDiagnosticsFiles', () => {
     expect(manifest.crash.at).toBe('2026-09-30T12:00:00.000Z')
     expect(manifest.decks.pass2Status).toBe('solved')
     expect(manifest.opMethod).toBe('gmin')
+    expect(manifest.solve).toEqual({ status: 'solved', at: '2026-09-30T11:59:00.000Z' })
 
     expect(JSON.parse(byName(files, 'op.json'))).toEqual({ values: { a: 1.5 }, method: 'gmin' })
     const res = JSON.parse(byName(files, 'resolutions.json'))
@@ -93,11 +95,27 @@ describe('buildDiagnosticsFiles', () => {
     expect(manifest.opMethod).toBe('direct')
   })
 
+  it('flags a failed pass-1 solve and ships the deck that failed, with no op', () => {
+    const files = buildDiagnosticsFiles(
+      input({
+        decks: { pass1: ['* failed', 'r_r1 a 0 9k', '.end'], pass2: null, pass2Status: null, run: null },
+        solve: { status: 'pass1-failed', at: Date.UTC(2026, 8, 30, 12, 0, 0) },
+        op: null,
+      }),
+    )
+    expect(byName(files, 'decks/pass1.cir')).toContain('9k')
+    const manifest = JSON.parse(byName(files, 'manifest.json'))
+    expect(manifest.solve.status).toBe('pass1-failed')
+    expect(manifest.opMethod).toBeNull()
+    expect(JSON.parse(byName(files, 'op.json'))).toBeNull()
+  })
+
   it('still produces a valid bundle with nothing solved yet', () => {
     const files = buildDiagnosticsFiles(
       input({
         crash: null,
         decks: { pass1: null, pass2: null, pass2Status: null, run: null },
+        solve: null,
         op: null,
         log: [],
         resolutions: [],

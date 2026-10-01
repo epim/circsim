@@ -500,11 +500,14 @@ export interface AppState {
   /**
    * The last operating-point solve, kept for the diagnostics bundle (issue #26):
    * both decks, whether pass 2 ran, and the committed op. Cleared on board open.
+   * A failed pass 1 (timeout, convergence failure) is recorded too, with
+   * status 'pass1-failed': the deck that was sent, no pass 2, no op.
    */
   lastSolve: {
+    status: 'solved' | 'pass1-failed'
     pass1Deck: string[]
     pass2Deck: string[] | null
-    pass2: SolveResult['pass2']
+    pass2: SolveResult['pass2'] | null
     opValues: Record<string, number>
     opMethod: OpSolveMethod | null
     at: number
@@ -1504,7 +1507,23 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           // A pass-1 timeout drops us back to idle; a convergenceFailure event
           // (ingested separately) already surfaces the plain-language card.
           if (get().simState === 'op') set({ simState: 'idle' })
-          if (err instanceof SolveFailedError) return null
+          if (err instanceof SolveFailedError) {
+            // The bundle's whole point on a convergence card is the deck that
+            // failed, so record it (the same pass-1 deck runSolvePlan sent)
+            // instead of leaving the previous solve's deck in place.
+            set({
+              lastSolve: {
+                status: 'pass1-failed',
+                pass1Deck: buildDeck({ ...inputs, measuredRails: undefined }),
+                pass2Deck: null,
+                pass2: null,
+                opValues: {},
+                opMethod: null,
+                at: Date.now(),
+              },
+            })
+            return null
+          }
           throw err
         }
         const { op, netVoltages: opVoltages } = solved
@@ -1512,6 +1531,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         set({
           measuredRails: solved.measuredRails,
           lastSolve: {
+            status: 'solved',
             pass1Deck: solved.pass1Deck,
             pass2Deck: solved.pass2Deck ?? null,
             pass2: solved.pass2,

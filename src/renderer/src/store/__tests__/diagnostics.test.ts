@@ -4,7 +4,7 @@
  * bundle files main zips.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { createAppStore, type AppStore } from '../appStore'
@@ -52,6 +52,62 @@ describe('diagnostics bundle (issue #26)', () => {
     expect(solve!.opValues).toEqual({ vin: 5, out: 2.5 })
     expect(solve!.opMethod).toBe('gmin')
     expect(solve!.pass2).toBe('not-needed')
+  })
+
+  describe('a failed pass-1 solve', () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    async function failSolve(): Promise<void> {
+      const p = store.getState().powerOn()
+      mock.emit({ type: 'convergenceFailure', detail: 'trouble with node "out"' })
+      await vi.advanceTimersByTimeAsync(30_000)
+      await p
+    }
+
+    it('records the deck that failed, not the previous solve deck', async () => {
+      const ok = store.getState().powerOn()
+      mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+      await ok
+      const goodDeck = store.getState().lastSolve!.pass1Deck
+
+      store.getState().updateInstrument('psu1', { kind: 'dc-supply', id: 'psu1', netId: store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id, volts: 9, seriesOhms: 0.1 })
+      await failSolve()
+
+      const solve = store.getState().lastSolve!
+      expect(solve.status).toBe('pass1-failed')
+      expect(solve.pass1Deck).not.toEqual(goodDeck)
+      const loads = mock.sent.filter(c => c.type === 'loadCircuit') as { deckLines: string[] }[]
+      expect(solve.pass1Deck).toEqual(loads[loads.length - 1].deckLines)
+
+      const { files } = await collectDiagnosticsFiles(store, '1.0.0')
+      expect(file(files, 'decks/pass1.cir')).toBe(solve.pass1Deck.join('\n') + '\n')
+      const manifest = JSON.parse(file(files, 'manifest.json'))
+      expect(manifest.solve.status).toBe('pass1-failed')
+      expect(manifest.opMethod).toBeNull()
+      expect(manifest.decks.pass2Status).toBeNull()
+      expect(JSON.parse(file(files, 'op.json'))).toBeNull()
+    })
+
+    it('ships the failed deck when the very first solve fails', async () => {
+      expect(store.getState().lastSolve).toBeNull()
+      await failSolve()
+      const { files } = await collectDiagnosticsFiles(store, '1.0.0')
+      expect(file(files, 'decks/pass1.cir')).toContain('.end')
+      expect(JSON.parse(file(files, 'manifest.json')).solve.status).toBe('pass1-failed')
+    })
+
+    it('a later good solve replaces the failure record', async () => {
+      await failSolve()
+      const ok = store.getState().powerOn()
+      mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+      await ok
+      expect(store.getState().lastSolve!.status).toBe('solved')
+    })
   })
 
   it('a new board clears the retained solve', async () => {
