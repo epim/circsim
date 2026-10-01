@@ -16,7 +16,8 @@
  * Also pins two behaviors that only matter if the model is wired this way: an
  * unpowered op-amp parks its output near 0 V instead of a thousand volts, and a
  * floating supply rail is not dragged to an absurd voltage by the supply-current
- * sources.
+ * sources. And it runs the shipped 555 sample through a transient at the fine
+ * solver steps a function generator picks, which a smooth latch memory aborted.
  *
  * Runs the REAL libngspice; skipped when resources/ngspice/<platform> is missing.
  */
@@ -264,4 +265,67 @@ describe.skipIf(!haveNgspice)('the shipped sample boards open without a solver f
     const r = await runOp(sampleDeck({ board: 'first-light.kicad_pcb', supplyNet: 'VIN', volts: 5 }))
     expectDirect(r, 'first-light sample')
   }, 60_000)
+})
+
+// ─── the shipped 555 sample through Run, at the steps the bench picks ─────────
+
+/** One `tran <tstep> <tstop> uic` through the real SimHost, the bench's start. */
+async function runTran(
+  deck: string[],
+  tstep: number,
+  tstop: number,
+): Promise<{ t: Float64Array; out: Float64Array; trouble: string[] }> {
+  const events: SimEvent[] = []
+  const host = new SimHost({ emit: (e) => events.push(e), disableWatchdog: true })
+  try {
+    await host.start()
+    await host.loadCircuit(deck)
+    const r = await host.runTran(tstep, tstop)
+    const trouble = events
+      .filter((e): e is Extract<SimEvent, { type: 'log' }> => e.type === 'log')
+      .filter((e) => e.level === 'error' || /timestep too small|aborted/i.test(e.text))
+      .map((e) => e.text)
+    return { t: r.time, out: r.vectors['out'] ?? new Float64Array(0), trouble }
+  } finally {
+    await host.dispose()
+  }
+}
+
+describe.skipIf(!haveNgspice)('the shipped blinker-555 sample runs at fine solver steps (review of PR #118)', () => {
+  // A function generator above 500 Hz sets the step below 10 us. With a smooth
+  // regenerative latch memory the sample aborted with "Timestep too small ...
+  // trouble with node x_u1.q" at its first THRES crossing (0.626 s, 2 us steps)
+  // or its second (1.347 s, 5 us steps): THRES creeps through the comparator
+  // band at about 3 V/s, the latch branch folded, and Newton could not step past
+  // the fold. Each run covers the crossing that failed.
+  const deck = haveNgspice
+    ? sampleDeck({ board: 'blinker-555.kicad_pcb', schematic: 'blinker-555.kicad_sch', supplyNet: 'VCC', volts: 5 })
+    : []
+  // From a discharged 10 uF: high for ln(3)*(10k+47k)*10u = 0.626 s, then low for
+  // ln(2)*47k*10u = 0.326 s and high for ln(2)*57k*10u = 0.395 s.
+  const nominal = [
+    { at: 0.626, rising: false },
+    { at: 0.952, rising: true },
+    { at: 1.347, rising: false },
+  ]
+  for (const [tstep, tstop, label] of [
+    [2e-6, 0.7, '2 us'],
+    [5e-6, 1.4, '5 us'],
+  ] as const) {
+    it(`${label} steps: runs through the THRES crossings, edges on the RC timing`, async () => {
+      const r = await runTran(deck, tstep, tstop)
+      expect(r.trouble, `${label}: solver trouble`).toEqual([])
+      expect(r.t[r.t.length - 1], `${label}: ran to the end`).toBeGreaterThan(tstop * 0.999)
+      const edges: Array<{ at: number; rising: boolean }> = []
+      for (let i = 1; i < r.out.length; i++) {
+        // Skip the power-on rise; count each crossing of half the rail once.
+        if (r.t[i] > 1e-3 && r.out[i - 1] < 2.5 !== r.out[i] < 2.5) edges.push({ at: r.t[i], rising: r.out[i] >= 2.5 })
+      }
+      const want = nominal.filter((e) => e.at < tstop)
+      expect(edges.map((e) => e.rising), `${label}: edge directions`).toEqual(want.map((e) => e.rising))
+      edges.forEach((e, i) => {
+        expect(Math.abs(e.at - want[i].at) / want[i].at, `${label}: edge ${i} at ${e.at.toFixed(4)} s`).toBeLessThan(0.02)
+      })
+    }, 240_000)
+  }
 })

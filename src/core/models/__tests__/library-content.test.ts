@@ -739,17 +739,21 @@ describe('macromodel structure: supply-pin current, pole clamp, smooth decisions
     expect(b).toMatch(/^\s*bout\s+obuf\s+vee\s+v\s*=\s*v\(vpole\)\s*-\s*v\(vee\)/im)
   })
 
-  it('opamp_core and NE555 decisions are smooth: no hard comparator or clamp ternaries (issue #19)', () => {
-    const noHard = (text: string, what: string): void => {
+  it('opamp_core and NE555 decisions are smooth at the operating point: no hard comparator or clamp ternaries (issue #19)', () => {
+    // The NE555 latch-state decision is the one hard ternary allowed, and only
+    // multiplied by the memory ramp, which is 0 at time 0: the operating point
+    // never sees it (see the latch test below).
+    const latchGated = /\(time < 1e-6 \? time\/1e-6 : 1\)\*\(v\(q,gnd\) > 0\.5 \? 1 : 0\)/g
+    const noHard = (text: string, what: string, allowLatch: boolean): void => {
       for (const line of text.split(/\r?\n/)) {
         if (/^\s*\*/.test(line)) continue
-        // The only ternary allowed is the NE555 start-up softness ramp on `time`.
-        const stripped = line.replace(/\(time < 1e-6 \? [^)]*\)/g, '')
+        // Otherwise the only ternary allowed is the NE555 start-up ramp on `time`.
+        const stripped = (allowLatch ? line.replace(latchGated, '') : line).replace(/\(time < 1e-6 \? [^)]*\)/g, '')
         expect(stripped, `${what}: hard ternary in: ${line}`).not.toMatch(/\?/)
       }
     }
-    noHard(body('opamp.lib', 'opamp_core'), 'opamp_core')
-    noHard(body('timer555.lib', 'NE555'), 'NE555')
+    noHard(body('opamp.lib', 'opamp_core'), 'opamp_core', false)
+    noHard(body('timer555.lib', 'NE555'), 'NE555', true)
   })
 
   it('LM358 and LM324 saturate to a low on-resistance so VOL meets the datasheet (issue #87)', () => {
@@ -765,8 +769,8 @@ describe('macromodel structure: supply-pin current, pole clamp, smooth decisions
     expect(b).toMatch(/^\s*vsns\s+osns\s+out\s+0\s*$/im)
     expect(b).toMatch(/^\s*bsrc\s+vcc\s+gnd\s+i\s*=.*i\(vsns\)/im)
     expect(b).toMatch(/^\s*rq\s+vcc\s+gnd\s+1\.8k\b/im)
-    // The latch is an algebraic regenerative bistable (it references its own
-    // output), not a bare integrator and not a lagged node.
+    // The latch is algebraic and references its own output (that is its memory),
+    // not a bare integrator and not a lagged node.
     expect(b).toMatch(/^\s*bq\s+q\s+gnd\s+v\s*=.*v\(q,\s*gnd\)/im)
     expect(b).not.toMatch(/^\s*blatch\s+0\s+q\s+i\b/im)
   })
@@ -784,6 +788,29 @@ describe('macromodel structure: supply-pin current, pole clamp, smooth decisions
         expect(tok.slice(1, 3), `reactive or resistive element on a latch node: ${line}`).not.toContain('qd')
       }
     }
+  })
+
+  it('NE555: the latch memory is a hard decision on q, off at time 0, and the readouts use it (review of PR #118)', () => {
+    // A smooth regenerative memory (a tanh of q inside the q equation) folds: as
+    // THRES creeps through the comparator band, the branch the latch sits on
+    // ends with the slope of its equation at zero, Newton cannot step past it,
+    // and ngspice aborted the sample blinker with "Timestep too small ... node
+    // x_u1.q" at 2 us and 5 us steps. A hard decision ends the branch at a jump
+    // where the slope stays 1. It is multiplied by the memory ramp so the
+    // operating point never sees it, and the output and discharge readouts use
+    // the same decision so neither moves along a branch (a readout that did let
+    // the discharge switch hold THRES at the threshold).
+    const b = body('timer555.lib', 'NE555')
+    const gated = '(time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0)'
+    const lineOf = (name: string): string =>
+      b.split(/\r?\n/).find((l) => new RegExp(`^\\s*${name}\\s`, 'i').test(l)) ?? ''
+    for (const name of ['bq', 'bqd', 'bdisch']) {
+      expect(lineOf(name), `${name} reads the latch through the gated hard decision`).toContain(gated)
+    }
+    expect(lineOf('bq'), 'no smooth function of q inside the latch memory').not.toMatch(/tanh\([^)]*v\(q,gnd\)/i)
+    // Every hard decision on q is gated by the memory ramp.
+    const decisions = b.match(/v\(q,gnd\) > 0\.5 \?/g) ?? []
+    expect(decisions.length).toBe(b.split(gated).length - 1)
   })
 
   it('reg_lin: input current is the delivered output current plus Iq (issue #2) and dropout depends on load (issue #42)', () => {

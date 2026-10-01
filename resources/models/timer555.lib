@@ -9,29 +9,39 @@
 * NE555 pinout (standard):
 *   1 GND   2 TRIG   3 OUT   4 RESET   5 CTRL   6 THRES   7 DISCH   8 VCC
 *
-* Convergence: every decision (comparators, latch, reset gate, output level,
-* discharge switch) is a smooth tanh form rather than a hard ternary, and the
-* latch is a regenerative bistable with a real DC solution, so ngspice Newton
+* Convergence: at the operating point (time 0) every decision (comparators,
+* latch, reset gate, output level, discharge switch) is a smooth tanh form
+* rather than a hard ternary, and the latch has no memory, so ngspice Newton
 * iteration always has a slope to follow. An astable has no stable DC point at
 * all (the timing capacitor is open at DC, so the discharge transistor and the
 * comparators chase each other), which makes a sharp model unsolvable from the
-* all-zero starting guess. So the decisions are softened while time is 0 (the
-* operating point) and ramp to full sharpness over the first microsecond of a
-* transient: the comparators, the state readout that drives the discharge
-* switch, and the latch memory. Without that ramp the astable, the monostable
-* at idle and every other 555 board solved only through gmin stepping, source
+* all-zero starting guess. So the decisions are softened while time is 0 and
+* ramp to full sharpness over the first microsecond of a transient: the
+* comparators, the state readout that drives the output and the discharge
+* switch, and the latch memory. Without that ramp the astable, the monostable at
+* idle and every other 555 board solved only through gmin stepping, source
 * stepping or the transient fallback. The operating point of an oscillator is
 * only a bias snapshot, not a state the circuit stays in.
 *
-* Solver step: the latch has no time constant of its own. Any lag placed in the
-* latch or between the latch and the discharge switch, however short, is a
-* stiff node. When the solver step is many times that lag (a function generator
-* sets the step to 1/200 of the fastest frequency, which is 5 us at 1 kHz) the
-* trapezoidal integrator makes a stiff node ring with alternating sign, and a
-* regenerative node rings across its unstable midpoint, so the output chatters
-* for several steps at every threshold crossing. An algebraic latch has nothing
-* to ring: the state is the solution of one nonlinear equation at each time
-* point, so the edge lands on one solver step at any step size.
+* Solver step: the latch must flip cleanly at any solver step. A function
+* generator sets the step to 1/200 of its fastest frequency (5 us at 1 kHz),
+* and the bench runs slow circuits at steps from 1 us to 100 us. Two latch
+* forms fail at some of those steps, so neither is used:
+*  - Any capacitor or lag on the latch is a stiff node. When the step is many
+*    times the lag the trapezoidal integrator rings it with alternating sign,
+*    and a regenerative node rings across its unstable midpoint, so the output
+*    chatters for several steps at every threshold crossing.
+*  - A smooth regenerative memory (q = tanh-shaped function of q) has a fold:
+*    as a comparator moves slowly through its band, the branch the latch sits
+*    on bends back and ends with the slope of its equation at zero. Newton
+*    iteration cannot step past that point, so ngspice halves the step until
+*    it aborts with "Timestep too small ... trouble with node q". The sample
+*    blinker (10 uF, 47k) did that at 2 us and 5 us steps.
+* So the latch is algebraic (no lag) and its memory is a hard decision on its
+* own state. A branch then ends at a jump, where the slope of the equation is
+* still 1, and Newton lands on the other branch in one or two iterations at
+* any step. The hard decision is multiplied by the start-up ramp, so it is
+* absent from the operating point, which stays smooth.
 *
 * ---------------------------------------------------------------------------
 * Subckt node order (matches the pinMap in index.json):
@@ -53,9 +63,11 @@ rdiv_c n13 gnd 5k
 * above, draws about 3.1 mA at 5 V and 9.3 mA at 15 V.
 rq vcc gnd 1.8k
 *
-* Softness ramp used below, written out in each expression on purpose (an
+* Start-up ramps used below, written out in each expression on purpose (an
 * intermediate node would start at 0 V and hide the ramp from the first Newton
-* pass): sf = (time < 1e-6 ? 1 - time/1e-6 : 0) is 1 at time 0 and 0 from 1 us on.
+* pass):
+*   sf = (time < 1e-6 ? 1 - time/1e-6 : 0) is 1 at time 0 and 0 from 1 us on;
+*   mr = (time < 1e-6 ? time/1e-6 : 1)     is 0 at time 0 and 1 from 1 us on.
 *
 * ---- upper (threshold) comparator ----
 * output -> 1 when THRES > CTRL (2/3 Vcc). Drives the latch RESET input.
@@ -71,23 +83,30 @@ bcomplo clo gnd v = 0.5*(1 + tanh(v(n13,trig)/(0.002 + 1.0*(time < 1e-6 ? 1 - ti
 brok rok gnd v = 0.5*(1 + tanh((v(reset,gnd) - 1)/0.05))
 *
 * ---- RS latch with active-low RESET pin override ----
-* State node 'q' is an algebraic regenerative bistable: the voltage source below
-* forces
-*   q = (1-chi)*rok * ( clo + (1-clo)*hold(q) )
-* The factor (1-chi)*rok is 0 whenever the upper comparator or the RESET pin
-* resets the latch (RESET is dominant, per the datasheet), clo = 1 sets it, and
-* otherwise q = hold(q) = 0.5*(1+tanh(6*(q-0.5))), whose stable solutions are
-* q=0 and q=1 (the unstable one sits at q=0.5). That self-reference is the latch
-* memory: q stays on whichever branch it is on until a comparator forces it off
-* that branch. The memory term is off at time 0 and ramps in over the first
-* microsecond, so the operating point solves to q=0 (output low, discharge on)
-* whenever neither comparator is active, with no memory to choose between two
+* State node 'q' is algebraic: the voltage source below forces
+*   q = run * ( clo + (1-clo)*mr*hold(q) ),   run = (1-chi)*rok,
+*   hold(q) = 1 when q > 0.5, else 0.
+* run is 0 whenever the upper comparator or the RESET pin resets the latch
+* (RESET is dominant, per the datasheet) and clo = 1 sets it. The self-reference
+* through hold(q) is the latch memory, with two branches:
+*   set branch    q = run      (hold = 1), valid while run > 0.5
+*   reset branch  q = run*clo  (hold = 0), valid while run*clo < 0.5
+* so the latch resets when the upper comparator passes its midpoint (THRES =
+* CTRL) or RESET falls through 1 V, and sets when the lower comparator passes
+* its midpoint (TRIG = Vcc/3). The memory term is off at time 0 (mr = 0), so the
+* operating point is the smooth function q = run*clo: output low and discharge
+* on whenever neither comparator is active, with no memory to choose between two
 * states. There is deliberately no capacitor or lag on q (see "Solver step"
-* above): the real part's propagation delay (about 100 ns) is far below the step circsim normally takes.
-bq q gnd v = v(rok,gnd)*(1 - v(chi,gnd))*( v(clo,gnd) + (1 - v(clo,gnd))*(time < 1e-6 ? time/1e-6 : 1)*0.5*(1 + tanh(6*(v(q,gnd) - 0.5))) )
-* read the latch state through a smooth 0/1 decision (mid-point 0.5). The slope
-* is 20 per volt, 8 per volt at time 0.
-bqd qd gnd v = 0.5*(1 + tanh((60 - 52*(time < 1e-6 ? 1 - time/1e-6 : 0))*(v(q,gnd) - 0.5)))
+* above): the real part's propagation delay (about 100 ns) is far below the
+* step circsim normally takes.
+bq q gnd v = v(rok,gnd)*(1 - v(chi,gnd))*( v(clo,gnd) + (1 - v(clo,gnd))*(time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0) )
+* Read the latch state for the output. From 1 us on this is the same hard
+* decision as the memory, so the output changes only when q jumps between
+* branches. A readout that moved along a branch (q runs from 1 down to 0.5 on
+* the set branch as THRES approaches CTRL) would let the discharge switch and
+* THRES settle into an analog equilibrium at the threshold. At time 0 it is a
+* smooth step of slope 8 per volt.
+bqd qd gnd v = (time < 1e-6 ? 1 - time/1e-6 : 0)*0.5*(1 + tanh(8*(v(q,gnd) - 0.5))) + (time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0)
 *
 * ---- output buffer (pin 3) ----
 * OUT is HIGH (Vcc - 0.5) when the latch is SET, LOW (0.1 V) when reset,
@@ -107,7 +126,7 @@ bsrc vcc gnd i = 0.5*(1 + tanh((v(vcc,gnd) - 1)/0.25))*0.5*( i(vsns) + sqrt(i(vs
 * output is LOW (latch reset) and OFF (1 Gohm) when the output is HIGH. RESET
 * low forces it ON. Modeled as a voltage-controlled conductance from DISCH to
 * GND; the current it sinks leaves through the gnd pin. The state readout inside
-* it is softer than qd at time 0 (3 per volt), because the loop through THRES
-* is what the operating point has to solve.
-bdisch disch gnd i = v(disch,gnd)*( (1 - (0.5*(1 + tanh((60 - 57*(time < 1e-6 ? 1 - time/1e-6 : 0))*(v(q,gnd) - 0.5))))*v(rok,gnd))/15 + ((0.5*(1 + tanh((60 - 57*(time < 1e-6 ? 1 - time/1e-6 : 0))*(v(q,gnd) - 0.5))))*v(rok,gnd))/1e9 )
+* it is the same as qd from 1 us on, and softer than qd at time 0 (3 per volt),
+* because the loop through THRES is what the operating point has to solve.
+bdisch disch gnd i = v(disch,gnd)*( (1 - ((time < 1e-6 ? 1 - time/1e-6 : 0)*0.5*(1 + tanh(3*(v(q,gnd) - 0.5))) + (time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0))*v(rok,gnd))/15 + (((time < 1e-6 ? 1 - time/1e-6 : 0)*0.5*(1 + tanh(3*(v(q,gnd) - 0.5))) + (time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0))*v(rok,gnd))/1e9 )
 .ends NE555

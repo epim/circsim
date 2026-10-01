@@ -27,9 +27,11 @@ rdiv_c n13 gnd 5k
 * above, draws about 3.1 mA at 5 V and 9.3 mA at 15 V.
 rq vcc gnd 1.8k
 *
-* Softness ramp used below, written out in each expression on purpose (an
+* Start-up ramps used below, written out in each expression on purpose (an
 * intermediate node would start at 0 V and hide the ramp from the first Newton
-* pass): sf = (time < 1e-6 ? 1 - time/1e-6 : 0) is 1 at time 0 and 0 from 1 us on.
+* pass):
+*   sf = (time < 1e-6 ? 1 - time/1e-6 : 0) is 1 at time 0 and 0 from 1 us on;
+*   mr = (time < 1e-6 ? time/1e-6 : 1)     is 0 at time 0 and 1 from 1 us on.
 *
 * ---- upper (threshold) comparator ----
 * output -> 1 when THRES > CTRL (2/3 Vcc). Drives the latch RESET input.
@@ -45,23 +47,30 @@ bcomplo clo gnd v = 0.5*(1 + tanh(v(n13,trig)/(0.002 + 1.0*(time < 1e-6 ? 1 - ti
 brok rok gnd v = 0.5*(1 + tanh((v(reset,gnd) - 1)/0.05))
 *
 * ---- RS latch with active-low RESET pin override ----
-* State node 'q' is an algebraic regenerative bistable: the voltage source below
-* forces
-*   q = (1-chi)*rok * ( clo + (1-clo)*hold(q) )
-* The factor (1-chi)*rok is 0 whenever the upper comparator or the RESET pin
-* resets the latch (RESET is dominant, per the datasheet), clo = 1 sets it, and
-* otherwise q = hold(q) = 0.5*(1+tanh(6*(q-0.5))), whose stable solutions are
-* q=0 and q=1 (the unstable one sits at q=0.5). That self-reference is the latch
-* memory: q stays on whichever branch it is on until a comparator forces it off
-* that branch. The memory term is off at time 0 and ramps in over the first
-* microsecond, so the operating point solves to q=0 (output low, discharge on)
-* whenever neither comparator is active, with no memory to choose between two
+* State node 'q' is algebraic: the voltage source below forces
+*   q = run * ( clo + (1-clo)*mr*hold(q) ),   run = (1-chi)*rok,
+*   hold(q) = 1 when q > 0.5, else 0.
+* run is 0 whenever the upper comparator or the RESET pin resets the latch
+* (RESET is dominant, per the datasheet) and clo = 1 sets it. The self-reference
+* through hold(q) is the latch memory, with two branches:
+*   set branch    q = run      (hold = 1), valid while run > 0.5
+*   reset branch  q = run*clo  (hold = 0), valid while run*clo < 0.5
+* so the latch resets when the upper comparator passes its midpoint (THRES =
+* CTRL) or RESET falls through 1 V, and sets when the lower comparator passes
+* its midpoint (TRIG = Vcc/3). The memory term is off at time 0 (mr = 0), so the
+* operating point is the smooth function q = run*clo: output low and discharge
+* on whenever neither comparator is active, with no memory to choose between two
 * states. There is deliberately no capacitor or lag on q (see "Solver step"
-* above): the real part's propagation delay (about 100 ns) is far below the step circsim normally takes.
-bq q gnd v = v(rok,gnd)*(1 - v(chi,gnd))*( v(clo,gnd) + (1 - v(clo,gnd))*(time < 1e-6 ? time/1e-6 : 1)*0.5*(1 + tanh(6*(v(q,gnd) - 0.5))) )
-* read the latch state through a smooth 0/1 decision (mid-point 0.5). The slope
-* is 20 per volt, 8 per volt at time 0.
-bqd qd gnd v = 0.5*(1 + tanh((60 - 52*(time < 1e-6 ? 1 - time/1e-6 : 0))*(v(q,gnd) - 0.5)))
+* above): the real part's propagation delay (about 100 ns) is far below the
+* step circsim normally takes.
+bq q gnd v = v(rok,gnd)*(1 - v(chi,gnd))*( v(clo,gnd) + (1 - v(clo,gnd))*(time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0) )
+* Read the latch state for the output. From 1 us on this is the same hard
+* decision as the memory, so the output changes only when q jumps between
+* branches. A readout that moved along a branch (q runs from 1 down to 0.5 on
+* the set branch as THRES approaches CTRL) would let the discharge switch and
+* THRES settle into an analog equilibrium at the threshold. At time 0 it is a
+* smooth step of slope 8 per volt.
+bqd qd gnd v = (time < 1e-6 ? 1 - time/1e-6 : 0)*0.5*(1 + tanh(8*(v(q,gnd) - 0.5))) + (time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0)
 *
 * ---- output buffer (pin 3) ----
 * OUT is HIGH (Vcc - 0.5) when the latch is SET, LOW (0.1 V) when reset,
@@ -81,9 +90,9 @@ bsrc vcc gnd i = 0.5*(1 + tanh((v(vcc,gnd) - 1)/0.25))*0.5*( i(vsns) + sqrt(i(vs
 * output is LOW (latch reset) and OFF (1 Gohm) when the output is HIGH. RESET
 * low forces it ON. Modeled as a voltage-controlled conductance from DISCH to
 * GND; the current it sinks leaves through the gnd pin. The state readout inside
-* it is softer than qd at time 0 (3 per volt), because the loop through THRES
-* is what the operating point has to solve.
-bdisch disch gnd i = v(disch,gnd)*( (1 - (0.5*(1 + tanh((60 - 57*(time < 1e-6 ? 1 - time/1e-6 : 0))*(v(q,gnd) - 0.5))))*v(rok,gnd))/15 + ((0.5*(1 + tanh((60 - 57*(time < 1e-6 ? 1 - time/1e-6 : 0))*(v(q,gnd) - 0.5))))*v(rok,gnd))/1e9 )
+* it is the same as qd from 1 us on, and softer than qd at time 0 (3 per volt),
+* because the loop through THRES is what the operating point has to solve.
+bdisch disch gnd i = v(disch,gnd)*( (1 - ((time < 1e-6 ? 1 - time/1e-6 : 0)*0.5*(1 + tanh(3*(v(q,gnd) - 0.5))) + (time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0))*v(rok,gnd))/15 + (((time < 1e-6 ? 1 - time/1e-6 : 0)*0.5*(1 + tanh(3*(v(q,gnd) - 0.5))) + (time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0))*v(rok,gnd))/1e9 )
 .ends NE555
 .model LED_RED D(is=1e-19 rs=2.0 n=1.7 cjo=30p vj=0.75 m=0.333 bv=5 ibv=100u eg=1.9 xti=3)
 .save all
