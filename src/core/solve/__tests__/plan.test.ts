@@ -169,6 +169,46 @@ describe('runSolvePlan: two-pass rail sensing', () => {
     return pending
   })
 
+  it('settles an op-amp left balanced mid-rail before sensing rails, on both passes', async () => {
+    // xu9 is a Schmitt inside its band: the bare op balances it at 4 V and reads
+    // /VGATED at the family default; its power-up (low) state switches the rail
+    // to 5 V. Sensing must read the settled op, so pass 2 runs with 5 V.
+    const pole = (v: number) => ({ 'xu9.xa.vpole': v, 'xu9.xa.clo': 0.005, 'xu9.xa.chi': 10.5, 'xu9.xa.vmid': 5.25 })
+    let current: string[] = []
+    const engine: SolveEngine = {
+      loadCircuit(deck) {
+        current = deck
+        return Promise.resolve()
+      },
+      runOp() {
+        const t = text(current)
+        if (t.includes('vcircsim_probe')) {
+          return Promise.resolve({ values: { ...pole(4.01), 'i(vcircsim_probe)': 0.01 }, method: 'direct' })
+        }
+        if (t.includes('.nodeset')) {
+          return Promise.resolve({ values: { vin: 12, vgated: 5, out: 0.01, ...pole(-0.01) }, method: 'direct' })
+        }
+        return Promise.resolve({ values: { vin: 12, vgated: 12, out: 4, ...pole(4) }, method: 'direct' })
+      },
+      runTran: () => Promise.reject(new Error('not used')),
+    }
+
+    const result = await runSolvePlan(inputs(), engine)
+
+    expect(result.measuredRails.get(VGATED_NET)).toBeCloseTo(5)
+    expect(result.pass2).toBe('solved')
+    expect(text(result.deck)).toContain(SWING_5V)
+    expect(text(result.deck)).toContain('.nodeset v(xu9.xa.vpole)=0.005000')
+    expect(text(result.pass1Deck)).not.toContain('.nodeset')
+    expect(result.op.values.out).toBe(0.01)
+    expect(result.latched).toEqual([{ instance: 'xu9.xa', unstableVolts: 4, settledVolts: -0.01 }])
+  })
+
+  it('reports no latched op-amps on a board without any', async () => {
+    const engine = scriptedEngine(() => ({ values: { vin: 12, vgated: 12, out: 0 } }))
+    expect((await runSolvePlan(inputs(), engine)).latched).toEqual([])
+  })
+
   it('maps the committed op onto net ids', async () => {
     const engine = scriptedEngine(() => ({ values: { vin: 12, vgated: 12, in: 0.1, out: 11.9, 'i(vpsu_bench)': -0.001 } }))
 
@@ -279,6 +319,43 @@ describe('runSolvePlan: reconciling a rail that an output biases (issue #44)', (
       expect(result.pass2).toBe('solved')
     },
   )
+})
+
+describe('runSolvePlan: undriven islands (issue #43)', () => {
+  /** The switched-rail fixture with R3 removed: IN reaches only U1's sense-only input pad. */
+  function undrivenInputInputs(): SolveInputs {
+    const f = switchedRailFixture()
+    const resolutions = f.resolutions.filter(r => r.ref !== 'R3')
+    const circuit = { ...f.circuit, parts: f.circuit.parts.filter(p => p.ref !== 'R3') }
+    return buildSolveInputs(null, circuit, resolutions, f.instruments, f.groundNetId, {
+      title: 'plan-test',
+      modelTexts: { 'logic4000.json': LOGIC4000 },
+    })
+  }
+
+  const okOp = (): OpResult => ({ values: { vin: 12, vgated: 5, in: 0, out: 5 }, method: 'direct' })
+
+  it('reports a net with no path to ground, by KiCad name, with its bleed', async () => {
+    const engine = scriptedEngine(() => okOp())
+    const result = await runSolvePlan(undrivenInputInputs(), engine)
+
+    expect(result.undrivenNets).toEqual([{ netId: 3, kicadName: 'IN', spiceNode: 'in' }])
+    // The deck really bled it, so the 0 V reading is a bleed and not a measurement.
+    expect(text(result.deck)).toContain('r_float_1 in 0 1e9')
+  })
+
+  it('reports nothing when every net has a path to ground', async () => {
+    const engine = scriptedEngine(() => okOp())
+    const result = await runSolvePlan(inputs(), engine)
+    expect(result.undrivenNets).toEqual([])
+  })
+
+  it('reports the islands of the deck that produced the committed op', async () => {
+    const engine = scriptedEngine(pass => (pass === 1 ? okOp() : { ...okOp(), values: { ...okOp().values, out: 4.9 } }))
+    const result = await runSolvePlan(undrivenInputInputs(), engine)
+    expect(result.pass2).toBe('solved')
+    expect(result.undrivenNets.map(n => n.kicadName)).toEqual(['IN'])
+  })
 })
 
 describe('mapOpResultToNetVoltages', () => {

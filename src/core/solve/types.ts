@@ -12,6 +12,7 @@ import type { Resolution } from '../models/types'
 import type { Circuit } from '../netlist/extract'
 import type { Instrument } from '../spicegen/instruments'
 import type { OpSolveMethod } from '../../simhost/protocol'
+import type { LatchedOpAmp } from './bistable'
 
 // ─── engine ───────────────────────────────────────────────────────────────────
 
@@ -117,6 +118,17 @@ export interface GatedOffRail {
   kicadName: string
 }
 
+/**
+ * A circuit net with no path to ground in the deck. The deck held it at 0 V
+ * through a 1 GOhm bleed so the matrix stays solvable; nothing on the board
+ * drives it, so 0 V is not a measurement and the real net floats (issue #43).
+ */
+export interface UndrivenNet {
+  netId: number
+  kicadName: string
+  spiceNode: string
+}
+
 /** What a two-pass solve produced, and which deck produced it. */
 export interface SolveResult {
   /** The op to commit: pass 2's when it ran and landed, else pass 1's. */
@@ -149,4 +161,13 @@ export interface SolveResult {
   measuredRails: Map<number, number>
   /** Chips whose VDD rail measured near 0 V; the family default was kept. */
   gatedOff: GatedOffRail[]
+  /** Nets the deck that produced `op` bled to 0 V because nothing drives them. */
+  undrivenNets: UndrivenNet[]
+  /**
+   * Op-amps the committed op's pass first found balanced on an unstable point
+   * (a Schmitt trigger inside its hysteresis band), each with the state it was
+   * re-solved to: its power-up state, or null when no re-solve could move it
+   * (bistable.ts). Empty for most boards.
+   */
+  latched: LatchedOpAmp[]
 }
