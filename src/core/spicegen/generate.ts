@@ -1006,7 +1006,7 @@ function expandXspiceDigital(
   instruments: Instrument[],
   railOverrides: Map<number, number> | undefined,
   measuredRailVHigh: Map<number, number> | undefined,
-): { lines: string[]; expanded: boolean; analogNodes: string[] } {
+): { lines: string[]; expanded: boolean; analogNodes: string[]; links: string[][] } {
   const logic = templateFile ? parseLogic74(idx, templateFile) : null
   const tpl = logic?.templates?.[model.templateId]
   if (!logic || !tpl) {
@@ -1018,6 +1018,7 @@ function expandXspiceDigital(
       ],
       expanded: false,
       analogNodes: [],
+      links: [],
     }
   }
 
@@ -1056,6 +1057,25 @@ function expandXspiceDigital(
   /** Digital (event) node for a chip signal — always per-instance. */
   const dNode = (sig: string): string => `${refLc}_d_${sig.toLowerCase()}`
 
+  // Supply-pin current conservation (issue #2). The bridges and B-sources in the
+  // expansion reference global ground, so without help the chip draws nothing
+  // from its VCC net however hard its outputs are loaded. One current source from
+  // the VCC board node to ground carries the sum of the positive (sourced) output
+  // currents; current a low output sinks already returns through ground. It is
+  // only emitted when VCC is wired to a board net (an unwired VCC is a per-chip
+  // internal node with nothing to load). `terms` are expressions for the current
+  // each output delivers into the board (positive when sourcing). The draw fades
+  // out below about 2 V on the rail, so a floating or not-yet-powered VCC net
+  // carries nothing instead of being pulled to an absurd voltage by a lone
+  // current source.
+  const vccSig = tpl.power?.vcc?.toUpperCase()
+  const vccNode = vccSig !== undefined ? signalToNode.get(vccSig) : undefined
+  const supplyCurrentLine = (terms: string[]): string | undefined => {
+    if (vccNode === undefined || vccNode === '0' || terms.length === 0) return undefined
+    const sum = terms.map((t) => `0.5*((${t}) + sqrt((${t})*(${t}) + 1e-18))`).join(' + ')
+    return `b_${refLc}_icc ${vccNode} 0 I = 0.5*(1 + tanh((v(${vccNode}) - 1)/0.25))*(${sum})`
+  }
+
   const lines: string[] = []
   lines.push(`* xspice-digital ${ref} (${model.templateId})`)
   if (railSource) {
@@ -1083,6 +1103,7 @@ function expandXspiceDigital(
   if (tpl.schmitt) {
     const mid = (vHigh / 2).toFixed(4)
     const analogNodes: string[] = []
+    const outCurrents: string[] = []
     let gi = 0
     for (const g of tpl.gates) {
       gi++
@@ -1095,8 +1116,13 @@ function expandXspiceDigital(
       // Both the input and output analog nodes are single-node island terminals
       // (matches the old adc-input + dac-output push exactly).
       analogNodes.push(inN, outN)
+      // The load current the gate delivers is -i(b_...): a B voltage source
+      // reports the current flowing through it from + to -.
+      if (signalToNode.has((g.out as string).toUpperCase())) outCurrents.push(`-i(b_${refLc}_${gi})`)
     }
-    return { lines, expanded: true, analogNodes }
+    const supply = supplyCurrentLine(outCurrents)
+    if (supply) lines.push(supply)
+    return { lines, expanded: true, analogNodes, links: [] }
   }
 
   const rd = `${tpl.delaysNs}n`
@@ -1152,12 +1178,34 @@ function expandXspiceDigital(
   }
 
   // One dac_bridge per output signal: digital event node → analog board node.
+  // When the chip's VCC and the output are both wired to board nets, the bridge
+  // drives a per-instance node and a 0 V sense source carries its current into
+  // the board node, so the supply-side current source below can draw the same
+  // current from VCC (an ngspice code-model output current cannot be read from
+  // a B-source). Otherwise the bridge drives the board node directly, as before.
+  const outCurrents: string[] = []
+  const links: string[][] = []
   for (const sig of tpl.outputs) {
-    lines.push(`abr_${refLc}_out_${sig.toLowerCase()} [${dNode(sig)}] [${aNode(sig)}] ${dacModel}`)
-    analogNodes.push(aNode(sig))
+    const sigLc = sig.toLowerCase()
+    const padN = aNode(sig)
+    if (vccNode !== undefined && signalToNode.has(sig.toUpperCase())) {
+      const bridgeN = `${refLc}_o_${sigLc}`
+      const senseName = `v_${refLc}_o_${sigLc}`
+      lines.push(`abr_${refLc}_out_${sigLc} [${dNode(sig)}] [${bridgeN}] ${dacModel}`)
+      lines.push(`${senseName} ${bridgeN} ${padN} DC 0`)
+      // The sense source is a DC path, so the bridge node is part of the pad's island.
+      links.push([bridgeN, padN])
+      outCurrents.push(`i(${senseName})`)
+      analogNodes.push(bridgeN, padN)
+    } else {
+      lines.push(`abr_${refLc}_out_${sigLc} [${dNode(sig)}] [${padN}] ${dacModel}`)
+      analogNodes.push(padN)
+    }
   }
+  const supply = supplyCurrentLine(outCurrents)
+  if (supply) lines.push(supply)
 
-  return { lines, expanded: true, analogNodes }
+  return { lines, expanded: true, analogNodes, links }
 }
 
 // ─── Main deck generator ──────────────────────────────────────────────────────
@@ -1555,6 +1603,8 @@ export function generateDeck(opts: GenerateOptions): string[] {
       // an adc input has no DC conductance, so a net touched ONLY by bridges is
       // itself a floating island and needs a bleed.
       for (const n of xspice.analogNodes) islandNodes.link([n])
+      // A 0 V output-current sense source conducts: its two nodes are one island.
+      for (const pair of xspice.links) islandNodes.link(pair)
       continue
     }
   }

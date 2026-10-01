@@ -857,8 +857,13 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
     expect(deckText).toMatch(/d_nand\(rise_delay=9n fall_delay=9n\)/)
     // adc_bridge on input 1A reads the board net 'a' (pad 1 → net A → node a).
     expect(deckText).toMatch(/abr_u1_1a \[a\] \[u1_d_1a\]/)
-    // dac_bridge drives output 1Y back onto board net 'y' (pad 3 → net Y → node y).
-    expect(deckText).toMatch(/abr_u1_out_1y \[u1_d_1y\] \[y\]/)
+    // dac_bridge drives output 1Y back onto board net 'y' (pad 3 → net Y → node y)
+    // through a 0 V sense source (VCC is wired, so the supply side is loaded too).
+    expect(deckText).toMatch(/abr_u1_out_1y \[u1_d_1y\] \[u1_o_1y\]/)
+    expect(deckText).toMatch(/^v_u1_o_1y u1_o_1y y DC 0$/m)
+    // One current source from the VCC board node to ground carries the sourced
+    // output current, faded out below about 2 V on the rail (issue #2).
+    expect(deckText).toMatch(/^b_u1_icc vcc 0 I = 0\.5\*\(1 \+ tanh\(\(v\(vcc\) - 1\)\/0\.25\)\)\*\(.*i\(v_u1_o_1y\).*\)$/m)
     // adc/dac rails from vHigh=5.
     expect(deckText).toContain('adc_bridge(in_low=1.5000 in_high=3.5000)')
     expect(deckText).toContain('dac_bridge(out_low=0 out_high=5.0000)')
@@ -1009,6 +1014,31 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
     expect(deckText).not.toContain('adc_bridge')
     expect(deckText).not.toContain('dac_bridge')
     expect(deckText).not.toContain('d_inverter')
+    // The gate's delivered current (-i of its B-source) is drawn from the VCC
+    // board node (issue #2).
+    expect(deckText).toMatch(/^b_u1_icc vcc 0 I = .*-i\(b_u1_1\)/m)
+  })
+
+  test('with VCC unwired the digital expansion adds no supply source and keeps the direct dac_bridge output', () => {
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].padNet.delete('14')
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: {
+        kind: 'xspice-digital', templateId: '74HC00',
+        pinMap: { '1': '1A', '2': '1B', '3': '1Y', '7': 'GND', '14': 'VCC' },
+      },
+    }]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 5 }],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON },
+    })
+    const deckText = deck.join('\n')
+    expect(deckText).not.toContain('b_u1_icc')
+    expect(deckText).not.toContain('v_u1_o_1y')
+    expect(deckText).toMatch(/abr_u1_out_1y \[u1_d_1y\] \[y\]/)
   })
 
   test('74HC00 still expands from logic74hc.json (5 V rails) when both family files are loaded', () => {
@@ -1717,28 +1747,29 @@ describe('generateDeck — LM339 quad comparator from the real bundled opamp.lib
 describe('M12 — subckt terminal-conductivity analysis (real bundled opamp.lib)', () => {
   const REAL_OPAMP_LIB = readFileSync(join(process.cwd(), 'resources', 'models', 'opamp.lib'), 'utf8')
 
-  test('opamp_core: every terminal is its own group — inp/inn/vcc/vee are sense-only, out conducts only to internal ground-referenced nodes', () => {
-    // Body truth: bin/bg/rp/cp/bout tie e/vpole/obuf/out to internal node 0;
-    // inp/inn appear ONLY inside the b-source expression (v(inp)-v(inn)) and
-    // vcc/vee ONLY inside the clamp expression — none is a branch node. So no
-    // TERMINAL conducts to another terminal.
+  test('opamp_core: inp/inn are sense-only; out, vcc and vee are one group through the supply-current sources', () => {
+    // Body truth: bin senses inp/inn only inside its b-source expression, so
+    // neither is a branch node. The output buffer is referenced to vee (bout
+    // obuf vee, rout obuf osns, vsns osns out), and the supply-current sources
+    // (bsrc and biq) sit between vcc and vee, so out, vcc and vee conduct to one
+    // another. Both sources are scaled by the rails-present measure, so a
+    // floating rail carries no draw.
     expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'opamp_core')).toEqual([
-      ['inp'], ['inn'], ['out'], ['vcc'], ['vee'],
+      ['inp'], ['inn'], ['out', 'vcc', 'vee'],
     ])
   })
 
-  test('LM393 (one nesting level): bsw makes {out,vee} one conductive group; inp/inn/vcc stay sense-only', () => {
+  test('LM393 (one nesting level): inp/inn sense-only; out, vcc and vee one conductive group', () => {
     expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'LM393')).toEqual([
-      ['inp'], ['inn'], ['out', 'vee'], ['vcc'],
+      ['inp'], ['inn'], ['out', 'vcc', 'vee'],
     ])
   })
 
-  test('LM339_QUAD (two nesting levels): out1-4+vee one group via the four LM393 cells; all 8 inputs and vcc sense-only', () => {
+  test('LM339_QUAD (two nesting levels): out1-4, vcc and vee one group via the four LM393 cells; all 8 inputs sense-only', () => {
     expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'LM339_QUAD')).toEqual([
       ['in1p'], ['in1n'],
-      ['out1', 'out2', 'out3', 'out4', 'vee'],
+      ['out1', 'out2', 'out3', 'out4', 'vcc', 'vee'],
       ['in2p'], ['in2n'], ['in3p'], ['in3n'], ['in4p'], ['in4n'],
-      ['vcc'],
     ])
   })
 
@@ -1760,7 +1791,7 @@ describe('M12 — subckt terminal-conductivity analysis (real bundled opamp.lib)
     // SYNTHETIC fixture isolating the E-source rule: the two source-branch
     // pairs union {vss,chg,dsg}; vdd appears only in sense positions. NOTE:
     // this is deliberately NOT the shipped BQ7791502 — the real power-ic.lib
-    // body also carries `rq vdd vss 10Meg` (genuine conductance), which welds
+    // body also carries `rq vdd vss 1.5Meg` (genuine conductance), which welds
     // vdd into the group. The real file is pinned in the suite below.
     const LIB = [
       '* fixture',
