@@ -456,7 +456,15 @@ export interface AppState {
     schematicFileName: string | null
     /** Absolute path of the open board; null for bundled samples and raw-text opens. */
     boardPath: string | null
-    /** sha256 of boardText, filled in shortly after open (async). */
+    /**
+     * sha256 of boardText. Null means "not hashed yet" (or no board), never
+     * "unknown for good": Web Crypto is async, so openBoardFromText returns
+     * before the hash lands. openBoard resolves only after it has landed, and
+     * awaitBoardHash waits for it after either open. Consumers that can run
+     * right after an open (setup-file write, diagnostics, report) treat null as
+     * pending: they omit the hash or say "not computed", and must not treat it
+     * as a final answer.
+     */
     boardSha256: string | null
   }
 
@@ -696,6 +704,13 @@ export interface AppState {
    * run is over (audit applied, parse error shown, or superseded).
    */
   openBoard(boardText: string, fileName: string, opts?: OpenOpts): Promise<void>
+  /**
+   * Resolve with the sha256 of the open board once it has been computed (it is
+   * also in project.boardSha256 by then); null when no board is open or Web
+   * Crypto is unavailable. Resolves at once when the hash already landed. For
+   * callers that open synchronously and need the hash (issue #144).
+   */
+  awaitBoardHash(): Promise<string | null>
   /** Attach a sibling schematic's Sim.* data (re-resolves). */
   setSchematicFromText(schText: string, fileName: string): void
   /**
@@ -1193,6 +1208,9 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
    * Commit a pipeline outcome. Returns false (after recording the parse error)
    * when the board did not parse.
    */
+  /** The in-flight (or finished) hash of the current board; null when there is none. */
+  let boardHashJob: Promise<string | null> | null = null
+
   function applyOpenOutcome(
     outcome: OpenOutcome,
     boardText: string,
@@ -1201,6 +1219,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   ): boolean {
     if (!outcome.ok) {
       const e = outcome.error
+      boardHashJob = null
       store.setState({
         parseError: { message: e.message, line: e.line, col: e.col, fileName },
         // A parse failure of the board means we cannot extract a netlist either.
@@ -1326,11 +1345,14 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     logLoadNotes(o.bomParsed, true)
 
     // Tie results to the exact file: hash the board text in the background.
-    void sha256Hex(boardText).then(hash => {
-      if (hash && store.getState().project.boardText === boardText) {
+    // The state above carries a null hash until this lands (see AppState).
+    const job: Promise<string | null> = sha256Hex(boardText).then(hash => {
+      if (hash && boardHashJob === job && store.getState().project.boardText === boardText) {
         store.setState(st => ({ project: { ...st.project, boardSha256: hash } }))
       }
+      return hash
     })
+    boardHashJob = job
     return true
   }
 
@@ -1422,10 +1444,15 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       get().runCriticAudit()
     },
 
+    async awaitBoardHash() {
+      return boardHashJob ?? get().project.boardSha256
+    },
+
     async openBoard(boardText, fileName, opts) {
       const token = supersedeOpen()
       const live = (): boolean => token === openToken
       resetForOpen()
+      boardHashJob = null
       // No project while the next one is being built: leaving the old board up
       // would let Power On and the panels act on a circuit whose bench state was
       // just reset. The progress strip stands in for it.
@@ -1500,6 +1527,9 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // up, so audit it here rather than leave the Critic empty.
       if (opened && !auditApplied && get().criticReport === null) get().runCriticAudit()
       if (get().openProgress !== null) set({ openProgress: null })
+      // The open is not over until the board is tied to its file: no consumer
+      // that waits for openBoard can observe a null hash (issue #144).
+      if (opened) await get().awaitBoardHash()
     },
 
     setSchematicFromText(schText, fileName) {
