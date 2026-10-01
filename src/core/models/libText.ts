@@ -146,12 +146,31 @@ export function subcktTerminals(text: string, name: string): string[] | null {
   return part.trim().split(/\s+/).filter(Boolean)
 }
 
-const IDENT = /[A-Za-z_][A-Za-z0-9_.$]*/g
+/**
+ * A name token. Unlike a .param or .func name, a .model name may start with a
+ * digit (1N4148, 2N3904, 2N7002 are the usual vendor spellings of discretes), so
+ * the leading character class includes digits. Numbers match too (1k, 3); that
+ * only over-collects names, which is harmless because a card is hoisted only when
+ * it defines one of the collected names.
+ */
+const IDENT = /[A-Za-z0-9_][A-Za-z0-9_.$]*/g
+
+/** Whitespace/punctuation-delimited tokens, which keep a hyphen (a .model named BAT54-7). */
+const DELIMITED = /[^\s(),={}*/+^<>!&|?:;~]+/g
 
 function identsOf(lines: readonly string[]): Set<string> {
   const set = new Set<string>()
-  for (const line of lines) for (const m of line.matchAll(IDENT)) set.add(m[0].toLowerCase())
+  for (const line of lines) {
+    for (const m of line.matchAll(IDENT)) set.add(m[0].toLowerCase())
+    for (const m of line.matchAll(DELIMITED)) set.add(m[0].toLowerCase())
+  }
   return set
+}
+
+/** The name a `.model` card declares: up to whitespace or the opening parenthesis of its parameters. */
+function modelNameOf(rest: string): string | null {
+  const m = /^([^\s(]+)/.exec(rest)
+  return m ? m[1] : null
 }
 
 /** A hoistable top-level card and the names it defines. */
@@ -169,8 +188,8 @@ function topCards(topLevel: readonly string[]): { cards: TopCard[]; ignored: str
     const dir = m[1].toLowerCase()
     const rest = m[2]
     if (dir === 'model') {
-      const name = /^(\S+)/.exec(rest)
-      if (name) cards.push({ line, defines: [name[1].toLowerCase()] })
+      const name = modelNameOf(rest)
+      if (name) cards.push({ line, defines: [name.toLowerCase()] })
     } else if (dir === 'func') {
       const name = /^([A-Za-z_][A-Za-z0-9_.$]*)\s*\(/.exec(rest)
       if (name) cards.push({ line, defines: [name[1].toLowerCase()] })
@@ -188,8 +207,9 @@ function topCards(topLevel: readonly string[]): { cards: TopCard[]; ignored: str
 function neededTopCards(def: LibSubckt, cards: readonly TopCard[]): string[] {
   const own = new Set<string>()
   for (const line of def.lines) {
-    const m = /^\.model\s+(\S+)/i.exec(line)
-    if (m) own.add(m[1].toLowerCase())
+    const m = /^\.model\s+(.*)$/i.exec(line)
+    const name = m ? modelNameOf(m[1]) : null
+    if (name) own.add(name.toLowerCase())
   }
   // Header params are instance-overridable: a top-level .param of the same name must not shadow them.
   const headerParams = new Set<string>()

@@ -127,6 +127,7 @@ const VENDOR_LIB = [
   '* Fictional half-supply part (test fixture, not a vendor model)',
   '.param ratio=0.5',
   '.model dclamp D(Is=1e-14)',
+  '.model 1N4148 D(Is=2.5e-9 Rs=0.6)',
   '',
   '.subckt HALFCORE in out gnd',
   'e1 out gnd in gnd {ratio}',
@@ -135,6 +136,7 @@ const VENDOR_LIB = [
   '',
   '.SUBCKT HALF555 p1 p2 p3 p4 p5 p6 p7 p8',
   'xh p8 p3 p1 HALFCORE',
+  'dn p1 p8 1N4148',
   'r2 p2 p1 1meg',
   'r4 p4 p8 1meg',
   'r5 p5 p1 1meg',
@@ -213,6 +215,8 @@ describe.skipIf(!haveNgspice)('issue #17: Import .lib binds the real model, end 
     const deck = decks[decks.length - 1]
     expect(deck.some((l) => /^\.subckt HALF555/i.test(l))).toBe(true)
     expect(deck.some((l) => /^\.subckt HALFCORE/i.test(l))).toBe(true)
+    // The digit-leading top-level .model (1N4148) was hoisted into the block, or ngspice would reject the deck.
+    expect(deck.some((l) => /^\.model 1N4148 /i.test(l))).toBe(true)
     expect(deck.some((l) => /\.control/i.test(l))).toBe(false)
 
     const vcc = op!.get(netId(store, 'VCC'))!

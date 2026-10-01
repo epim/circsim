@@ -138,6 +138,58 @@ describe('bundleSubckt: the text Import .lib binds (reproduction of #17)', () =>
     expect(r.text).not.toMatch(/^\.param gain=1$/m)
   })
 
+  it('hoists a top-level .model whose name starts with a digit (1N4148, 2N3904, 2N7002)', () => {
+    const lib = [
+      '.model 1N4148 D(Is=2.5e-9 Rs=0.6)',
+      '.model 2N3904 NPN(Is=1e-14 Bf=100)',
+      '.model 2N7002 NMOS(Vto=2)',
+      '.model 1N5819 D(Is=1e-8)',
+      '.subckt CLAMP p1 p2 p3',
+      'd1 p1 p3 1N4148',
+      'q1 p2 p1 p3 2N3904',
+      'm1 p2 p1 p3 p3 2N7002',
+      '.ends CLAMP',
+      '',
+    ].join('\n')
+    const r = bundleSubckt(lib, 'CLAMP')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.text).toMatch(/^\.model 1N4148 /m)
+    expect(r.text).toMatch(/^\.model 2N3904 /m)
+    expect(r.text).toMatch(/^\.model 2N7002 /m)
+    expect(r.text).not.toMatch(/1N5819/)
+    // Hoisted cards sit inside the block, after the header and before the body.
+    const lines = r.text.split('\n')
+    expect(lines[0]).toMatch(/^\.subckt CLAMP/i)
+    expect(lines.findIndex((l) => /^\.model 1N4148/.test(l))).toBeLessThan(lines.findIndex((l) => /^d1 /.test(l)))
+  })
+
+  it('hoists a digit-leading model written with its parameters attached, and a hyphenated name', () => {
+    const lib = [
+      '.model 1N4148(Is=2.5e-9 Rs=0.6)',
+      '.model BAT54-7 D(Is=1e-7)',
+      '.subckt D2 a b c',
+      'd1 a b 1N4148',
+      'd2 b c BAT54-7',
+      '.ends D2',
+      '',
+    ].join('\n')
+    const r = bundleSubckt(lib, 'D2')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.text).toMatch(/^\.model 1N4148\(/m)
+    expect(r.text).toMatch(/^\.model BAT54-7 /m)
+  })
+
+  it('does not hoist a digit-leading top-level model the block redefines itself', () => {
+    const lib = ['.model 1N4148 D(Is=1e-9)', '.subckt P a k', '.model 1N4148 D(Is=1e-14)', 'd1 a k 1N4148', '.ends P', ''].join('\n')
+    const r = bundleSubckt(lib, 'P')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.text.match(/^\.model 1N4148 /gm)).toHaveLength(1)
+    expect(r.text).toMatch(/Is=1e-14/)
+  })
+
   it('does not hoist a model the block already defines itself', () => {
     const lib = ['.model dx D(Is=1e-9)', '.subckt P a k', '.model dx D(Is=1e-14)', 'd1 a k dx', '.ends P', ''].join('\n')
     const r = bundleSubckt(lib, 'P')
