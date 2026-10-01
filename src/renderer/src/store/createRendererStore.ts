@@ -15,10 +15,23 @@
 
 import { createAppStore, type AppStore } from './appStore'
 import { createPortSimClient } from '../ipc/simClient'
+import { createInlineRunner } from '../boardOpen/runner'
+import { createWorkerOpenRunner, type WorkerLike } from '../boardOpen/workerRunner'
+// `?worker&inline` bundles the worker into a blob, which the page's
+// `worker-src blob:` CSP already allows, and works from file:// where a module
+// worker URL would not.
+import BoardOpenWorker from '../boardOpen/boardOpen.worker?worker&inline'
 
 export function createRendererStore(): AppStore {
   const client = createPortSimClient()
-  const store = createAppStore({ simClient: client })
+  // Board open (parse, extract, resolve, audit) runs in a Worker so a large
+  // board cannot freeze the window (issue #55). If a Worker cannot start, the
+  // runner falls back to running the same pipeline inline.
+  const openRunner = createWorkerOpenRunner(
+    () => new BoardOpenWorker() as unknown as WorkerLike,
+    createInlineRunner(),
+  )
+  const store = createAppStore({ simClient: client, openRunner })
 
   // The live SimHost MessagePort is delivered to the MAIN world by the preload
   // via `window.postMessage('circsim:simhost-port', '*', [port])` — the canonical

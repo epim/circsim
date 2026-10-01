@@ -27,6 +27,7 @@ import CriticPanel from './panels/CriticPanel'
 import About from './panels/About'
 import { NoBoardState } from './panels/EmptyStates'
 import { AppStoreProvider, useApp, useAppStoreApi } from './store/storeContext'
+import OpenProgressBar from './boardOpen/OpenProgressBar'
 import type { AppStore } from './store/appStore'
 import { resolutionSummary } from './store/appStore'
 import { openProjectFromPath, classifyFile } from './ipc/fileOpen'
@@ -50,6 +51,7 @@ function Shell(): React.ReactElement {
   const opVoltages = useApp(s => s.opVoltages)
   const voltageRange = useApp(s => s.voltageRange)
   const parseError = useApp(s => s.parseError)
+  const opening = useApp(s => s.openProgress !== null)
   const viewerOnly = useApp(s => s.viewerOnly)
   const resolutions = useApp(s => s.resolutions)
 
@@ -103,7 +105,7 @@ function Shell(): React.ReactElement {
       undefined,
       window.circsim.fileExists,
     )
-    store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+    void store.getState().openBoard(opened.boardText, opened.boardFileName, {
       schematicText: opened.schematicText,
       schematicFileName: opened.schematicFileName,
       bomText: opened.bomText,
@@ -120,7 +122,7 @@ function Shell(): React.ReactElement {
         undefined,
         window.circsim.fileExists,
       )
-      store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+      void store.getState().openBoard(opened.boardText, opened.boardFileName, {
         schematicText: opened.schematicText,
         schematicFileName: opened.schematicFileName,
         bomText: opened.bomText,
@@ -141,7 +143,7 @@ function Shell(): React.ReactElement {
         undefined,
         window.circsim.fileExists,
       )
-      store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+      void store.getState().openBoard(opened.boardText, opened.boardFileName, {
         schematicText: opened.schematicText,
         schematicFileName: opened.schematicFileName,
         bomText: opened.bomText,
@@ -203,14 +205,14 @@ function Shell(): React.ReactElement {
             undefined,
             window.circsim.fileExists,
           )
-          store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+          void store.getState().openBoard(opened.boardText, opened.boardFileName, {
             schematicText: opened.schematicText,
             schematicFileName: opened.schematicFileName,
             bomText: opened.bomText,
           })
         } else {
           const text = await boardFile.text()
-          store.getState().openBoardFromText(text, boardFile.name)
+          void store.getState().openBoard(text, boardFile.name)
         }
         return
       }
@@ -271,6 +273,8 @@ function Shell(): React.ReactElement {
       {/* Simulation toolbar: Power On · Run/Pause · pace · overlay (Spec §11). */}
       <Toolbar overlay={overlay} onOverlay={setOverlay} />
 
+      <OpenProgressBar />
+
       {parseError && (
         <div style={errorCardStyle}>
           <strong>Could not parse {parseError.fileName ?? 'board'}.</strong>{' '}
@@ -307,7 +311,7 @@ function Shell(): React.ReactElement {
                   voltageRange={voltageRange}
                   overlay={overlay}
                 />
-              ) : (
+              ) : opening ? null : (
                 <NoBoardState
                   onOpen={handleOpen}
                   onOpenSample={handleOpenSample}

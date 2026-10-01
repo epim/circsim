@@ -27,6 +27,8 @@ The moment a board loads, circsim:
 3. auto-suggests a **ground** net and **supply** nets in the Ground & Power panel;
 4. runs the static [Board Critic](./run-critic) checks (floating nets, clearance, decoupling, loop area).
 
+Parsing, netlist extraction, model resolution and the Board Critic run in a background worker, so the window stays responsive while a large board opens. A strip under the toolbar names the stage (parsing, extracting, resolving, then running the Board Critic). The board appears as soon as it is resolved; the Board Critic panel fills in when its checks finish, which on a very large board (thousands of parts, tens of thousands of tracks) takes a second or two longer than the board itself. If you open another board in the meantime, the earlier open is abandoned.
+
 The header shows a live summary, `"12 parts · 10 ok · 2 unresolved"`, so you immediately see whether anything needs attention.
 
 ::: tip It parsed but something's off?
