@@ -26,6 +26,7 @@ import Scope from './panels/Scope'
 import CriticPanel from './panels/CriticPanel'
 import About from './panels/About'
 import { NoBoardState } from './panels/EmptyStates'
+import GuidedStateHost from './panels/GuidedStateHost'
 import { AppStoreProvider, useApp, useAppStoreApi } from './store/storeContext'
 import type { AppStore } from './store/appStore'
 import { resolutionSummary } from './store/appStore'
@@ -321,6 +322,8 @@ function Shell(): React.ReactElement {
               )}
               {/* Plain-language dark-LED coach (non-blocking overlay). */}
               {board && <CoachNotes />}
+              {/* Spec section 12 guided states: blocked Energize / Power On / Run. */}
+              {board && <GuidedStateHost />}
               {selectedRef && (
                 <div style={selectionBadge}>Selected: {selectedRef}</div>
               )}

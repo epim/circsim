@@ -325,6 +325,9 @@ export interface BoardHooks {
 
 // ─── store shape ─────────────────────────────────────────────────────────────
 
+/** Why a start attempt was blocked (Spec §12 guided empty-states). */
+export type GuidedBlock = 'no-ground' | 'no-source'
+
 export type SimRunState = 'idle' | 'op' | 'running' | 'paused'
 
 export interface ParseErrorInfo {
@@ -396,6 +399,14 @@ export interface AppState {
    * clearly know it exists); never set for user-attached supplies.
    */
   autoAttachedSupplyId: string | null
+  /**
+   * Why the last Energize / Power On / Run attempt could not proceed (Spec §12
+   * guided empty-state): 'no-ground' (no ground net designated) or 'no-source'
+   * (no wired source). The UI mounts NoGroundState / NoSourceState from this so
+   * a blocked click is never silent. Cleared on a successful start, on dismiss,
+   * and when a board is opened.
+   */
+  guidedBlock: GuidedBlock | null
 
   // ── sim state ────────────────────────────────────────────────────────────────
   simState: SimRunState
@@ -699,6 +710,8 @@ export interface AppState {
 
   /** Dismiss the bench-restart toast. */
   dismissBenchRestartToast(): void
+  /** Dismiss the guided no-ground / no-source card (see `guidedBlock`). */
+  dismissGuidedBlock(): void
 
   /** Dismiss the convergence-failure card. */
   dismissConvergenceCard(): void
@@ -910,6 +923,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     suggestedSupplyNetIds: [],
     selectedInstrumentId: null,
     autoAttachedSupplyId: null,
+    guidedBlock: null,
     simState: 'idle',
     deckDirty: false,
     opVoltages: null,
@@ -961,6 +975,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         instruments: [],
         selectedInstrumentId: null,
         autoAttachedSupplyId: null,
+        guidedBlock: null,
         stubOverrides: new Map(),
         pinMapOverrides: new Map(),
         railOverrides: new Map(),
@@ -1457,17 +1472,24 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     async powerOn() {
       const { circuit, resolutions, instruments, groundNetId } = get()
-      if (!circuit || groundNetId === null) {
-        // Guided empty-state (Spec §12): nothing to power on.
+      if (!circuit) return null
+      if (groundNetId === null) {
+        // Guided empty-state (Spec §12): surface the no-ground card, never a
+        // silent no-op.
+        set({ guidedBlock: 'no-ground' })
         return null
       }
-      // Guided empty-state: zero resolved (wired) sources → no-op (Spec §12).
-      // An UNWIRED source added from the shelf palette (bench-leads) doesn't
-      // count — it drives nothing until a lead is dropped on a net.
+      // Guided empty-state: zero resolved (wired) sources (Spec §12). An
+      // UNWIRED source added from the shelf palette (bench-leads) doesn't
+      // count: it drives nothing until a lead is dropped on a net.
       const hasSource = wiredInstruments(instruments).some(
         i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
       )
-      if (!hasSource) return null
+      if (!hasSource) {
+        set({ guidedBlock: 'no-source' })
+        return null
+      }
+      if (get().guidedBlock !== null) set({ guidedBlock: null })
 
       // Snapshot every deck input ONCE per powerOn so the pass-1 deck, the
       // sensing skip-list, and the pass-2 deck all agree even if the user edits
@@ -1570,7 +1592,12 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         if (gnd) get().setGround(gnd.id)
       }
       const groundNetId = get().groundNetId
-      if (groundNetId === null) return null // nothing we can tie to 0 V
+      if (groundNetId === null) {
+        // Nothing we can tie to 0 V (e.g. every net is auto-named): guide the
+        // user to designate one instead of a silent no-op (Spec §12).
+        set({ guidedBlock: 'no-ground' })
+        return null
+      }
 
       // 2) Ensure a driving source. Reuse the open-time auto-supply: attach a
       //    default 5 V DC supply on the top suggested supply net (≠ ground) when
@@ -1601,15 +1628,21 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     run() {
       const { circuit, instruments, groundNetId, simState, deckDirty } = get()
-      if (!circuit || groundNetId === null) {
-        // Guided empty-state (Spec §12): no ground → Run is a no-op, not a dead button.
+      if (!circuit) return
+      if (groundNetId === null) {
+        // Guided empty-state (Spec §12): no ground, show the card, not a dead button.
+        set({ guidedBlock: 'no-ground' })
         return
       }
-      // Guided empty-state: zero resolved (wired) sources → no-op (Spec §12).
+      // Guided empty-state: zero resolved (wired) sources (Spec §12).
       const hasSource = wiredInstruments(instruments).some(
         i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
       )
-      if (!hasSource) return
+      if (!hasSource) {
+        set({ guidedBlock: 'no-source' })
+        return
+      }
+      if (get().guidedBlock !== null) set({ guidedBlock: null })
 
       // Resume-from-pause with a clean deck: do NOT reload, just resume.
       if (simState === 'paused' && !deckDirty) {
@@ -1658,6 +1691,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     dismissBenchRestartToast() {
       set({ benchRestartToast: null })
+    },
+
+    dismissGuidedBlock() {
+      set({ guidedBlock: null })
     },
 
     dismissConvergenceCard() {
