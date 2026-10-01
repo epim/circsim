@@ -26,6 +26,34 @@ module.exports = {
       }
     },
     {
+      // CLAUDE.md: wall-clock assertions in tests must use ratios or operation
+      // counts, never an absolute millisecond bound. CI runners (macos-15-intel
+      // in particular) are 2x to 5x slower than a dev machine, so an absolute
+      // bound turns into a flake. Time a small and a large input and assert the
+      // growth ratio (see src/core/critic/__tests__/sparse.test.ts), or assert
+      // an operation count. ESLint reports the file and line of each offender.
+      files: ['**/__tests__/**/*.ts', '**/__tests__/**/*.tsx'],
+      rules: {
+        'no-restricted-syntax': [
+          'error',
+          {
+            // expect(ms).toBeLessThan(400), expect(elapsed).toBeLessThanOrEqual(25), ...
+            selector:
+              "CallExpression[callee.property.name=/^toBeLessThan(OrEqual)?$/][callee.object.callee.name='expect'][callee.object.arguments.0.name=/^(ms|elapsed|took|duration|perMove)|(Ms|Elapsed|Took|Duration)$/]",
+            message:
+              'No absolute millisecond bound in tests: compare a small and a large input as a growth ratio (see src/core/critic/__tests__/sparse.test.ts) or assert an operation count. CI runners are up to 5x slower than a dev machine.'
+          },
+          {
+            // expect(performance.now() - t0).toBeLessThan(16), expect(Date.now() - t0).toBeLessThan(5000)
+            selector:
+              "CallExpression[callee.property.name=/^toBeLessThan(OrEqual)?$/][callee.object.callee.name='expect'][callee.object.arguments.0] :matches(CallExpression[callee.object.name='performance'][callee.property.name='now'], CallExpression[callee.object.name='Date'][callee.property.name='now'])",
+            message:
+              'No absolute millisecond bound in tests: compare a small and a large input as a growth ratio (see src/core/critic/__tests__/sparse.test.ts) or assert an operation count. CI runners are up to 5x slower than a dev machine.'
+          }
+        ]
+      }
+    },
+    {
       // Forbid electron, react, and three in core modules (must stay pure TS)
       files: ['src/core/**/*.ts', 'src/core/**/*.tsx'],
       rules: {
