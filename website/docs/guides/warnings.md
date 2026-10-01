@@ -17,7 +17,11 @@ You can **minimize** it (the **»** button) to a compact header badge (**⚠ N a
 
 ## "Check these voltages": the operating-point caveat
 
-*(persistent, appears after a fallback solve)* The [operating point](./energize) converged, but only through a **numerical fallback**: *gmin-stepping* or *source-stepping* (solver techniques that ease a stubborn circuit toward a solution when a direct solve won't settle), or a transient assist, rather than a clean direct solve. You don't need to understand those methods; the point is that a fallback op can report a misleading `0.000 V` on nets it couldn't resolve, so treat the voltages as suspect and look for the underlying cause (a floating node, a missing ground path). A clean solve shows no caveat.
+*(persistent, appears after a fallback solve)* The banner reads: **"Check these voltages. These voltages needed a workaround to solve; treat 0.000 V readings as unknown."** The [operating point](./energize) converged, but only through a **numerical fallback** rather than a clean direct solve, and a fallback op can report a misleading `0.000 V` on nets it couldn't resolve. Treat the voltages as suspect and look for the underlying cause (a floating node, a missing ground path). A clean solve shows no caveat.
+
+You don't need to understand the solver to use this. If you're curious which workaround ran (*gmin-stepping* or *source-stepping*, techniques that ease a stubborn circuit toward a solution, or a transient assist), open the **Details** disclosure under the banner.
+
+The bundled op-amp, comparator, 555, and regulator models are written so that ordinary boards solve directly, with no fallback. So when this banner does appear on a board built from them, it is a real signal about the circuit (typically a floating node or a missing DC path), not routine noise to dismiss.
 
 ## "The simulator couldn't find a stable solution"
 
@@ -26,6 +30,14 @@ You can **minimize** it (the **»** button) to a compact header badge (**⚠ N a
 ## "Check this rail": a gated-off rail
 
 *(amber)* A digital chip's VDD net measured near 0 V at the operating point, so circsim used the family-default logic swing instead, which means logic thresholds may be wrong if that rail is actually powered during a transient. Type the real rail voltage into the inline field and click **Set rail voltage** to fix it. See [rail sensing](../reference/architecture#rail-sensing).
+
+## "Undriven nets held at 0 V"
+
+*(amber)* One or more nets have no path to ground and nothing that drives them, for example a CMOS input wired only to an unused or unmodeled part, or an enable line with no pull-down. To keep the solve numerically stable, circsim ties each such net to ground through a 1 GOhm resistor, so the net reads **0 V in the simulation**. That 0 V is an artifact of the tie, not a measurement: on the real board the net floats, and whatever it feeds (a logic input, a comparator, a gate) can read any level. The banner lists every affected net by its KiCad name.
+
+A net driven by a modeled chip output is **not** listed, even when nothing else gives it a path to ground: a logic gate output, or an op-amp output that feeds only high-impedance inputs (a voltage follower into a comparator input, say). circsim still ties that net to ground through 1 GOhm, but the output holds it at the level the model drives, so its reading is the simulated output and not an artifact. A part with no model drives nothing in the simulation, so a net only it would drive is listed. A capacitor does not count as a driver either: an input AC-coupled to a gate output through a capacitor, with no bias resistor, is still listed, because the capacitor passes no DC and the input sits at 0 V in the simulation.
+
+Fix it by giving the net a real source: add the missing pull-up or pull-down, connect the unused input, or attach the part that drives it. The note clears on the next solve once every net has a driver or a path to ground.
 
 ## "Pin map corrected from schematic"
 
@@ -39,7 +51,7 @@ You can **minimize** it (the **»** button) to a compact header badge (**⚠ N a
 
 *(dismissable toasts)*
 
-- **Simulator restarted**: the isolated SPICE engine crashed and recovered automatically. Your work is intact; just re-run. (If it says it *couldn't* restart, restart circsim.)
+- **Simulator restarted**: the isolated SPICE engine crashed and recovered automatically. Your work is intact. If the bench was running, it restarts on its own from time zero. If the bench was paused, the paused run cannot be recovered: the notice says so, the bench goes back to idle, and pressing **Run** starts it again. (If it says it *couldn't* restart, restart circsim.)
 - **Bench restarted**: a long continuous transient hit its memory/time window and restarted to stay bounded. Scope history is kept. Note that sequential-logic state (flip-flops, counters) resets on a bench restart.
 
 ## The Sim Log

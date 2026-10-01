@@ -167,4 +167,49 @@ describe('checkIrDrop', () => {
     const c = extract(b)
     expect(() => runCritic(b, c, opFor(c, { U1: 1 }))).not.toThrow()
   })
+
+  // Copper-weight scaling (issue #69). R = rho L / (w t), t = oz x 34.8 um.
+  // The 100mm x 0.25mm trace is 0.1931 ohm at 1 oz, 0.0966 at 2 oz, 0.3862 at 0.5 oz.
+  describe('copper weight', () => {
+    function irAt(oz: number, amps: number) {
+      const b = makeBoard(LONG_THIN)
+      const c = extract(b)
+      return runCritic(b, c, opFor(c, { U1: amps }), { copperOz: oz }).findings.find(
+        (f) => f.check === 'ir-drop',
+      )
+    }
+
+    it('2 oz halves the drop: 2 A over 100mm x 0.25mm sags 0.1931 V (same as 1 A at 1 oz)', () => {
+      const f = irAt(2, 2)
+      expect(f).toBeDefined()
+      expect(f!.metrics!.dropV).toBeCloseTo(0.1931, 3)
+      expect(f!.metrics!.sagPct).toBeCloseTo(3.86, 1)
+      expect(f!.severity).toBe('warn')
+    })
+
+    it('0.5 oz doubles the drop: 0.5 A over 100mm x 0.25mm sags 0.1931 V', () => {
+      const f = irAt(0.5, 0.5)
+      expect(f).toBeDefined()
+      expect(f!.metrics!.dropV).toBeCloseTo(0.1931, 3)
+      expect(f!.severity).toBe('warn')
+    })
+
+    it('the same 1 A load warns at 1 oz but clean at 2 oz (0.0966 V, 1.9%)', () => {
+      expect(irAt(1, 1)!.metrics!.dropV).toBeCloseTo(0.1931, 3)
+      // 1.93% is under the 2% warn threshold, so heavier copper clears the finding.
+      expect(irAt(2, 1)).toBeUndefined()
+    })
+
+    it('0.5 oz at 1 A escalates to error (0.3862 V, 7.7%)', () => {
+      const f = irAt(0.5, 1)
+      expect(f).toBeDefined()
+      expect(f!.severity).toBe('error')
+      expect(f!.metrics!.dropV).toBeCloseTo(0.3862, 3)
+    })
+
+    it('states the copper weight used in the assumption text', () => {
+      expect(irAt(2, 2)!.assumption).toContain('2 oz copper')
+      expect(irAt(0.5, 0.5)!.assumption).toContain('0.5 oz copper')
+    })
+  })
 })

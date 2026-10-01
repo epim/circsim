@@ -278,6 +278,31 @@ describe('selectPinMap — footprint regex → pinMap; else defaultPinMap + warn
     expect(pinMap).toEqual({ '1': 'e', '2': 'b', '3': 'c' })
     expect(warnings).toHaveLength(0)
   })
+
+  it('pinMaps keys are case-insensitive regexes (issue #69)', () => {
+    // Key is written lower-case, footprint name is mixed case; the default map
+    // differs so a missed match is visible in the result and as a warning.
+    const entry = makeEntry(
+      'diode-1n4148',
+      { mpn: ['1N4148'] },
+      { 'd_(sod|sma).*': { '1': '2', '2': '1' } },
+      { '1': 'a', '2': 'b' },
+    )
+    const { pinMap, warnings } = selectPinMap(entry, 'Diode_SMD:D_SMA_Handsoldering')
+    expect(pinMap).toEqual({ '1': '2', '2': '1' })
+    expect(warnings).toHaveLength(0)
+
+    // And the reverse: upper-case key against a lower-case footprint name.
+    const upper = makeEntry(
+      'bjt',
+      { mpn: ['2N3904'] },
+      { 'SOT-23.*': { '1': 'e', '2': 'b', '3': 'c' } },
+      { '1': 'x', '2': 'y', '3': 'z' },
+    )
+    const r = selectPinMap(upper, 'package_to_sot_smd:sot-23')
+    expect(r.pinMap).toEqual({ '1': 'e', '2': 'b', '3': 'c' })
+    expect(r.warnings).toHaveLength(0)
+  })
 })
 
 // ─── resolveAll tier 3 integration ───────────────────────────────────────────

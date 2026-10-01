@@ -112,8 +112,13 @@ export class SimhostSupervisor {
 
   private respawnTimer: ReturnType<typeof setTimeout> | null = null
 
-  /** true once the renderer has called onRendererReady() for the current spawn. */
-  private rendererReady = false
+  /**
+   * true once the renderer page has loaded (onRendererReady()). This describes
+   * the page, not a spawn: it survives SimHost respawns so that every respawn can
+   * re-run the renderer half of the port handshake (#16). did-finish-load fires
+   * once per page load, so nothing else would ever deliver the new port2.
+   */
+  private rendererLoaded = false
 
   /** Bound exit listener so we can detach it from the dead child. */
   private boundExitListener: ((code: number) => void) | null = null
@@ -152,7 +157,7 @@ export class SimhostSupervisor {
    * In tests: call directly after setting up stubs.
    */
   onRendererReady(): void {
-    this.rendererReady = true
+    this.rendererLoaded = true
     this.doRendererHandshake()
   }
 
@@ -178,7 +183,6 @@ export class SimhostSupervisor {
 
     // Create a fresh MessageChannel for this spawn (one-time handshake).
     this.currentPair = this.portPairFactory()
-    this.rendererReady = false
 
     const child = this.fork(this.simhostPath)
     this.child = child
@@ -191,20 +195,19 @@ export class SimhostSupervisor {
     this.boundExitListener = listener
     child.on('exit', listener)
 
-    // If the renderer was already ready from a previous spawn, deliver port2
-    // for this new spawn now. (Handles the case where the renderer outlives a
-    // SimHost crash and is already loaded when we respawn.)
-    if (this.rendererReady) {
-      this.doRendererHandshake()
-    }
+    // If the renderer page is already loaded (the usual case after a crash, since
+    // the renderer outlives SimHost), deliver this spawn's port2 now. The
+    // renderer attaches it and replays the deck (createRendererStore). When the
+    // page has not loaded yet, onRendererReady() delivers the latest pair later.
+    this.doRendererHandshake()
   }
 
   /**
    * Deliver port2 to the renderer. Called from onRendererReady() (initial load)
-   * and from spawnChild() when the renderer is already up after a crash.
+   * and from every spawnChild() once the renderer page has loaded.
    */
   private doRendererHandshake(): void {
-    if (!this.rendererReady) return
+    if (!this.rendererLoaded) return
     if (!this.currentPair) return
     const wc = this.webContents
     if (!wc || wc.isDestroyed()) return
