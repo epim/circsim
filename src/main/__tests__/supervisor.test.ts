@@ -305,7 +305,8 @@ describe('SimhostSupervisor', () => {
 
     stubs[0]!.triggerExit(1)
     vi.advanceTimersByTime(250)
-    supervisor.onRendererReady() // renderer re-connected after crash
+    // Production never calls onRendererReady() again (did-finish-load fires once
+    // per page load), so the respawn itself must re-deliver port2 (#16).
 
     expect(pairCount).toBe(2)
     // Second pair's port1 should have been sent to the new child
@@ -313,6 +314,83 @@ describe('SimhostSupervisor', () => {
       { type: 'port' },
       expect.arrayContaining([pairs[1]!.port1])
     )
+  })
+
+  it('re-delivers a fresh port2 to an already-loaded renderer after every respawn (#16)', () => {
+    let spawnCount = 0
+    const stubs = Array.from({ length: 4 }, makeStubChild)
+    const pairs = Array.from({ length: 4 }, makeStubPortPair)
+    let pairCount = 0
+    const fork: ForkFn = () => stubs[spawnCount++]!.child
+    const portPairFactory: PortPairFactory = () => pairs[pairCount++]!
+    const wc = makeStubWebContents()
+    const portsByDelivery: unknown[][] = []
+    const origPost = wc.postMessage.bind(wc)
+    wc.postMessage = (channel, msg, transfer) => {
+      if (channel === 'simhost-port') portsByDelivery.push(transfer ?? [])
+      origPost(channel, msg, transfer)
+    }
+
+    const supervisor = new SimhostSupervisor({ fork, portPairFactory })
+    supervisor.setWebContents(wc)
+    supervisor.start()
+    supervisor.onRendererReady() // did-finish-load, exactly once
+    expect(portsByDelivery.length).toBe(1)
+
+    stubs[0]!.triggerExit(1)
+    vi.advanceTimersByTime(250)
+    expect(portsByDelivery.length).toBe(2)
+    expect(portsByDelivery[1]).toEqual([pairs[1]!.port2])
+
+    stubs[1]!.triggerExit(1)
+    vi.advanceTimersByTime(1000)
+    expect(portsByDelivery.length).toBe(3)
+    expect(portsByDelivery[2]).toEqual([pairs[2]!.port2])
+  })
+
+  it('does not deliver port2 on respawn when the renderer has not loaded yet', () => {
+    const stubs = Array.from({ length: 2 }, makeStubChild)
+    const pairs = Array.from({ length: 2 }, makeStubPortPair)
+    let spawnCount = 0
+    let pairCount = 0
+    const fork: ForkFn = () => stubs[spawnCount++]!.child
+    const portPairFactory: PortPairFactory = () => pairs[pairCount++]!
+    const wc = makeStubWebContents()
+    const supervisor = new SimhostSupervisor({ fork, portPairFactory })
+    supervisor.setWebContents(wc)
+    supervisor.start()
+
+    stubs[0]!.triggerExit(1) // crash before did-finish-load
+    vi.advanceTimersByTime(250)
+    expect(wc.calls.filter((c) => c.channel === 'simhost-port').length).toBe(0)
+
+    // The page finishes loading: it gets the LATEST pair's port2, once.
+    supervisor.onRendererReady()
+    const deliveries = wc.calls.filter((c) => c.channel === 'simhost-port')
+    expect(deliveries.length).toBe(1)
+  })
+
+  it('skips the re-delivery when the window is destroyed and does not throw', () => {
+    const stubs = Array.from({ length: 2 }, makeStubChild)
+    let spawnCount = 0
+    const fork: ForkFn = () => stubs[spawnCount++]!.child
+    const portPairFactory: PortPairFactory = () => makeStubPortPair()
+    let destroyed = false
+    const posts: string[] = []
+    const supervisor = new SimhostSupervisor({ fork, portPairFactory })
+    supervisor.setWebContents({
+      isDestroyed: () => destroyed,
+      postMessage: (channel) => {
+        posts.push(channel)
+      }
+    })
+    supervisor.start()
+    supervisor.onRendererReady()
+    destroyed = true
+    stubs[0]!.triggerExit(1)
+    expect(() => vi.advanceTimersByTime(250)).not.toThrow()
+    expect(spawnCount).toBe(2)
+    expect(posts.length).toBe(1)
   })
 
   // ── Dispose ────────────────────────────────────────────────────────────────

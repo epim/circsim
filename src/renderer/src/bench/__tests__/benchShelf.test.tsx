@@ -1,5 +1,5 @@
 import React from 'react'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -68,5 +68,29 @@ describe('BenchShelf — panels mirror the store', () => {
   })
   it('no probe-net button without a selected net', () => {
     expect(renderShelf(openedStore())).not.toContain('data-testid="probe-net-btn"')
+  })
+})
+
+describe('BenchShelf collapse (#33)', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('is expanded by default and offers a hide toggle', () => {
+    const html = renderShelf(openedStore())
+    expect(html).toContain('data-testid="bench-panels"')
+    expect(html).toContain('data-testid="shelf-toggle"')
+    expect(html).toContain('aria-expanded="true"')
+  })
+
+  it('renders only the header strip when the remembered state is collapsed', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k === 'circsim.layout.collapsed.shelf' ? '1' : null),
+      setItem: () => undefined,
+    })
+    const html = renderShelf(openedStore())
+    expect(html).not.toContain('data-testid="bench-panels"')
+    expect(html).not.toContain('data-testid="supply-volts-knob"')
+    expect(html).toContain('data-testid="shelf-toggle"')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('data-testid="add-instrument-btn"')
   })
 })
