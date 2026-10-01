@@ -46,12 +46,29 @@ function readCards(file: string): Map<string, { type: string; card: string }> {
   while ((m = re.exec(joined))) {
     out.set(m[2].toUpperCase(), { type: m[3].toUpperCase(), card: m[1].replace(/\s+/g, ' ').trim() })
   }
+  // A model-card entry may be a two-terminal diode subcircuit (the SMAJ24A TVS keeps
+  // its forward path and reverse clamp in separate branches, issue #86). The deck
+  // generator instantiates it by position, anode first, exactly like a .model diode.
+  const subRe = /^\s*\.subckt\s+(\S+)\s+\S+\s+\S+\s*$[\s\S]*?^\s*\.ends[^\r\n]*/gim
+  while ((m = subRe.exec(text))) {
+    out.set(m[1].toUpperCase(), { type: 'D_SUBCKT', card: m[0].trim() })
+  }
   return out
 }
 
 /** A one-source bias deck that instantiates the device and inlines its card. */
 function biasDeck(name: string, type: string, card: string): string[] {
   switch (type) {
+    case 'D_SUBCKT':
+      return [
+        `* ${name}`,
+        'v1 a 0 dc 5',
+        'r1 a k 1k',
+        `x1 k 0 ${name}`,
+        ...card.split(/\r?\n/),
+        '.op',
+        '.end'
+      ]
     case 'D':
       return [`* ${name}`, 'v1 a 0 dc 5', 'r1 a k 1k', `d1 k 0 ${name}`, card, '.op', '.end']
     case 'NPN':
@@ -94,7 +111,7 @@ function biasDeck(name: string, type: string, card: string): string[] {
 
 /** Crude physics sanity check per device class. */
 function physicsOk(type: string, v: Record<string, number>): boolean {
-  if (type === 'D') {
+  if (type === 'D' || type === 'D_SUBCKT') {
     // anode=k, cathode=0; conducting → 0 < Vf < 5, current flowing.
     const vf = v['k']
     return Number.isFinite(vf) && vf > 0.05 && vf < 5
@@ -152,8 +169,8 @@ describe.skipIf(!haveNgspice)('bundled model library loads in real ngspice', () 
           )
         } else {
           const detail =
-            found.type === 'D'
-              ? `Vf=${values['k'].toFixed(3)}V`
+            found.type === 'D' || found.type === 'D_SUBCKT'
+              ?`Vf=${values['k'].toFixed(3)}V`
               : found.type === 'NPN' || found.type === 'PNP'
                 ? `Vcol=${values['col'].toFixed(3)}V`
                 : found.type === 'VDMOS'

@@ -34,7 +34,7 @@ import type { LibraryEntry } from '../../core/models/types'
 import { extract, suggestGround } from '../../core/netlist/extract'
 import { generateDeck } from '../../core/spicegen/generate'
 import type { Instrument } from '../../core/spicegen/instruments'
-import { SimHost } from '../index'
+import { SimHost, TRAN_MEMORY_BUDGET_BYTES, ngspiceTranMemoryBytes } from '../index'
 import { ngspiceResourcesAvailable } from '../ngspiceFfi'
 import type { OpSolveMethod, SimEvent } from '../protocol'
 
@@ -267,20 +267,25 @@ describe.skipIf(!haveNgspice)('the shipped sample boards open without a solver f
   }, 60_000)
 })
 
+
 // ─── the shipped 555 sample through Run, at the steps the bench picks ─────────
 
-/** One `tran <tstep> <tstop> uic` through the real SimHost, the bench's start. */
+/**
+ * One `tran <tstep> <tstop> uic` through the real SimHost, the bench's start,
+ * keeping the points from `tstart` on (SimHost.runTran).
+ */
 async function runTran(
   deck: string[],
   tstep: number,
   tstop: number,
+  tstart = 0,
 ): Promise<{ t: Float64Array; out: Float64Array; trouble: string[] }> {
   const events: SimEvent[] = []
   const host = new SimHost({ emit: (e) => events.push(e), disableWatchdog: true })
   try {
     await host.start()
     await host.loadCircuit(deck)
-    const r = await host.runTran(tstep, tstop)
+    const r = await host.runTran(tstep, tstop, tstart)
     const trouble = events
       .filter((e): e is Extract<SimEvent, { type: 'log' }> => e.type === 'log')
       .filter((e) => e.level === 'error' || /timestep too small|aborted/i.test(e.text))
@@ -298,6 +303,16 @@ describe.skipIf(!haveNgspice)('the shipped blinker-555 sample runs at fine solve
   // or its second (1.347 s, 5 us steps): THRES creeps through the comparator
   // band at about 3 V/s, the latch branch folded, and Newton could not step past
   // the fold. Each run covers the crossing that failed.
+  //
+  // The deck is the one the bench builds, every vector saved. On macOS that
+  // used to be refused: ngspice sized the 5 us run at 26 vectors x 280k points
+  // x 8 B = 58 MB, weighed it against vm_stat free_count, often less on the CI
+  // runners, and ControlledExited. SimHost now turns that check off.
+  //
+  // Each run steps from t=0 exactly as the bench does, and keeps only the points
+  // from just before its crossing (runTran's tstart). Every kept point is a
+  // SendData callback the solver thread waits on the JS thread for: keeping all
+  // 350k points of the 2 us run took it past the 240 s cap on macos-15-intel.
   const deck = haveNgspice
     ? sampleDeck({ board: 'blinker-555.kicad_pcb', schematic: 'blinker-555.kicad_sch', supplyNet: 'VCC', volts: 5 })
     : []
@@ -308,24 +323,95 @@ describe.skipIf(!haveNgspice)('the shipped blinker-555 sample runs at fine solve
     { at: 0.952, rising: true },
     { at: 1.347, rising: false },
   ]
-  for (const [tstep, tstop, label] of [
-    [2e-6, 0.7, '2 us'],
-    [5e-6, 1.4, '5 us'],
+  for (const [tstep, tstop, tstart, label] of [
+    [2e-6, 0.7, 0.6, '2 us'],
+    [5e-6, 1.4, 1.25, '5 us'],
   ] as const) {
-    it(`${label} steps: runs through the THRES crossings, edges on the RC timing`, async () => {
-      const r = await runTran(deck, tstep, tstop)
+    it(`${label} steps: runs through the THRES crossing, the edge on the RC timing`, async () => {
+      const r = await runTran(deck, tstep, tstop, tstart)
       expect(r.trouble, `${label}: solver trouble`).toEqual([])
+      expect(r.t[0], `${label}: kept from tstart`).toBeGreaterThanOrEqual(tstart)
       expect(r.t[r.t.length - 1], `${label}: ran to the end`).toBeGreaterThan(tstop * 0.999)
       const edges: Array<{ at: number; rising: boolean }> = []
       for (let i = 1; i < r.out.length; i++) {
-        // Skip the power-on rise; count each crossing of half the rail once.
-        if (r.t[i] > 1e-3 && r.out[i - 1] < 2.5 !== r.out[i] < 2.5) edges.push({ at: r.t[i], rising: r.out[i] >= 2.5 })
+        // Count each crossing of half the rail once.
+        if (r.out[i - 1] < 2.5 !== r.out[i] < 2.5) edges.push({ at: r.t[i], rising: r.out[i] >= 2.5 })
       }
-      const want = nominal.filter((e) => e.at < tstop)
+      const want = nominal.filter((e) => e.at > tstart && e.at < tstop)
       expect(edges.map((e) => e.rising), `${label}: edge directions`).toEqual(want.map((e) => e.rising))
       edges.forEach((e, i) => {
         expect(Math.abs(e.at - want[i].at) / want[i].at, `${label}: edge ${i} at ${e.at.toFixed(4)} s`).toBeLessThan(0.02)
       })
     }, 240_000)
   }
+})
+
+describe.skipIf(!haveNgspice)('SimHost keeps transients within its memory budget, ngspice memory check off (every vector saved)', () => {
+  // ngspice-46 allocates a transient's samples up front, vectors x (tstop/tstep
+  // + 100) x 8 B, and its own check weighed that against the OS free-memory
+  // figure at every saved point (macOS: vm_stat free_count), then ControlledExited.
+  // SimHost turns that check off at start and sizes runs to
+  // TRAN_MEMORY_BUDGET_BYTES itself. The step here puts the bench's 30 s window
+  // at three times the budget; the shortened window is still above free_count
+  // on a macOS runner, so these also fail there if the check is left on.
+  const deck = haveNgspice
+    ? sampleDeck({ board: 'blinker-555.kicad_pcb', schematic: 'blinker-555.kicad_sch', supplyNet: 'VCC', volts: 5 })
+    : []
+
+  async function vectorsAndStep(host: SimHost): Promise<{ vectors: number; tstep: number }> {
+    // A short run to count what the deck saves, scale included.
+    const r = await host.runTran(1e-5, 1e-4)
+    const vectors = Object.keys(r.vectors).length + 1
+    const tstep = Number(((vectors * 8 * 30) / (3 * TRAN_MEMORY_BUDGET_BYTES)).toPrecision(2))
+    return { vectors, tstep }
+  }
+
+  it('bench: a window over the budget is shortened to fit, and samples flow', async () => {
+    const events: SimEvent[] = []
+    const host = new SimHost({ emit: (e) => events.push(e), disableWatchdog: true })
+    try {
+      await host.start()
+      await host.loadCircuit(deck)
+      const { vectors, tstep } = await vectorsAndStep(host)
+      expect(ngspiceTranMemoryBytes(vectors, tstep, 30), 'the full window is over the budget').toBeGreaterThan(
+        TRAN_MEMORY_BUDGET_BYTES,
+      )
+
+      host.handleCommand({ type: 'runTransient', tstepSeconds: tstep, tstopSeconds: 30 })
+      host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
+      const deadline = Date.now() + 120_000
+      const samples = (): number =>
+        events.reduce((n, e) => n + (e.type === 'samples' ? e.simTime.length : 0), 0)
+      while (samples() < 50 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+
+      const refusal = events.filter(
+        (e) => e.type === 'log' && /memory required|can't allocate|ControlledExit/i.test(e.text),
+      )
+      expect(refusal, 'ngspice refused the transient').toEqual([])
+      expect(samples(), 'samples streamed').toBeGreaterThanOrEqual(50)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const tran = (host as any).tran as { windowStop: number; continuous: boolean }
+      expect(tran.windowStop).toBeLessThan(30)
+      expect(tran.continuous, 'a shortened window hands over to the next one').toBe(true)
+      expect(ngspiceTranMemoryBytes(vectors, tstep, tran.windowStop)).toBeLessThanOrEqual(TRAN_MEMORY_BUDGET_BYTES)
+    } finally {
+      host.handleCommand({ type: 'stop' })
+      await host.dispose()
+    }
+  }, 240_000)
+
+  it('runTran: a run over the budget is refused, and the host stays usable', async () => {
+    const host = new SimHost({ emit: () => {}, disableWatchdog: true })
+    try {
+      await host.start()
+      await host.loadCircuit(deck)
+      const { tstep } = await vectorsAndStep(host)
+      await expect(host.runTran(tstep, 30)).rejects.toThrow(/need \d+ MB, over the \d+ MB budget/)
+      // ngspice was never asked for it, so it can still run.
+      const r = await host.runTran(1e-5, 1e-4)
+      expect(r.time.length).toBeGreaterThan(5)
+    } finally {
+      await host.dispose()
+    }
+  }, 240_000)
 })
