@@ -31,8 +31,9 @@ module.exports = {
       // in particular) are 2x to 5x slower than a dev machine, so an absolute
       // bound turns into a flake. Time a small and a large input and assert the
       // growth ratio (see src/core/critic/__tests__/sparse.test.ts), or assert
-      // an operation count. ESLint reports the file and line of each offender.
-      files: ['**/__tests__/**/*.ts', '**/__tests__/**/*.tsx'],
+      // an operation count. ESLint reports the file and line of each offender. Covers
+      // src/**/__tests__ and the top-level test/ tree (npm run lint lints both).
+      files: ['**/__tests__/**/*.ts', '**/__tests__/**/*.tsx', 'test/**/*.ts', 'test/**/*.tsx'],
       rules: {
         'no-restricted-syntax': [
           'error',

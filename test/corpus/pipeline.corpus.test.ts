@@ -8,7 +8,7 @@
  *   1. the file header carries the format version the manifest says it does
  *      (so the KiCad 6..10 coverage claim is checked, not asserted, #63);
  *   2. parseBoard -> extract -> resolveAll -> generateDeck completes without
- *      throwing, inside a time budget;
+ *      throwing;
  *   3. the generated deck contains no NaN / Infinity / undefined numeric fields;
  *   4. circsim's pad-to-net assignment equals KiCad's own, taken from
  *      `kicad-cli pcb export ipc2581` (live when kicad-cli is installed, else
@@ -53,9 +53,6 @@ import {
   type PipelineResult
 } from './helpers/pipeline'
 
-/** Wall-clock ceiling for the four pure stages on any corpus board. */
-const PIPELINE_BUDGET_MS = 30_000
-
 const kicad = findKicadCli()
 const updateOracle = process.env.CIRCSIM_CORPUS_UPDATE_ORACLE === '1'
 
@@ -83,14 +80,10 @@ describe.each(corpusBoards())('corpus: $id', (entry: CorpusEntry) => {
 
   beforeAll(() => {
     text = readCorpusBoard(entry)
-    const t0 = performance.now()
     try {
       result = runPipeline(text, { title: `${entry.id}.kicad_pcb` })
     } catch (err) {
       failure = { stage: 'parse-or-later', message: (err as Error).message }
-    }
-    if (result) {
-      expect(performance.now() - t0, 'pipeline wall time').toBeLessThan(PIPELINE_BUDGET_MS)
     }
   })
 
