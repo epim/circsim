@@ -79,7 +79,6 @@ describe('value-as-MPN is refused on non-device refdes classes (issue #51)', () 
 
 describe('LED fallback tier is not a six-way ambiguity (issue #51)', () => {
   it.each([
-    ['Yellow', 'LED_SMD:LED_0805_2012Metric'],
     ['Amber', 'LED_SMD:LED_0603_1608Metric'],
     ['LED 0805', 'LED_SMD:LED_0805_2012Metric'],
     ['LCSC 0805 light emitting diode', 'LED_SMD:LED_0805_2012Metric'],
@@ -96,6 +95,8 @@ describe('LED fallback tier is not a six-way ambiguity (issue #51)', () => {
     ['blue led', 'LED_BLUE'],
     ['White', 'LED_WHITE'],
     ['led_red', 'LED_RED'],
+    ['Yellow', 'LED_YELLOW'],
+    ['Orange LED', 'LED_ORANGE'],
   ])('value "%s" still picks the named color', (value, modelName) => {
     const res = resolveOne('D4', value, 'LED_SMD:LED_0805_2012Metric')
     expect(res.status).toBe('ok')

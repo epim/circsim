@@ -101,7 +101,9 @@ function matchFingerprints(
   })
 }
 
-const DISCRETE_FILES = ['bjt.lib', 'diodes.lib', 'led.lib']
+// discrete-extra.lib holds the diode, zener and LED cards added for issue #29 (hand-fitted with
+// the fit-model-cards.mjs helpers), so it is held to the same no-third-party-card gate.
+const DISCRETE_FILES = ['bjt.lib', 'diodes.lib', 'led.lib', 'discrete-extra.lib']
 
 function bundledCards(): ParsedCard[] {
   return DISCRETE_FILES.flatMap((f) => parseModelCards(f, readFileSync(join(MODELS_DIR, f), 'utf8')))
@@ -152,7 +154,10 @@ describe('bundled discrete cards carry no third-party fingerprint (issue #14)', 
 
   it('found the expected cards to check', () => {
     const names = cards.map((c) => c.name)
-    for (const n of ['Q2N2222', 'Q2N3904', 'Q2N3906', 'D1N4001', 'D1N4148', 'D1N5819', 'LED_RED']) {
+    for (const n of [
+      'Q2N2222', 'Q2N3904', 'Q2N3906', 'D1N4001', 'D1N4148', 'D1N5819', 'LED_RED',
+      'DSS34', 'D1N5822', 'DZ3V3', 'DZ12V', 'LED_YELLOW', 'LED_ORANGE'
+    ]) {
       expect(names).toContain(n)
     }
   })
