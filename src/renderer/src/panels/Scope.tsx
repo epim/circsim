@@ -6,8 +6,8 @@
  * Architecture:
  *   - One RingBuffer per voltage-probe, owned and fed by the store
  *     (getProbeRingBuffer); the scope only reads them. The store resets them
- *     on a fresh run and each ring starts a new epoch when bench-window
- *     restart sends sim time back to 0.
+ *     on a fresh run and each ring clears itself when a bench-window
+ *     restart sends sim time back to 0 (all rings share raw sim time).
  *   - The latest time for follow mode is the newest stored time across the
  *     probe rings, read each frame (no per-batch listener, no net search).
  *   - Canvas is drawn each animation frame via requestAnimationFrame, calling
@@ -131,9 +131,9 @@ const Scope: React.FC = () => {
     const width = canvas.width
     const height = canvas.height
 
-    // Latest stored time across the probe rings. Ring times stay continuous
-    // across bench-window restarts, so this only moves forward within a run and
-    // returns to ~0 when the store resets the rings for a fresh run.
+    // Latest stored time across the probe rings. Rings hold raw sim time, so
+    // this only moves forward within a bench window and returns to ~0 on a
+    // bench-window restart or when the store resets the rings for a fresh run.
     let latest = 0
     for (const probe of probes) {
       const ring = state.getProbeRingBuffer(probe.id)

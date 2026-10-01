@@ -125,7 +125,7 @@ describe('feedSamples', () => {
   })
 })
 
-// ─── issue #59: bounded readWindow, bench-window epochs ──────────────────────
+// ─── issue #59: bounded readWindow, bench-window restarts ──────────────────────
 
 /** Reference implementation: the old linear scan over the logical ring. */
 function linearWindow(
@@ -184,7 +184,7 @@ describe('RingBuffer.readWindow (issue #59)', () => {
     expect(Array.from(first.values)).toEqual([0, 1, 2, 3])
   })
 
-  it('keeps stored times continuous across a bench-window restart', () => {
+  it('starts a new acquisition on a bench-window restart', () => {
     const rb = createRingBuffer(32)
     for (let i = 0; i < 10; i++) rb.append(i, i * 1e-3) // old epoch, t up to 9 ms
     expect(rb.newestTime).toBeCloseTo(9e-3, 12)
@@ -192,25 +192,44 @@ describe('RingBuffer.readWindow (issue #59)', () => {
     rb.append(100, 0)
     rb.append(101, 1e-3)
     rb.append(102, 2e-3)
-    // History is kept, and the new epoch continues after the old one.
-    expect(rb.length).toBe(13)
-    expect(rb.newestTime).toBeCloseTo(11e-3, 12)
-    const all = rb.read(0, rb.length).times
-    for (let i = 1; i < all.length; i++) expect(all[i]).toBeGreaterThanOrEqual(all[i - 1])
-    // A window spanning the restart finds samples from both epochs, in order.
-    const { values } = rb.readWindow(8e-3, 11.5e-3)
-    expect(Array.from(values)).toEqual([8, 9, 100, 101, 102])
+    // Stored times are raw sim times, so the old epoch is gone.
+    expect(rb.length).toBe(3)
+    expect(rb.newestTime).toBeCloseTo(2e-3, 12)
+    expect(Array.from(rb.read(0, rb.length).values)).toEqual([100, 101, 102])
+    expect(Array.from(rb.readWindow(0, 1).values)).toEqual([100, 101, 102])
   })
 
-  it('a second restart accumulates on top of the first', () => {
-    const rb = createRingBuffer(32)
-    rb.append(0, 0)
-    rb.append(1, 5)
-    rb.append(2, 0) // restart 1: stored 5
-    rb.append(3, 4) // stored 9
-    rb.append(4, 0) // restart 2: stored 9
-    rb.append(5, 1) // stored 10
-    expect(Array.from(rb.read(0, 6).times)).toEqual([0, 5, 5, 9, 9, 10])
+  it('restart works on a wrapped ring and keeps appending correctly', () => {
+    const rb = createRingBuffer(4)
+    for (let i = 0; i < 7; i++) rb.append(i, i) // wrapped
+    rb.append(50, 0) // restart
+    for (let i = 1; i < 6; i++) rb.append(50 + i, i) // wraps again
+    expect(Array.from(rb.read(0, rb.length).times)).toEqual([2, 3, 4, 5])
+    expect(Array.from(rb.readWindow(3, 4).values)).toEqual([53, 54])
+  })
+
+  it('a ring created after a restart agrees with rings that lived through it', () => {
+    // Probe A lives through a bench-window restart; probe B is added after it
+    // (syncRingBuffers creates its ring mid-run, fed raw sim time).
+    const a = createRingBuffer(64)
+    for (let t = 0; t <= 30; t++) a.append(t, t)
+    for (let t = 0; t <= 5; t++) a.append(100 + t, t) // restart
+    const b = createRingBuffer(64)
+    for (let t = 0; t <= 5; t++) b.append(200 + t, t)
+    expect(b.newestTime).toBe(a.newestTime)
+    // Follow window anchored on the shared latest time shows both traces.
+    const latest = Math.max(a.newestTime, b.newestTime)
+    const wa = a.readWindow(latest - 1, latest)
+    const wb = b.readWindow(latest - 1, latest)
+    expect(Array.from(wa.times)).toEqual([4, 5])
+    expect(Array.from(wb.times)).toEqual([4, 5])
+  })
+
+  it('equal times are not a restart', () => {
+    const rb = createRingBuffer(8)
+    rb.append(1, 1)
+    rb.append(2, 1)
+    expect(rb.length).toBe(2)
   })
 
   it('newestTime is NaN when empty', () => {

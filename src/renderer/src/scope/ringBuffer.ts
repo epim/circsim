@@ -8,8 +8,9 @@
  *   - Windowed read: read(offset, length) returns logical window as Float64Array
  *     copies, handling the wrap-around transparently.
  *   - readWindow(tStart, tEnd): time-based window, binary search over the
- *     (monotonic) time ring, O(log n + k) for k points in the window. Stored
- *     times stay non-decreasing across bench-window restarts (epoch offset).
+ *     (monotonic) time ring, O(log n + k) for k points in the window. A
+ *     bench-window restart (time goes backwards) starts a new acquisition: the
+ *     ring is cleared, so every ring on a run shares the raw sim timeline.
  *   - Fed from SimHost 'samples' events via feedSamples(rb, simTime, valueColumn).
  *
  * Implementation note: Two parallel rings — one for timestamps, one for values.
@@ -34,9 +35,11 @@ export interface RingBuffer {
   readonly newestTime: number
 
   /**
-   * Append one (value, time) sample, O(1). `time` is raw sim seconds; when it
-   * goes backwards (bench-window restart) the new epoch is stored shifted so
-   * stored times keep increasing across restarts.
+   * Append one (value, time) sample, O(1). `time` is raw sim seconds and is
+   * stored as given. When it goes backwards (bench-window restart: ngspice
+   * restarts the transient at t = 0) the ring is cleared first, so stored times
+   * are always non-decreasing and agree with every other ring on the run,
+   * including rings created after the restart.
    */
   append(value: number, time: number): void
   /**
@@ -83,9 +86,8 @@ export function createRingBuffer(capacity = 1_000_000): RingBuffer {
   const timeRing = new Float64Array(capacity)
   let length = 0
   let head = 0
-  // Epoch bookkeeping for bench-window restarts (see append).
-  let epochOffset = 0
-  let lastRawTime = 0
+  // Newest appended time, to detect a bench-window restart (see append).
+  let lastTime = 0
 
   const rb: RingBuffer = {
     get valueRing() { return valueRing },
@@ -100,17 +102,16 @@ export function createRingBuffer(capacity = 1_000_000): RingBuffer {
     set head(v) { head = v },
 
     append(value: number, time: number): void {
-      // A raw time regression is a new bench window: ngspice restarts the
-      // transient at t = 0 (Spec 7.5). Shift the new epoch by the newest stored
-      // time so the stored timeline stays continuous and non-decreasing (history
-      // is kept, and readWindow can binary-search it).
-      if (length === 0) {
-        epochOffset = 0
-      } else if (time < lastRawTime) {
-        epochOffset = timeRing[(head - 1 + capacity) % capacity]
+      // A time regression is a new bench window: ngspice restarts the transient
+      // at t = 0 (Spec 7.5). Start a new acquisition. Shifting the new epoch
+      // instead would need the offset to be shared by every ring on the run
+      // (a probe added or rewired after the restart creates its ring with raw
+      // times), so the ring is cleared and all rings stay on raw sim time.
+      if (length > 0 && time < lastTime) {
+        length = 0
+        head = 0
       }
-      lastRawTime = time
-      time += epochOffset
+      lastTime = time
       valueRing[head] = value
       timeRing[head] = time
       head = (head + 1) % capacity
@@ -138,8 +139,8 @@ export function createRingBuffer(capacity = 1_000_000): RingBuffer {
       if (length === 0 || tStart > tEnd) {
         return { values: new Float64Array(0), times: new Float64Array(0) }
       }
-      // Times are non-decreasing in logical order (append starts a new epoch on
-      // a regression), so the window is a contiguous logical run [lo, hi).
+      // Times are non-decreasing in logical order (append clears the ring on a
+      // regression), so the window is a contiguous logical run [lo, hi).
       const oldestIdx = (head - length + capacity) % capacity
       const timeAt = (logical: number): number => timeRing[(oldestIdx + logical) % capacity]
       const lo = firstLogicalIndex(timeAt, length, (t) => t >= tStart)
