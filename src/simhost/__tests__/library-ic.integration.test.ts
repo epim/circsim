@@ -524,11 +524,12 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
   it('SMAJ24A TVS: reverse clamp ~38.9V at the 10.3A datasheet surge current', async () => {
     // Reverse-drive the TVS: 10.3 A forced into the cathode with the anode
     // grounded → the diode operates in breakdown and v(k) is the clamp voltage.
-    // Datasheet: Vc=38.9V max @ Ipp=10.3A (10/1000us). Assert ±10%.
+    // Datasheet: Vc=38.9V max @ Ipp=10.3A (10/1000us). Assert ±10%. DSMAJ24A is a
+    // two-branch subcircuit (forward path and reverse clamp separate, issue #86).
     const deck = [
       '* SMAJ24A reverse clamp at the 10.3A datasheet surge current',
       'i1 0 k dc 10.3',
-      'd1 0 k DSMAJ24A',
+      'x1 0 k DSMAJ24A',
       ...diodesLib,
       '.op',
       '.end'
@@ -677,6 +678,39 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     expect(edges.length).toBeGreaterThanOrEqual(3)
     expect(relErr).toBeLessThan(0.2)
   }, 90_000)
+
+  it('NE555 astable: no spurious output edges at solver steps 2 us to 50 us (review of PR #118)', async () => {
+    // A function generator sets the step to 1/200 of its fastest frequency, so the
+    // step can be 10x to 250x any lag inside the model. A stiff lag on the latch
+    // rang under trapezoidal integration there and chattered the output at the
+    // THRES crossing. Every half period must stay within 25 % of the median.
+    const deck = [
+      '* NE555 astable at coarse steps',
+      'vcc vcc 0 dc 5',
+      'r1 vcc disch 1k',
+      'r2 disch thres 10k',
+      'c1 thres 0 100n ic=0',
+      'cc ctrl 0 10n',
+      'x1 0 thres out vcc ctrl thres disch vcc NE555',
+      ...t555Lib,
+      '.end'
+    ]
+    for (const tstep of ['2u', '3u', '5u', '10u', '25u', '50u']) {
+      const r = await runTran(deck, tstep, '0.1')
+      const out = r.series['out'] ?? []
+      const edges: number[] = []
+      for (let i = 1; i < out.length; i++) if (out[i - 1] < 2.5 !== out[i] < 2.5) edges.push(r.t[i])
+      const gaps = edges.slice(2).map((e, i) => e - edges[i + 1])
+      const median = [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)]
+      const odd = gaps.filter((g) => g < 0.8 * median || g > 1.25 * median).length
+      expect(r.errs, `tstep ${tstep}`).toEqual([])
+      expect(r.t[r.t.length - 1], `tstep ${tstep}: ran to the end`).toBeGreaterThan(0.099)
+      // 0.1 s holds about 68 periods of 1.455 ms: 136 edges, allow startup and rounding.
+      expect(edges.length, `tstep ${tstep}: edge count`).toBeGreaterThan(125)
+      expect(edges.length, `tstep ${tstep}: edge count`).toBeLessThan(145)
+      expect(odd, `tstep ${tstep}: half periods off the median (${(median * 1e6).toFixed(0)} us)`).toBe(0)
+    }
+  }, 180_000)
 
   it('74HC00 NAND truth table via ONE .tran stepping 00/01/10/11', async () => {
     const logic = JSON.parse(readFileSync(join(MODELS, 'logic74hc.json'), 'utf8')) as Logic74
@@ -941,7 +975,7 @@ describe.skipIf(!haveNgspice)('M10 — supply-derived digital vHigh (CD40106 RC 
     // Schmitt B-source carries the 5 V-derived thresholds: mid=2.5, V_T+=3.0 (60%),
     // V_T-=2.0 (40%), rail=5.0 — not the 12 V family default.
     expect(text).toContain(
-      'b_u1_1 out 0 V = (v(osc) > (v(out) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000',
+      'b_u1_1 u1_o_1y 0 V = (v(osc) > (v(u1_o_1y) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000',
     )
     // The abandoned adc/dac path and the 12 V default are gone.
     expect(text).not.toContain('adc_bridge')
