@@ -21,6 +21,10 @@ Task-oriented walkthroughs for specific jobs. If you're new, do the [First Light
 - **[Run the Board Critic audit](./run-critic)**: the read-only pre-fab check.
 - **[Read the warnings & fidelity banner](./warnings)**: what every honesty surface is telling you.
 
+## Automating
+
+- **[Run circsim from the command line](./headless-cli)**: `circsim audit`, `deck`, and `op` with no window, for CI gates and reproducible reports.
+
 ## See also
 
 - [Concepts](../concepts/validation-bench): the ideas behind the tool.
