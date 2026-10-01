@@ -139,15 +139,25 @@ export interface SolveResult {
   deck: string[]
   /** Pass 1: the family-default baseline deck. */
   pass1Deck: string[]
-  /** Pass 2's deck when a measured rail changed the circuit; set even if pass 2 failed. */
+  /**
+   * The last deck the rail reconciliation built when a measured rail changed the
+   * circuit: pass 2's, or a later reconcile pass's when one landed. Set even if
+   * pass 2 failed.
+   */
   pass2Deck?: string[]
   /**
    * 'not-needed': no measured rail changed the deck, so one pass sufficed.
-   * 'solved': pass 2 ran and its op is `op`. 'failed': pass 2 did not land and
-   * `op` is pass 1's.
+   * 'solved': a reconciliation pass landed and its op is `op`. 'failed': pass 2
+   * did not land and `op` is pass 1's. A failure of a later reconcile pass keeps
+   * the last landed op and stays 'solved'.
    */
   pass2: 'not-needed' | 'solved' | 'failed'
-  /** Tier-3 rails sensed from pass 1, for a later transient deck to reuse. */
+  /** Op solves attempted, pass 1 included (1 to MAX_SOLVE_PASSES). */
+  passes: number
+  /**
+   * Tier-3 rails the committed deck was built from (pass 1's sensed set when
+   * pass 2 did not land), for a later transient deck to reuse.
+   */
   measuredRails: Map<number, number>
   /** Chips whose VDD rail measured near 0 V; the family default was kept. */
   gatedOff: GatedOffRail[]

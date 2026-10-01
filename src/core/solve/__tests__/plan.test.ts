@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildDeck, buildSolveInputs } from '../inputs'
-import { mapOpResultToNetVoltages, runSolvePlan, SolveFailedError } from '../plan'
+import { MAX_SOLVE_PASSES, mapOpResultToNetVoltages, runSolvePlan, SolveFailedError } from '../plan'
 import type { OpResult, SolveEngine, SolveInputs, TranResult } from '../types'
 import {
   GROUND_NET,
@@ -219,6 +219,106 @@ describe('runSolvePlan: two-pass rail sensing', () => {
     expect(result.netVoltages.get(GROUND_NET)).toBe(0) // ground reads 0 even when ngspice omits node 0
     expect([...result.netVoltages.keys()].sort()).toEqual([1, 2, 3, 4, 5])
   })
+})
+
+describe('runSolvePlan: reconciling a rail that an output biases (issue #44)', () => {
+  /** An op whose /VGATED reads `rail` (the fixture's divider, plus whatever the loaded output adds). */
+  const at = (rail: number): OpResult => ({ values: { vin: 12, vgated: rail, in: 0, out: rail }, method: 'direct' })
+  const swing = (rail: number): string => `? 0 : ${rail.toFixed(4)}`
+
+  it('re-senses and re-solves until the sensed rail agrees with the rail the deck used', async () => {
+    // The rail walks 6.6 -> 5.4 -> 5.06 -> 5.0 as each deck swings at the previous sensed rail.
+    const ops = [6.6, 5.4, 5.06, 5.0]
+    const engine = scriptedEngine(pass => at(ops[pass - 1]))
+
+    const result = await runSolvePlan(inputs(), engine)
+
+    expect(engine.calls.map(c => c.kind)).toEqual(['load', 'op', 'load', 'op', 'load', 'op', 'load', 'op'])
+    expect(result.passes).toBe(4)
+    expect(text(result.pass1Deck)).toContain(SWING_12V)
+    // Pass 2 swung at 6.6, pass 3 at 5.4, pass 4 at 5.06; the committed deck is pass 4's.
+    expect(text((engine.calls[2] as { deck: string[] }).deck)).toContain(swing(6.6))
+    expect(text((engine.calls[4] as { deck: string[] }).deck)).toContain(swing(5.4))
+    expect(result.deck).toBe(result.pass2Deck)
+    expect(text(result.deck)).toContain(swing(5.06))
+    expect(result.measuredRails.get(VGATED_NET)).toBeCloseTo(5.06)
+    expect(result.op.values.vgated).toBe(5.0)
+    expect(result.pass2).toBe('solved')
+  })
+
+  it('stops at the solve cap when the rail keeps moving', async () => {
+    let rail = 10
+    const engine = scriptedEngine(() => at((rail -= 1)))
+
+    const result = await runSolvePlan(inputs(), engine)
+
+    expect(result.passes).toBe(MAX_SOLVE_PASSES)
+    expect(engine.calls.filter(c => c.kind === 'op')).toHaveLength(MAX_SOLVE_PASSES)
+  })
+
+  it('stops when the sensed rail is within tolerance of the rail the deck used', async () => {
+    // Pass 2 swung at 5.0; it re-senses 5.05, which is 1%: settled, no third solve.
+    const engine = scriptedEngine(pass => at(pass === 1 ? 5 : 5.05))
+
+    const result = await runSolvePlan(inputs(), engine)
+
+    expect(result.passes).toBe(2)
+    expect(text(result.deck)).toContain(swing(5))
+  })
+
+  it('keeps the last landed op and deck when a later reconcile pass fails', async () => {
+    const engine = scriptedEngine(pass => {
+      if (pass === 1) return at(6.6)
+      if (pass === 2) return at(5.4)
+      return new Error('op timed out')
+    })
+
+    const result = await runSolvePlan(inputs(), engine)
+
+    expect(result.passes).toBe(3)
+    expect(result.pass2).toBe('solved')
+    expect(result.op.values.vgated).toBe(5.4)
+    expect(text(result.deck)).toContain(swing(6.6))
+    expect(result.deck).toBe(result.pass2Deck)
+    // The committed deck used 6.6, so that is the rail a transient deck must reuse.
+    expect(result.measuredRails.get(VGATED_NET)).toBeCloseTo(6.6)
+  })
+
+  it('treats a pass whose op reports method failed as failed', async () => {
+    const engine = scriptedEngine(pass => (pass === 1 ? at(6.6) : { values: { vgated: 1 }, method: 'failed' }))
+
+    const result = await runSolvePlan(inputs(), engine)
+
+    expect(result.pass2).toBe('failed')
+    expect(result.deck).toBe(result.pass1Deck)
+    expect(result.op.values.vgated).toBe(6.6)
+  })
+
+  it('senses no rail from a failed pass 1 op', async () => {
+    // A failed op still carries values; a plausible-looking non-zero rail read off
+    // them would otherwise become the chip's swing with nothing said about it.
+    const engine = scriptedEngine(() => ({ values: { vin: 12, vgated: 6.6, out: 12 }, method: 'failed' }))
+
+    const result = await runSolvePlan(inputs(), engine)
+
+    expect(engine.calls.map(c => c.kind)).toEqual(['load', 'op'])
+    expect(result.measuredRails.size).toBe(0)
+    expect(result.gatedOff).toEqual([])
+    expect(result.passes).toBe(1)
+    expect(text(result.deck)).toContain(SWING_12V)
+  })
+
+  it.each(['gmin', 'source', 'tran-fallback'] as const)(
+    'still senses a rail from a %s op, which is the normal outcome on some boards',
+    async method => {
+      const engine = scriptedEngine(pass => ({ values: { vin: 12, vgated: 5, out: 5 }, method: pass === 1 ? method : 'direct' }))
+
+      const result = await runSolvePlan(inputs(), engine)
+
+      expect(result.measuredRails.get(VGATED_NET)).toBeCloseTo(5)
+      expect(result.pass2).toBe('solved')
+    },
+  )
 })
 
 describe('runSolvePlan: undriven islands (issue #43)', () => {

@@ -9,10 +9,14 @@
  * supply, a manual override, or the family default for each digital chip's
  * rail). Tier-3 sensing then reads each switched or derived VDD rail off that
  * op. If a measured rail changes the deck, pass 2 re-solves exactly once with
- * the measured rails. Comparing against the baseline is what makes "did the
- * measured rail change the circuit" decidable, which is why pass 1 never seeds
- * cached measured rails: a measured rail equal to the family default leaves the
- * deck unchanged and costs no second solve.
+ * the measured rails, then re-senses that op and re-solves while the sensed rail
+ * still moves by more than RAIL_SETTLE_TOLERANCE, up to MAX_SOLVE_PASSES solves
+ * in all (issue #44: an output that loads its own VDD biases the pass-1 rail).
+ * Sensing is skipped only when pass 1 failed outright; gmin, source-stepping
+ * and tran-fallback ops still sense. Comparing against the baseline is what
+ * makes "did the measured rail change the circuit" decidable, which is why
+ * pass 1 never seeds cached measured rails: a measured rail equal to the family
+ * default leaves the deck unchanged and costs no second solve.
  *
  * After each pass, settleBistableOpAmps (bistable.ts) moves any op-amp left
  * balanced on an unstable point (a Schmitt trigger inside its hysteresis band)
@@ -41,6 +45,26 @@ export class SolveFailedError extends Error {
   }
 }
 
+/**
+ * Most op solves one plan may run, pass 1 included. The reconciliation loop
+ * contracts quickly because each pass moves the driven swing toward the rail it
+ * was sensed from: on the loaded-VDD fixture (#44) the sensed rail goes 6.58,
+ * 5.36, 5.06, 5.003 V against a true fixpoint of 5.0 V.
+ */
+export const MAX_SOLVE_PASSES = 4
+
+/** A re-sensed rail within this fraction of the rail its deck used counts as settled. */
+export const RAIL_SETTLE_TOLERANCE = 0.02
+
+function railsSettled(used: ReadonlyMap<number, number>, sensed: ReadonlyMap<number, number>): boolean {
+  for (const [netId, v] of sensed) {
+    const u = used.get(netId)
+    if (u === undefined) return false
+    if (Math.abs(v - u) > RAIL_SETTLE_TOLERANCE * Math.abs(u)) return false
+  }
+  return true
+}
+
 export async function runSolvePlan(inputs: SolveInputs, engine: SolveEngine): Promise<SolveResult> {
   const { deck: pass1Deck, undrivenNets: pass1Undriven } = buildDeckWithUndriven({
     ...inputs,
@@ -61,15 +85,27 @@ export async function runSolvePlan(inputs: SolveInputs, engine: SolveEngine): Pr
   let deck = settled1.deck
   let latched: LatchedOpAmp[] = settled1.latched
 
-  const { rails, gatedOff } = deriveMeasuredRailVHigh({
-    opValues: op.values,
-    circuit: inputs.circuit,
-    resolutions: inputs.resolutions,
-    instruments: inputs.instruments,
-    groundNetId: inputs.groundNetId,
-    railOverrides: inputs.railOverrides,
-    modelTexts: inputs.modelTexts,
-  })
+  const sense = (values: Record<string, number>): ReturnType<typeof deriveMeasuredRailVHigh> =>
+    deriveMeasuredRailVHigh({
+      opValues: values,
+      circuit: inputs.circuit,
+      resolutions: inputs.resolutions,
+      instruments: inputs.instruments,
+      groundNetId: inputs.groundNetId,
+      railOverrides: inputs.railOverrides,
+      modelTexts: inputs.modelTexts,
+    })
+
+  // A failed op still carries whatever the last ladder rung left behind. Those
+  // values are not a solution, so no rail is read off them and pass 1 stands.
+  // gmin, source-stepping and tran-fallback ops are normal on 555 and op-amp
+  // boards and their values were correct in every measured case, so they sense.
+  const sensed1 =
+    op.method === 'failed'
+      ? { rails: new Map<number, number>(), gatedOff: [] as SolveResult['gatedOff'] }
+      : sense(op.values)
+  let { gatedOff } = sensed1
+  const measured = sensed1.rails
 
   // The undriven nets belong to the deck that produced the committed op, so they
   // follow `deck` through pass 2 (settling only re-forces op-amp outputs, it does
@@ -77,29 +113,62 @@ export async function runSolvePlan(inputs: SolveInputs, engine: SolveEngine): Pr
   let undrivenNets: UndrivenNet[] = pass1Undriven
   let pass2Deck: string[] | undefined
   let pass2: SolveResult['pass2'] = 'not-needed'
-  if (rails.size > 0) {
-    const { deck: candidate, undrivenNets: pass2Undriven } = buildDeckWithUndriven({
-      ...inputs,
-      measuredRails: rails,
-    })
-    if (circuitText(candidate) !== circuitText(pass1Deck)) {
-      pass2Deck = candidate
-      let op2: OpResult | undefined
+  let passes = 1
+  // The rails the committed deck was built from. After a failed pass 2 this is
+  // still pass 1's sensed set, which is what a later transient deck should reuse.
+  let committedRails = measured
+  // The deck as buildDeckWithUndriven made it, before any settling nodesets. The
+  // "did the rail change the circuit" test compares built decks with each other,
+  // since a settled deck differs from its built deck by its .nodeset lines.
+  let built = pass1Deck
+
+  if (measured.size > 0) {
+    // Pass 2 and the reconciliation after it. A chip output that loads its own
+    // VDD (an LED pull-up, a feedback resistor) injects current from pass 1's
+    // ideal family-default swing into a soft rail and biases the first sensed
+    // value, so one correction is not enough there. Each landed op is settled,
+    // then re-sensed; once the rail it reads agrees with the rail its deck used,
+    // the deck is self-consistent and the loop stops.
+    let used = measured
+    for (let pass = 2; pass <= MAX_SOLVE_PASSES; pass++) {
+      const { deck: candidate, undrivenNets: candidateUndriven } = buildDeckWithUndriven({
+        ...inputs,
+        measuredRails: used,
+      })
+      // Comparing against the deck last solved is what makes "did the measured
+      // rail change the circuit" decidable: equal to the family default, or
+      // equal to the previous pass, costs no solve.
+      if (circuitText(candidate) === circuitText(built)) break
+      passes = pass
+      let next: OpResult
       try {
-        op2 = await loadAndRunOp(engine, candidate)
+        next = await loadAndRunOp(engine, candidate)
+        if (next.method === 'failed') throw new Error('operating point did not converge')
       } catch {
-        pass2 = 'failed' // keep pass 1's op, which is still a valid solve of its deck
+        // Keep the last landed op and deck, which are still a valid solve.
+        if (pass === 2) {
+          pass2 = 'failed'
+          pass2Deck = candidate
+        }
+        break
       }
-      if (op2) {
-        const settled = hasLinearOpAmp(op2.values)
-          ? await settleBistableOpAmps(engine, candidate, op2)
-          : { op: op2, deck: candidate, latched: [] }
-        op = settled.op
-        deck = settled.deck
-        latched = settled.latched
-        undrivenNets = pass2Undriven
-        pass2 = 'solved'
-      }
+      const settled = hasLinearOpAmp(next.values)
+        ? await settleBistableOpAmps(engine, candidate, next)
+        : { op: next, deck: candidate, latched: [] }
+      op = settled.op
+      deck = settled.deck
+      latched = settled.latched
+      undrivenNets = candidateUndriven
+      built = candidate
+      pass2Deck = candidate
+      committedRails = used
+      pass2 = 'solved'
+
+      const resensed = sense(op.values)
+      gatedOff = resensed.gatedOff
+      if (railsSettled(used, resensed.rails)) break
+      // A rail that dropped out (now gated off or over the cap) keeps its last value.
+      used = new Map([...used, ...resensed.rails])
     }
   }
 
@@ -110,7 +179,8 @@ export async function runSolvePlan(inputs: SolveInputs, engine: SolveEngine): Pr
     pass1Deck,
     pass2Deck,
     pass2,
-    measuredRails: rails,
+    passes,
+    measuredRails: committedRails,
     gatedOff,
     undrivenNets,
     latched,
