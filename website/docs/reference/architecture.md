@@ -46,6 +46,18 @@ Digital logic needs to know its supply voltage to place its thresholds, but a ch
 
 This is resolved **per chip, from that chip's own VDD net**, so a board that mixes families (74HC parts at 5 V and CD4000 parts at 12 V, say) senses each one independently. The precedence for a chip's high level: a DC supply directly on its VDD net wins; then your manual override; then the op-measured rail; then the family default (5 V for 74HC, 12 V for CD4000).
 
+## The 3D viewport {#viewport}
+
+The board view is built so its cost stays flat as boards grow. The number of draw calls does not depend on how many parts, nets, tracks, or silkscreen labels a board has:
+
+- **Copper** is one mesh per board side (front and back), however many nets there are. Each net's color lives in a small float texture that the copper shader reads, so a voltage tint or a hover highlight is a few float writes and one texture upload, never a per-net material change.
+- **Component boxes** are one instanced mesh with a per-part color. LEDs keep their own mesh, because each one drives its own glow.
+- **Vias** are one instanced mesh, and **silkscreen text** is one mesh drawn from a glyph atlas of the characters the board uses.
+
+A 1500-part, 20,000-track board draws in 6 calls; it used to take about 4,400.
+
+Hover and click picking does not ray-cast the copper triangles. Copper is flat, so the pointer ray is intersected with each copper layer and a 2D spatial index finds the net under that point; where a pour and a track overlap, the smaller feature wins. Only vias and component boxes use the 3D ray cast. Hover picking runs at most once per animation frame, on the newest pointer position, so a fast mouse does not queue work.
+
 ## Offline & licensing
 
 circsim is **MIT-licensed** and fully offline. It bundles ngspice (BSD-style) and an in-house SPICE model library written from datasheet parameters. It never bundles vendor SPICE models or KiCad's share-alike 3D assets. Every bundled model file carries a provenance header, and CI enforces the licensing rules (including excluding the GPL-encumbered `table.cm` code model) so a violation fails a build rather than shipping. The "Ask your LLM" model helper is copy-and-paste; it makes no API calls. The **About** dialog in the app shows the full license and provenance details.
