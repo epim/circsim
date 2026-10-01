@@ -497,7 +497,7 @@ export interface AppState {
   // ── log stream ────────────────────────────────────────────────────────────────
   logLines: { level: 'info' | 'warn' | 'error'; text: string }[]
   lastBenchRestart: { reason: 'window-elapsed' | 'memory'; at: number } | null
-  crashNotice: { willRespawn: boolean; at: number } | null
+  crashNotice: { willRespawn: boolean; at: number; pausedRunLost?: boolean } | null
 
   // ── transient run honesty surfaces (Spec §7.5, §12) ───────────────────────────
   /**
@@ -1692,6 +1692,24 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         set({ vectorNames: [], simTimeSeconds: 0 })
       } else if (simState === 'op') {
         simClient.send({ type: 'runOp' })
+      } else if (simState === 'paused') {
+        // The fresh SimHost holds the deck but no transient, so there is nothing
+        // to resume: leaving the store 'paused' would make Run send a bare
+        // `resume` that the new process ignores, and the bench would sit dead
+        // while the store said 'running' (#75). Drop to 'idle' so Run takes the
+        // fresh-start path (loadCircuit + runTransient), and say so in the crash
+        // notice. The pause is not re-created on the new process: a halt queued
+        // straight after runTransient races the ngspice background thread
+        // (bg_halt before the thread is up is a no-op), so it would not hold.
+        // Scope ring buffers keep the history the user was inspecting.
+        set(s => ({
+          simState: 'idle',
+          crashNotice: {
+            willRespawn: s.crashNotice?.willRespawn ?? true,
+            at: s.crashNotice?.at ?? Date.now(),
+            pausedRunLost: true,
+          },
+        }))
       }
     },
 

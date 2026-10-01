@@ -124,21 +124,65 @@ describe('checkClearance', () => {
     (gr_line (start 40 40) (end 0 40) (layer "Edge.Cuts") (width 0.1))
     (gr_line (start 0 40) (end 0 0) (layer "Edge.Cuts") (width 0.1))`
 
-  it('flags two different-net tracks closer than the min clearance', () => {
-    // Two parallel F.Cu tracks 0.1 mm apart (< default 0.2), different nets.
+  const twoTrackBoard = (w1: number, w2: number, offsetMm: number) =>
+    parseBoard(`(kicad_pcb (version 20221018) (generator pcbnew)
+      (general (thickness 1.6))
+      (net 0 "") (net 1 "A") (net 2 "B")
+      (segment (start 10 20) (end 30 20) (width ${w1}) (layer "F.Cu") (net 1))
+      (segment (start 10 ${20 + offsetMm}) (end 30 ${20 + offsetMm}) (width ${w2}) (layer "F.Cu") (net 2))
+      ${baseEdge}
+    )`)
+  const clearance = (b: ReturnType<typeof parseBoard>) =>
+    runCritic(b, extract(b)).findings.filter((f) => f.check === 'clearance')
+
+  it('flags two different-net tracks whose copper edges are closer than the min clearance', () => {
+    // Two 0.25 mm tracks, centerlines 0.35 mm apart: copper gap 0.35 - 0.25 = 0.10 mm (< 0.2).
+    const c = clearance(twoTrackBoard(0.25, 0.25, 0.35))
+    expect(c).toHaveLength(1)
+    expect(c[0].severity).toBe('warn')
+    expect(c[0].metrics!.gapMm).toBeCloseTo(0.1, 6)
+  })
+
+  it('treats overlapping copper as an error even when the centerlines clear the minimum (issue #11)', () => {
+    // Two 1.0 mm tracks, centerlines 0.6 mm apart: copper overlaps by 0.4 mm.
+    const c = clearance(twoTrackBoard(1.0, 1.0, 0.6))
+    expect(c).toHaveLength(1)
+    expect(c[0].severity).toBe('error')
+    expect(c[0].title).toContain('touch or overlap')
+    expect(c[0].metrics!.gapMm).toBeCloseTo(-0.4, 6)
+  })
+
+  it('does NOT flag wide tracks whose copper gap meets the minimum', () => {
+    // 1.0 mm tracks, centerlines 1.25 mm apart: copper gap 0.25 mm (>= 0.2).
+    expect(clearance(twoTrackBoard(1.0, 1.0, 1.25))).toEqual([])
+  })
+
+  it('uses each track own half width (mixed widths)', () => {
+    // 1.0 mm and 0.2 mm tracks, centerlines 0.65 mm apart: gap = 0.65 - 0.6 = 0.05 mm.
+    const c = clearance(twoTrackBoard(1.0, 0.2, 0.65))
+    expect(c).toHaveLength(1)
+    expect(c[0].severity).toBe('warn')
+    expect(c[0].metrics!.gapMm).toBeCloseTo(0.05, 6)
+  })
+
+  it('finds a crossing pair among many non-conflicting tracks, with the original ids', () => {
+    // Index the conflicting pair at positions 3 and 7 of a larger track list.
+    const segs: string[] = []
+    for (let k = 0; k < 10; k++) {
+      const y = 2 + k * 3
+      const net = k === 3 ? 1 : k === 7 ? 2 : 1
+      const yy = k === 7 ? 2 + 3 * 3 + 0.3 : y
+      segs.push(`(segment (start 5 ${yy}) (end 35 ${yy}) (width 0.25) (layer "F.Cu") (net ${net}))`)
+    }
     const text = `(kicad_pcb (version 20221018) (generator pcbnew)
       (general (thickness 1.6))
       (net 0 "") (net 1 "A") (net 2 "B")
-      (segment (start 10 20) (end 30 20) (width 0.25) (layer "F.Cu") (net 1))
-      (segment (start 10 20.1) (end 30 20.1) (width 0.25) (layer "F.Cu") (net 2))
+      ${segs.join('\n')}
       ${baseEdge}
     )`
-    const board = parseBoard(text)
-    const circuit = extract(board)
-    const report = runCritic(board, circuit)
-    const c = report.findings.filter((f) => f.check === 'clearance' && f.severity === 'warn')
-    expect(c.length).toBeGreaterThanOrEqual(1)
-    expect(c[0].metrics!.gapMm).toBeCloseTo(0.1, 2)
+    const c = clearance(parseBoard(text))
+    expect(c.map((f) => f.id)).toEqual(['clearance:t3-t7'])
+    expect(c[0].metrics!.gapMm).toBeCloseTo(0.05, 6)
   })
 
   it('does NOT flag well-separated same-net tracks', () => {
@@ -167,5 +211,32 @@ describe('checkClearance', () => {
     const circuit = extract(board)
     const report = runCritic(board, circuit)
     expect(report.findings.some((f) => f.id.startsWith('clearance:edge'))).toBe(true)
+  })
+
+  it('measures track-to-edge clearance from the copper edge, not the centerline', () => {
+    // 0.25 mm track, centerline 0.3 mm from the edge (clears 0.2 by centerline):
+    // the copper edge is 0.3 - 0.125 = 0.175 mm from the outline, a warning.
+    const warnText = `(kicad_pcb (version 20221018) (generator pcbnew)
+      (general (thickness 1.6))
+      (net 0 "") (net 1 "A")
+      (segment (start 10 0.3) (end 30 0.3) (width 0.25) (layer "F.Cu") (net 1))
+      ${baseEdge}
+    )`
+    const warn = clearance(parseBoard(warnText)).filter((f) => f.id.startsWith('clearance:edge'))
+    expect(warn).toHaveLength(1)
+    expect(warn[0].severity).toBe('warn')
+    expect(warn[0].metrics!.gapMm).toBeCloseTo(0.175, 6)
+
+    // A 1.0 mm track whose centerline is 0.3 mm from the edge sticks out past it.
+    const errText = `(kicad_pcb (version 20221018) (generator pcbnew)
+      (general (thickness 1.6))
+      (net 0 "") (net 1 "A")
+      (segment (start 10 0.3) (end 30 0.3) (width 1.0) (layer "F.Cu") (net 1))
+      ${baseEdge}
+    )`
+    const err = clearance(parseBoard(errText)).filter((f) => f.id.startsWith('clearance:edge'))
+    expect(err).toHaveLength(1)
+    expect(err[0].severity).toBe('error')
+    expect(err[0].metrics!.gapMm).toBeCloseTo(-0.2, 6)
   })
 })

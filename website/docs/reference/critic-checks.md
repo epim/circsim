@@ -35,11 +35,16 @@ KiCad's intentional `unconnected-(...)` nets are deliberately ignored. Reporting
 
 ## Copper clearance
 
-Flags different-net tracks on the same layer that come too close, and tracks too near the board edge. Minimum clearance **0.2 mm**: a generic default, **not** read from your project's net-class or design rules. Capped at 50 findings (with an overflow note if there are more).
+Flags different-net tracks on the same layer whose copper comes too close, and tracks whose copper runs too near the board edge. Gaps are measured between copper edges, not centerlines: the gap between two tracks is the centerline distance minus half of each track's width, and the gap to the board edge is the centerline distance minus half the track's width. Two 1.0 mm tracks with centerlines 0.6 mm apart overlap by 0.4 mm and are reported as a short. Minimum clearance **0.2 mm**: a generic default, **not** read from your project's net-class or design rules. Capped at 50 findings (with an overflow note if there are more).
 
-- **Tracks touch or overlap** *(error)*. Different-net tracks with essentially zero gap: a short or an etch risk.
-- **Tracks too close** *(warn)*: closer than the minimum clearance. *Suggestion: increase spacing or reroute one track.*
+- **Tracks touch or overlap** *(error)*. The copper of different-net tracks touches or overlaps (copper gap of zero or less): a short.
+- **Tracks too close** *(warn)*: copper gap positive but under the minimum clearance. *Suggestion: increase spacing or reroute one track.*
+- **Track touches or crosses the board edge** *(error)*: the copper reaches or crosses the board outline.
 - **Track near board edge** *(warn)*: copper closer than the minimum to the edge risks exposure/shorting after the board is cut. *Suggestion: pull the track in from the edge.*
+
+**Not assessed.** Only track-to-track and track-to-edge clearance are checked. Clearance to pads, pad to pad, vias (annulus against tracks) and zone (pour) edges is **not** assessed; a clean clearance result does not cover them. Arc tracks are approximated by their chord. Use your CAD tool's DRC for those cases.
+
+The check uses a spatial index, so it stays fast on dense boards (tens of thousands of track segments). Clearance, like the other static checks, is computed once per opened board: a new operating point re-runs only the simulation-informed checks.
 
 ## Decoupling proximity
 
