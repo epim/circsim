@@ -662,7 +662,7 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     expect(r.v['s']).toBeLessThan(1.2)
   }, 60_000)
 
-  it('NE555 astable: period within 20% of 0.693*(R1+2R2)*C', async () => {
+  it('NE555 astable: period within 3% of 0.693*(R1+2R2)*C and duty within 2 points of (R1+R2)/(R1+2R2) (issue #68)', async () => {
     const R1 = 1e3
     const R2 = 10e3
     const C = 100e-9
@@ -689,14 +689,33 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
       measured = periods.reduce((a, b) => a + b, 0) / periods.length
     }
     const relErr = Math.abs(measured - expected) / expected
+    // Duty cycle: fraction of the time the output is high between the second and
+    // last rising edge (whole periods only, skipping the start-up cycle).
+    let duty = NaN
+    if (edges.length >= 3) {
+      const first = edges[1]
+      const last = edges[edges.length - 1]
+      let high = 0
+      for (let i = 1; i < out.length; i++) {
+        if (r.t[i] <= first || r.t[i - 1] >= last) continue
+        if (out[i] >= 2.5) high += r.t[i] - r.t[i - 1]
+      }
+      duty = high / (last - first)
+    }
+    const expectedDuty = (R1 + R2) / (R1 + 2 * R2)
     // eslint-disable-next-line no-console
     console.log(
       `\n[NE555] rising edges=${edges.length} measured period=${(measured * 1e3).toFixed(3)} ms ` +
-        `expected=${(expected * 1e3).toFixed(3)} ms relErr=${(relErr * 100).toFixed(1)} %\n`
+        `expected=${(expected * 1e3).toFixed(3)} ms relErr=${(relErr * 100).toFixed(1)} % ` +
+        `duty=${(duty * 100).toFixed(1)} % expected=${(expectedDuty * 100).toFixed(1)} %\n`
     )
     expect(r.errs).toEqual([])
     expect(edges.length).toBeGreaterThanOrEqual(3)
-    expect(relErr).toBeLessThan(0.2)
+    // The fidelity page promises "within a few percent". The gate is 3 percent
+    // (the datasheet's maximum initial timing error); the measured error is 1.6
+    // percent, so a regression toward the old 20 percent gate fails here first.
+    expect(relErr).toBeLessThan(0.03)
+    expect(Math.abs(duty - expectedDuty)).toBeLessThan(0.02)
   }, 90_000)
 
   it('NE555 astable: no spurious output edges at solver steps 2 us to 50 us (review of PR #118)', async () => {

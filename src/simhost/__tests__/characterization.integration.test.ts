@@ -65,6 +65,20 @@ type Measure =
   | { stat: 'period' | 'dutyPct'; node: string; threshold: number }
   | { stat: 'maxSlope'; node: string; from?: number; to?: number }
   | { stat: 'riseTime'; node: string; from: number }
+  | {
+      /**
+       * Propagation delay: the first `edge` crossing of `threshold` on `node`
+       * after `after`, minus the nearest crossing (either direction) of
+       * `refThreshold` on `ref`. Signed.
+       */
+      stat: 'delay'
+      node: string
+      threshold: number
+      ref: string
+      refThreshold: number
+      edge: 'rise' | 'fall'
+      after: number
+    }
 
 interface DeckSetup {
   kind: 'deck'
@@ -387,6 +401,21 @@ function risingEdges(v: number[], t: number[], threshold: number): number[] {
   return edges
 }
 
+function crossings(v: number[], t: number[], threshold: number, edge: 'rise' | 'fall' | 'any') {
+  const out: number[] = []
+  for (let i = 1; i < v.length; i++) {
+    const a = v[i - 1] - threshold
+    const b = v[i] - threshold
+    const rise = a < 0 && b >= 0
+    const fall = a > 0 && b <= 0
+    if ((edge !== 'fall' && rise) || (edge !== 'rise' && fall)) {
+      const f = a / (a - b)
+      out.push(t[i - 1] + f * (t[i] - t[i - 1]))
+    }
+  }
+  return out
+}
+
 function measure(row: Row, r: RunResult): number {
   const m = row.measure
   if ('expr' in m) {
@@ -406,6 +435,19 @@ function measure(row: Row, r: RunResult): number {
   }
   const v = r.series[m.node.toLowerCase()]
   if (!v || r.t.length === 0) throw new Error(`${row.id}: tran has no vector ${m.node}`)
+  if (m.stat === 'delay') {
+    const ref = r.series[m.ref.toLowerCase()]
+    if (!ref) throw new Error(`${row.id}: tran has no vector ${m.ref}`)
+    const tOut = crossings(v, r.t, m.threshold, m.edge).find((x) => x > m.after)
+    if (tOut === undefined) return NaN
+    const tRef = crossings(ref, r.t, m.refThreshold, 'any')
+    if (tRef.length === 0) return NaN
+    // The reference crossing nearest the output edge; the sign is kept so a
+    // zero-delay model (the Schmitt gates) can land a few picoseconds early.
+    let nearest = tRef[0]
+    for (const x of tRef) if (Math.abs(x - tOut) < Math.abs(nearest - tOut)) nearest = x
+    return tOut - nearest
+  }
   if (m.stat === 'period' || m.stat === 'dutyPct') {
     const edges = risingEdges(v, r.t, m.threshold)
     if (edges.length < 4) return NaN
