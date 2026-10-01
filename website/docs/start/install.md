@@ -16,24 +16,59 @@ Grab the latest installer for your platform from the [releases page](https://git
 
 Each installer bundles its own SPICE engine and model library. There is nothing else to install: no toolchain, no Python, no ngspice on your PATH.
 
-## First-run security prompts
+## Verify your download
 
-The installers are **unsigned**. That's a deliberate choice, not an oversight: code-signing certificates tie a build to a legal identity, and circsim ships without one for now. The app itself is unchanged by this; you just have to tell your OS you trust it the first time.
+Every release includes a `SHA256SUMS` file next to the installers. Download it from the same release page and compare before you run anything. The installers are not signed yet (see below), so the checksum is the way to confirm the file is the one that was published.
 
-::: details Windows: SmartScreen
-On first launch Windows SmartScreen may show *"Windows protected your PC."* Click **More info → Run anyway**. This appears once.
+::: details Windows (PowerShell)
+```powershell
+Get-FileHash .\circsim-<version>-x64-setup.exe -Algorithm SHA256
+```
+Compare the `Hash` value with the line for that file in `SHA256SUMS`.
 :::
 
-::: details macOS: Gatekeeper
-Gatekeeper blocks unsigned apps by default. After dragging circsim to Applications:
+::: details macOS
+```sh
+shasum -a 256 circsim-<version>-arm64.dmg
+```
+Compare the output with the line for that file in `SHA256SUMS`. Or check everything you downloaded at once, from the folder that holds both:
+```sh
+shasum -a 256 -c SHA256SUMS --ignore-missing
+```
+:::
 
-- **Right-click** the app → **Open** → **Open** in the dialog, **or**
-- remove the quarantine flag from a terminal:
-  ```sh
-  xattr -dr com.apple.quarantine /Applications/circsim.app
-  ```
+::: details Linux
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+```
+:::
 
-This is a one-time step per install.
+## First-run security prompts
+
+The installers are **not signed or notarized** yet. Code-signing certificates tie a build to a legal identity, and circsim has not bought one. The pipeline that will sign and notarize releases is in place and switches on when the certificates exist; until then your OS will warn you the first time you open the app, and you decide whether to allow it. The app itself is the same either way.
+
+::: details Windows: SmartScreen
+On first launch Windows SmartScreen may show *"Windows protected your PC."* Click **More info**, then **Run anyway**. This appears once.
+:::
+
+::: details macOS 15 (Sequoia) and later: Privacy & Security
+macOS 15 no longer offers an Open choice when you Control-click an app that is not signed and notarized. Allow it from System Settings instead:
+
+1. Drag circsim to Applications and open it. macOS shows a dialog saying it could not verify circsim is free of malware. Click **Done** (do not choose Move to Bin).
+2. Open **System Settings > Privacy & Security** and scroll down to the **Security** section.
+3. Find the message that circsim was blocked and click **Open Anyway**. The button is only offered for a limited time after the blocked launch, so if it is missing, open circsim again and return here.
+4. Enter your password or use Touch ID, then click **Open Anyway** in the confirmation dialog.
+
+macOS remembers the choice for that copy of the app. A new download asks again.
+
+If you would rather do it from a terminal, this removes the download's quarantine flag, which is the marker macOS uses to decide whether to check the app. Only run it on a file whose checksum you verified above:
+```sh
+xattr -dr com.apple.quarantine /Applications/circsim.app
+```
+:::
+
+::: details macOS 14 (Sonoma) and earlier
+After dragging circsim to Applications, Control-click the app, choose **Open**, then click **Open** in the dialog. You only do this once per install. The Privacy & Security steps above also work on these versions.
 :::
 
 ::: details Linux: AppImage
@@ -66,5 +101,6 @@ Don't have a board handy? That's fine: circsim ships with two sample projects yo
 
 - A GPU that supports WebGL2 (any integrated graphics from the last decade). The 3D board renders at 60 fps on integrated graphics.
   Without a usable GPU (some virtual machines, remote desktops), circsim falls back to a software renderer. If WebGL cannot start at all, the 3D view shows a notice and the parts list, bench, and simulation results keep working.
+- A display of at least 1280 x 800. The window opens at that size and has no smaller layout, so a smaller screen will clip it.
 - ~250 MB of disk for the installed app.
 - No internet connection required, ever. The app refuses network requests rather than relying on never making them ([how](../reference/architecture#how-the-offline-promise-is-enforced)).
