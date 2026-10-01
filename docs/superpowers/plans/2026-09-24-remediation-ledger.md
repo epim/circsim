@@ -94,7 +94,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #87 LM358 output low level is 69 mV against a 20 mV maximum (rout=100 ohm in the output stage) | M | merged | fix/2-supply-current-and-opamp | #118 | 4 | e503bc8 | escalated to opus (4 rounds), both reviewers APPROVE; merged 2026-09-30 22:10 PDT; canary green; note: macos-14 CI flaked once with ngspice memory required in the fine-step 555 test, green on rerun |
 | #131 Floating negative supply pin joins VCC through the supply-current source and is never reported as undriven | M | merged | fix/131-floating-supply-pin-undriven | #132 | 2 | 9ad8890 | sonnet rung (2 rounds), reviewer APPROVE; merged 2026-10-01 01:55 PDT; canary green |
 | #136 74HC flip-flop and shift-register clock-to-output delay is twice the library delaysNs | M | todo | | | 0 | | filed by D2 (#138) 2026-10-01: 74HC74 and 74HC164 clk-to-Q 2.1x datasheet |
-| #144 openBoard parity test races the background board hash: boardSha256 null on a slow runner | U | todo | | | 0 | | filed 2026-10-01 from a #135 CI flake; may be a product bug if sidecar or diagnostics can read a null hash |
+| #144 openBoard parity test races the background board hash: boardSha256 null on a slow runner | U | in-progress | fix/144-board-hash-race | | 0 | | filed 2026-10-01 from a #135 CI flake; second occurrence on #143; started 04:02 PDT (wf_f2b08a2b-108) |
 
 ## Wave log
 
@@ -133,3 +133,4 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 - 2026-10-01 03:38 PDT: #129 merged (c335730) closing #78 only; #25 stays open for W2.3 with the profile recorded in the issue. Scope renderer bug (trace broken at empty pixel columns) fixed inside #129 with a unit test. 34 of 36 batch 1 PRs merged.
 - 2026-10-01 03:55 PDT: #135 (V6) resolution reviewed by opus (field-by-field parity, APPROVE); one macos-14 failure in the #116 parity test (boardSha256 race) filed as #144 and the job rerun.
 - 2026-10-01 03:57 PDT: #135 (V6) merged. Linux E2E spec fix #143 rerunning its Intel timing flake, then merges and releases #138, #140, #114. #142 (ratio headroom) in review and CI. Open batch 1: #110 #112 (token scope), #114 #120 (queue). Open batch 2: #137 #138 #140 (queue), R3+R4 (after #110).
+- 2026-10-01 04:03 PDT: #144 (boardSha256 race) now blocks merges (two occurrences), fix launched. #143 rerunning; #142 red on both macOS legs inside its fix loop; #137 conflict resolution in progress.
