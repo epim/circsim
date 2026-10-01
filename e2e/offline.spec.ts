@@ -16,6 +16,7 @@
 
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { join } from 'path'
+import { pathToFileURL } from 'url'
 import { pipeAppOutput, APP_MAIN, resolvePackagedExe } from './util'
 
 interface NetAuditShape {
@@ -130,6 +131,34 @@ test.describe('offline enforcement and renderer hardening', () => {
     await expect
       .poll(() => app.evaluate(({ clipboard }) => clipboard.readText()).then(t => t.length), { timeout: 5_000 })
       .toBeGreaterThan(0)
+  })
+
+  test('the page cannot fetch or XHR a file outside the app, only its own', async () => {
+    const started = await launch()
+    app = started.app
+    const page = started.page
+
+    // A file that exists and is not one of the app's own: refused by the session.
+    const target = pathToFileURL(REPO_PACKAGE_JSON).href
+    const outcome = await page.evaluate(async url => {
+      const viaFetch = await fetch(url).then(
+        r => `fetched ${r.status}`,
+        () => 'blocked',
+      )
+      const viaXhr = await new Promise<string>(resolve => {
+        const x = new XMLHttpRequest()
+        x.onload = () => resolve(`read ${x.responseText.length}`)
+        x.onerror = () => resolve('blocked')
+        x.open('GET', url)
+        x.send()
+      })
+      return { viaFetch, viaXhr }
+    }, target)
+    expect(outcome).toEqual({ viaFetch: 'blocked', viaXhr: 'blocked' })
+
+    const audit = await readAudit(app)
+    expect(audit!.network.some(r => !r.allowed && r.url === target)).toBe(true)
+    expect(audit!.network.filter(r => r.allowed)).toEqual([])
   })
 
   test('window.open and navigation away are refused', async () => {

@@ -27,7 +27,12 @@ import {
   validateRendererFiles
 } from './diagnosticsBundle'
 import { openFidelityDocs } from './openDocs'
-import { NetAudit, installNavigationGuards, installOfflineGuard } from './hardening'
+import {
+  NetAudit,
+  REPORT_CONTENT_SECURITY_POLICY,
+  installNavigationGuards,
+  installOfflineGuard,
+} from './hardening'
 import { MAX_READ_BYTES, ReadGrants, sanitizeOpenDialogOptions } from './readPolicy'
 import { sidecarPathFor } from '../core/persist/paths'
 import { MAX_SIDECAR_BYTES } from '../core/persist/sidecar'
@@ -92,6 +97,16 @@ app.commandLine.appendSwitch('host-resolver-rules', 'MAP * ~NOTFOUND , EXCLUDE l
 const netAudit = new NetAudit()
 ;(globalThis as { __circsimNetAudit?: NetAudit }).__circsimNetAudit = netAudit
 
+/** The app's own page and assets; the only files the app window's requests may read. */
+const RENDERER_DIR = join(__dirname, '../renderer')
+
+function logDenied(url: string, resourceType: string): void {
+  const line = `[offline] blocked ${resourceType || 'request'}: ${url.slice(0, 200)}\n`
+  mainDiagnostics.recordOutput('stderr', line)
+  // eslint-disable-next-line no-console
+  console.warn(line.trim())
+}
+
 const guardedSessions = new WeakSet<object>()
 function guardSession(ses: Electron.Session): void {
   if (guardedSessions.has(ses)) return
@@ -99,12 +114,8 @@ function guardSession(ses: Electron.Session): void {
   installOfflineGuard(ses, {
     devOrigin: process.env['ELECTRON_RENDERER_URL'] ?? null,
     audit: netAudit,
-    onDenied: (url, resourceType) => {
-      const line = `[offline] blocked ${resourceType || 'request'}: ${url.slice(0, 200)}\n`
-      mainDiagnostics.recordOutput('stderr', line)
-      // eslint-disable-next-line no-console
-      console.warn(line.trim())
-    },
+    onDenied: logDenied,
+    fileRoots: [RENDERER_DIR],
   })
 }
 
@@ -162,9 +173,26 @@ function createWindow(): BrowserWindow {
 async function renderPdf(html: string): Promise<Buffer> {
   const tmp = join(app.getPath('temp'), `circsim-report-${process.pid}-${Date.now()}.html`)
   await writeFile(tmp, html, 'utf8')
+  // The report is one self-contained document with an inline <style>, which the
+  // app's strict CSP (style-src 'self') would strip, leaving the PDF unstyled. So
+  // it renders in its own in-memory session: offline, limited to its one temp
+  // file, with a CSP that allows only inline styles and data images.
+  const ses = electronSession.fromPartition('circsim-report')
+  installOfflineGuard(ses, {
+    audit: netAudit,
+    onDenied: logDenied,
+    fileRoots: [tmp],
+    csp: REPORT_CONTENT_SECURITY_POLICY,
+  })
   const win = new BrowserWindow({
     show: false,
-    webPreferences: { sandbox: true, javascript: false, contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      session: ses,
+      sandbox: true,
+      javascript: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
   })
   try {
     await win.loadFile(tmp)

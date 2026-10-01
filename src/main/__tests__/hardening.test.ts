@@ -5,8 +5,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
+import { pathToFileURL } from 'url'
 import {
   CONTENT_SECURITY_POLICY,
+  REPORT_CONTENT_SECURITY_POLICY,
+  isFileUrlWithin,
   NetAudit,
   installNavigationGuards,
   installOfflineGuard,
@@ -72,6 +75,82 @@ describe('isAllowedRequestUrl', () => {
     expect(isAllowedRequestUrl('ws://localhost:5173/', 'http://localhost:5173')).toBe(true)
     expect(isAllowedRequestUrl('http://localhost:5174/', 'http://localhost:5173')).toBe(false)
     expect(isAllowedRequestUrl('https://example.com/', 'http://localhost:5173')).toBe(false)
+  })
+})
+
+describe('file: requests are scoped to the app', () => {
+  const root = join(process.cwd(), 'out', 'renderer')
+  const inside = (name: string): string => pathToFileURL(join(root, name)).href
+
+  it('allows the app directory and what is under it', () => {
+    expect(isFileUrlWithin(inside('index.html'), [root])).toBe(true)
+    expect(isFileUrlWithin(inside('assets/index-abc.js'), [root])).toBe(true)
+    expect(isAllowedRequestUrl(inside('index.html'), null, [root])).toBe(true)
+  })
+
+  it('refuses any other file, including traversal and a sibling with the same prefix', () => {
+    const outside = pathToFileURL(join(process.cwd(), 'package.json')).href
+    const sibling = pathToFileURL(join(process.cwd(), 'out', 'renderer-evil', 'x.js')).href
+    const dotdot = `${inside('assets')}/../../../package.json`
+    for (const u of [
+      outside,
+      sibling,
+      dotdot,
+      'file:///C:/Windows/win.ini',
+      'file:///etc/passwd',
+      'file://attacker-host/share/x.html',
+      'file:///',
+    ]) {
+      expect(isAllowedRequestUrl(u, null, [root]), u).toBe(false)
+    }
+  })
+
+  it('still allows data, blob and devtools URLs, and treats a file root as that one file', () => {
+    expect(isAllowedRequestUrl('data:text/plain,hi', null, [root])).toBe(true)
+    expect(isAllowedRequestUrl('blob:file:///1234', null, [root])).toBe(true)
+    const one = join(process.cwd(), 'tmp-report.html')
+    expect(isAllowedRequestUrl(pathToFileURL(one).href, null, [one])).toBe(true)
+    expect(isAllowedRequestUrl(pathToFileURL(`${one}.other`).href, null, [one])).toBe(false)
+  })
+
+  it('without roots any file is allowed (the unscoped default)', () => {
+    expect(isAllowedRequestUrl('file:///C:/Windows/win.ini')).toBe(true)
+  })
+
+  it('the guard cancels an out-of-root file and audits the refusal', () => {
+    const { ses, handlers } = fakeSession()
+    const audit = new NetAudit()
+    installOfflineGuard(ses, { audit, fileRoots: [root] })
+    const before = handlers['beforeRequest'] as Listener
+    const ok = vi.fn()
+    before({ url: inside('index.html'), resourceType: 'mainFrame' }, ok)
+    expect(ok).toHaveBeenCalledWith({ cancel: false })
+    const bad = vi.fn()
+    before({ url: 'file:///C:/Windows/win.ini', resourceType: 'xhr' }, bad)
+    expect(bad).toHaveBeenCalledWith({ cancel: true })
+    expect(audit.local).toBe(1)
+    expect(audit.network).toEqual([{ url: 'file:///C:/Windows/win.ini', resourceType: 'xhr', allowed: false }])
+  })
+})
+
+describe('report window policy', () => {
+  it('allows the inline stylesheet the report carries, and nothing remote or scripted', () => {
+    expect(REPORT_CONTENT_SECURITY_POLICY).toContain("style-src 'unsafe-inline'")
+    expect(REPORT_CONTENT_SECURITY_POLICY).toContain("default-src 'none'")
+    expect(REPORT_CONTENT_SECURITY_POLICY).not.toMatch(/script-src|https?:|\*/)
+  })
+
+  it('a guard given the report CSP sets it instead of the app CSP', () => {
+    const { ses, handlers } = fakeSession()
+    installOfflineGuard(ses, { audit: new NetAudit(), csp: REPORT_CONTENT_SECURITY_POLICY })
+    const cb = vi.fn()
+    ;(handlers['headers'] as Listener)({ responseHeaders: {} }, cb)
+    const headers = (cb.mock.calls[0][0] as { responseHeaders: Record<string, string[]> }).responseHeaders
+    expect(headers['Content-Security-Policy']).toEqual([REPORT_CONTENT_SECURITY_POLICY])
+  })
+
+  it('the app CSP still forbids inline styles', () => {
+    expect(CONTENT_SECURITY_POLICY).toContain("style-src 'self'")
   })
 })
 
