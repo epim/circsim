@@ -11,7 +11,7 @@
  *   - powerOn (fixture-rc) → mock opResult{out:2.5} → assert the board hooks
  *     (showOpAnnotations / applyNetVoltages) are invoked with out = 2.5
  *   - run → loadCircuit (when dirty) + runTransient with the §7.5 bounded
- *     window (tstep = min(1/(200·fmax),10µs), tstop = 30 s, never unbounded)
+ *     window (tstep = min(1/(200·fmax),100µs), tstop = 30 s, never unbounded)
  *   - run → mock samples → per-probe ring buffer populated → scope can read it
  *   - pause / resume route through halt / resume (user-owner)
  *   - setPace → setPace command
@@ -26,9 +26,18 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { createAppStore, fidelityBannerItems, mapOpResultToCurrents, type AppStore } from '../appStore'
+import {
+  MAX_TSTEP_SECONDS,
+  computeTstep,
+  createAppStore,
+  fidelityBannerItems,
+  mapOpResultToCurrents,
+  type AppStore,
+} from '../appStore'
 import { createMockSimClient, type MockSimClient } from '../../ipc/simClient'
 import type { Resolution } from '../../../../core/models/types'
+import type { Instrument } from '../../../../core/spicegen/instruments'
+import { BENCH_TSTEP_MAX_SECONDS, type SimCommand } from '../../../../simhost/protocol'
 
 const fixturesDir = join(__dirname, '../../../../../fixtures')
 
@@ -111,7 +120,7 @@ describe('orchestration — run / pause / resume / pace (fixture-rc)', () => {
     store.getState().addInstrument({ kind: 'voltage-probe', id: 'vp1', netId: outId, color: '#6f6' })
   })
 
-  it('run loads the deck (dirty) then runs a BOUNDED transient (tstop=30s, tstep<=10µs)', () => {
+  it('run loads the deck (dirty) then runs a BOUNDED transient (tstop=30s, tstep at the 100µs ceiling)', () => {
     store.getState().run()
     const load = mock.sent.find(c => c.type === 'loadCircuit')
     expect(load).toBeDefined()
@@ -121,14 +130,15 @@ describe('orchestration — run / pause / resume / pace (fixture-rc)', () => {
     expect(tran).toBeDefined()
     // bounded window — never unbounded (Spec §7.5)
     expect(tran!.tstopSeconds).toBe(30)
-    // no function-gen → fmax falls back → tstep capped at 10 µs
-    expect(tran!.tstepSeconds).toBeLessThanOrEqual(10e-6)
-    expect(tran!.tstepSeconds).toBeGreaterThan(0)
+    // no function-gen → nothing periodic to resolve → the coarse 100 µs ceiling
+    // (issue #25: the old 10 µs cap on every bench held the bench under real time)
+    expect(tran!.tstepSeconds).toBe(100e-6)
+    expect(tran!.tstepSeconds).toBe(MAX_TSTEP_SECONDS)
     expect(store.getState().simState).toBe('running')
   })
 
-  it('tstep derives from the fastest function-gen: min(1/(200·fmax),10µs)', () => {
-    // 1 MHz gen → 1/(200·1e6) = 5e-9 s, well under the 10 µs cap
+  it('tstep derives from the fastest function-gen: min(1/(200·fmax),100µs)', () => {
+    // 1 MHz gen → 1/(200·1e6) = 5e-9 s, well under the 100 µs ceiling
     store.getState().addInstrument({
       kind: 'function-gen', id: 'fg1', netId: vinId,
       wave: 'sine', freqHz: 1_000_000, amplitudeV: 1, offsetV: 0, outputOhms: 50,
@@ -434,5 +444,123 @@ describe('mapOpResultToCurrents — LED ammeter branch currents → part refs', 
     const opResult = { vin: 5, leda: 1.8, 'i(vsense_d1)': -0.0104 }
     const currentsByRef = mapOpResultToCurrents(opResult, ledSpiceNames)
     expect(currentsByRef.get('D1')).toBeCloseTo(0.0104, 6)
+  })
+})
+
+describe('computeTstep, derived from the signal bandwidth on the bench (issue #25)', () => {
+  const gen = (freqHz: number): Instrument => ({
+    kind: 'function-gen', id: `fg${freqHz}`, netId: 1,
+    wave: 'sine', freqHz, amplitudeV: 1, offsetV: 0, outputOhms: 50,
+  })
+
+  it('the ceiling is the protocol constant the real-time tests use, 100 µs', () => {
+    expect(MAX_TSTEP_SECONDS).toBe(BENCH_TSTEP_MAX_SECONDS)
+    expect(BENCH_TSTEP_MAX_SECONDS).toBe(100e-6)
+  })
+
+  it('a bench with no function generator runs at the ceiling', () => {
+    expect(computeTstep([])).toBe(100e-6)
+    expect(computeTstep([{ kind: 'ground-ref', netId: 0 }])).toBe(100e-6)
+  })
+
+  it('a slow generator (1 Hz to 50 Hz) cannot ask for a step coarser than the ceiling', () => {
+    expect(computeTstep([gen(1)])).toBe(100e-6)
+    expect(computeTstep([gen(50)])).toBe(100e-6)
+  })
+
+  it('a fast generator sets 200 points per cycle', () => {
+    expect(computeTstep([gen(1_000)])).toBeCloseTo(5e-6, 15)
+    expect(computeTstep([gen(10_000)])).toBeCloseTo(5e-7, 15)
+  })
+
+  it('the fastest of several generators wins', () => {
+    expect(computeTstep([gen(100), gen(10_000), gen(500)])).toBeCloseTo(5e-7, 15)
+  })
+})
+
+describe('orchestration: the scope probes are the watched vectors (issue #25)', () => {
+  let store: AppStore
+  let mock: MockSimClient
+  let outNode: string
+  let vinNode: string
+
+  const watchCommands = (): Extract<SimCommand, { type: 'watch' }>[] =>
+    mock.sent.filter((c): c is Extract<SimCommand, { type: 'watch' }> => c.type === 'watch')
+
+  beforeEach(() => {
+    mock = createMockSimClient()
+    store = createAppStore({ simClient: mock })
+    store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
+    const nets = store.getState().circuit!.nets
+    const vin = nets.find(n => n.kicadName === 'VIN')!
+    const out = nets.find(n => n.kicadName === 'OUT')!
+    vinNode = vin.spiceNode
+    outNode = out.spiceNode
+    store.getState().addInstrument({ kind: 'dc-supply', id: 'psu1', netId: vin.id, volts: 5, seriesOhms: 0.1 })
+    store.getState().addInstrument({ kind: 'voltage-probe', id: 'vp1', netId: out.id, color: '#6f6' })
+  })
+
+  it('run sends the probed nets as the watch, after the deck and before the transient starts', () => {
+    store.getState().run()
+    const types = mock.sent.map(c => c.type)
+    expect(watchCommands()).toHaveLength(1)
+    expect(watchCommands()[0].vectors).toEqual([outNode])
+    expect(types.indexOf('loadCircuit')).toBeLessThan(types.indexOf('watch'))
+    expect(types.indexOf('watch')).toBeLessThan(types.indexOf('runTransient'))
+  })
+
+  it('a bench with no probe watches nothing: everything is tinted from the display-rate snapshot', () => {
+    store.getState().removeInstrument('vp1')
+    mock.clearSent()
+    store.getState().run()
+    expect(watchCommands()).toHaveLength(1)
+    expect(watchCommands()[0].vectors).toEqual([])
+  })
+
+  it('adding or removing a probe while the bench runs re-sends the watch; while idle it sends nothing', () => {
+    mock.clearSent()
+    store.getState().removeInstrument('vp1') // idle: nothing to tell SimHost
+    expect(watchCommands()).toHaveLength(0)
+    store.getState().addInstrument({
+      kind: 'voltage-probe', id: 'vp1', netId: store.getState().circuit!.nets.find(n => n.kicadName === 'OUT')!.id, color: '#6f6',
+    })
+
+    store.getState().run()
+    mock.clearSent()
+    const vinId = store.getState().circuit!.nets.find(n => n.spiceNode === vinNode)!.id
+    store.getState().addInstrument({ kind: 'voltage-probe', id: 'vp2', netId: vinId, color: '#f66' })
+    expect(watchCommands()).toHaveLength(1)
+    expect(new Set(watchCommands()[0].vectors)).toEqual(new Set([outNode, vinNode]))
+
+    store.getState().removeInstrument('vp2')
+    expect(watchCommands()).toHaveLength(2)
+    expect(watchCommands()[1].vectors).toEqual([outNode])
+  })
+
+  it('after a SimHost crash the replayed run re-sends the watch (the new process has none)', () => {
+    store.getState().run()
+    mock.clearSent()
+    store.getState().replayAfterCrash()
+    expect(watchCommands()).toHaveLength(1)
+    expect(watchCommands()[0].vectors).toEqual([outNode])
+  })
+
+  it('a samples batch with a latest snapshot tints the unwatched nets from it, and the probe still feeds its ring buffer', () => {
+    const board = makeBoardHooks()
+    store.getState().setBoardHooks(board.hooks)
+    store.getState().run()
+    mock.emit({
+      type: 'samples',
+      vectorNames: [outNode],
+      columns: [new Float64Array([2.4, 2.5])],
+      simTime: new Float64Array([0, 1e-6]),
+      latest: { vectorNames: [vinNode], values: new Float64Array([4.9]) },
+    })
+    const ring = store.getState().getProbeRingBuffer('vp1')
+    expect(ring!.length).toBe(2)
+    const last = board.appliedVoltages[board.appliedVoltages.length - 1].voltages
+    const nets = store.getState().circuit!.nets
+    expect(last.get(nets.find(n => n.kicadName === 'OUT')!.id)).toBeCloseTo(2.5, 9)
+    expect(last.get(nets.find(n => n.kicadName === 'VIN')!.id)).toBeCloseTo(4.9, 9)
   })
 })

@@ -16,51 +16,11 @@ import {
   formatNum,
   ngspiceTranMemoryBytes
 } from '../index'
-import type { EngineEvent, EngineEventListener, SpiceEngine } from '../engine'
+import { StubEngine } from './stubEngine'
 import type { SimEvent } from '../protocol'
 
-/** Minimal scriptable SpiceEngine stub: records commands, replays events. */
-class StubEngine implements SpiceEngine {
-  version = '46'
-  commands: string[] = []
-  private listeners: EngineEventListener[] = []
-  running = false
-
-  init(): void {}
-  on(l: EngineEventListener): () => void {
-    this.listeners.push(l)
-    return () => {
-      const i = this.listeners.indexOf(l)
-      if (i >= 0) this.listeners.splice(i, 1)
-    }
-  }
-  emit(ev: EngineEvent): void {
-    for (const l of this.listeners) l(ev)
-  }
-  loadCircuit(): void {}
-  command(cmd: string): Promise<void> {
-    this.commands.push(cmd)
-    if (cmd.startsWith('bg_tran')) this.running = true
-    if (cmd === 'bg_halt') this.running = false
-    if (cmd === 'bg_resume') this.running = true
-    return Promise.resolve()
-  }
-  currentPlot(): string {
-    return 'tran1'
-  }
-  /** Vector names a transient plot reports; empty unless a test sets it. */
-  vectors: string[] = []
-  allVectors(): string[] {
-    return this.vectors
-  }
-  vectorData(): Float64Array | undefined {
-    return undefined
-  }
-  isRunning(): boolean {
-    return this.running
-  }
-  dispose(): void {}
-}
+/** Let the halt/resume commands queued on the host's engine chain run. */
+const settle = (): Promise<void> => new Promise((r) => setImmediate(r))
 
 function makeHost(opts: {
   engine: StubEngine
@@ -78,7 +38,8 @@ function makeHost(opts: {
     benchWindowSeconds: opts.benchWindowSeconds,
     tranMemoryBudgetBytes: opts.tranMemoryBudgetBytes,
     disableWatchdog: true,
-    disableTimers: true // unit test steps pacingTick() manually
+    disableTimers: true, // unit test steps pacingTick() manually
+    resumeGapMs: 0 // no real-time settle gap in unit tests
   })
   return { host, events }
 }
@@ -110,9 +71,11 @@ describe('SimHost pacing', () => {
 
     // Advance wall-clock 50 ms but report sim-time of 5 s (way ahead of 1x target).
     t += 50
-    engine.emit({ type: 'data', row: { time: 5, out: 1 }, scaleName: 'time' })
+    engine.pushPoint({ time: 5, out: 1 })
+    host.sampleTick()
     host.pacingTick()
     expect(host.getHaltOwner()).toBe('pacing')
+    await settle()
     expect(engine.commands).toContain('bg_halt')
   })
 
@@ -126,7 +89,8 @@ describe('SimHost pacing', () => {
     await host.whenIdle()
 
     t += 50
-    engine.emit({ type: 'data', row: { time: 10, out: 1 }, scaleName: 'time' })
+    engine.pushPoint({ time: 10, out: 1 })
+    host.sampleTick()
     host.pacingTick()
     expect(host.getHaltOwner()).toBe('none')
   })
@@ -140,7 +104,8 @@ describe('SimHost pacing', () => {
 
     // After 1 s wall, sim-time 0.5 s → factor 0.5×.
     t += 1000
-    engine.emit({ type: 'data', row: { time: 0.5, out: 1 }, scaleName: 'time' })
+    engine.pushPoint({ time: 0.5, out: 1 })
+    host.sampleTick()
     host.pacingTick()
     const status = events.find((e) => e.type === 'status') as
       | Extract<SimEvent, { type: 'status' }>
@@ -150,17 +115,78 @@ describe('SimHost pacing', () => {
   })
 })
 
+describe('SimHost status.running while pacing halts the thread', () => {
+  const lastStatus = (events: SimEvent[]): Extract<SimEvent, { type: 'status' }> =>
+    [...events].reverse().find((e) => e.type === 'status') as Extract<SimEvent, { type: 'status' }>
+
+  it('stays true while a pacing halt holds the thread, so the toolbar does not show Paused', async () => {
+    const engine = new StubEngine()
+    let t = 1000
+    const { host, events } = makeHost({ engine, now: () => t, benchWindowSeconds: 30 })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
+    await host.whenIdle()
+
+    t += 1000
+    engine.pushPoint({ time: 5, out: 1 })
+    host.sampleTick()
+    host.pacingTick()
+    await settle()
+    expect(host.getHaltOwner()).toBe('pacing')
+    expect(engine.isRunning()).toBe(false) // the thread really is halted
+    t += 1000
+    host.pacingTick()
+    expect(lastStatus(events).running).toBe(true)
+  })
+
+  it('stays true across the gap between releasing the pacing halt and the thread restarting', async () => {
+    const engine = new StubEngine()
+    let t = 1000
+    const { host, events } = makeHost({ engine, now: () => t, benchWindowSeconds: 30 })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
+    await host.whenIdle()
+    t += 1000
+    engine.pushPoint({ time: 5, out: 1 })
+    host.sampleTick()
+    host.pacingTick()
+    await settle()
+    // Wall time catches up with the plot: the halt is released, the bg_resume
+    // is queued but the thread has not started yet.
+    t += 10_000
+    host.sampleTick()
+    host.pacingTick()
+    expect(host.getHaltOwner()).toBe('none')
+    expect(engine.isRunning()).toBe(false)
+    expect(lastStatus(events).running).toBe(true)
+  })
+
+  it('is false while the user has paused', async () => {
+    const engine = new StubEngine()
+    let t = 1000
+    const { host, events } = makeHost({ engine, now: () => t, benchWindowSeconds: 30 })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
+    await host.whenIdle()
+    host.handleCommand({ type: 'halt' })
+    await host.whenIdle()
+    t += 1000
+    host.pacingTick()
+    expect(host.getHaltOwner()).toBe('user')
+    expect(lastStatus(events).running).toBe(false)
+  })
+})
+
 describe('SimHost bounded bench windows (Spec §7.5)', () => {
   it('restarts when sim-time reaches the bench window and emits benchRestarted', async () => {
     const engine = new StubEngine()
     const t = 1000
     const { host, events } = makeHost({ engine, now: () => t, benchWindowSeconds: 5 })
     host.handleCommand({ type: 'loadCircuit', deckLines: ['* d', 'v1 in 0 dc 5', '.end'] })
+    host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
     host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
     await host.whenIdle()
 
     // Drive sim-time past the 5 s window.
-    engine.emit({ type: 'data', row: { time: 5.0, out: 1 }, scaleName: 'time' })
+    engine.pushPoint({ time: 5.0, out: 1 })
+    host.sampleTick()
     host.pacingTick()
     await host.whenIdle()
 
@@ -187,7 +213,8 @@ describe('SimHost bounded bench windows (Spec §7.5)', () => {
     host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
     await host.whenIdle()
 
-    engine.emit({ type: 'data', row: { time: 0.1, out: 1 }, scaleName: 'time' })
+    engine.pushPoint({ time: 0.1, out: 1 })
+    host.sampleTick()
     host.pacingTick()
     await host.whenIdle()
 
@@ -212,6 +239,7 @@ describe('SimHost alter batching (Spec §7.4.3)', () => {
     host.handleCommand({ type: 'alter', device: 'V1', value: 7 })
     host.flushAlters() // force the coalesce window closed
     await host.whenIdle()
+    await settle()
 
     const halts = engine.commands.filter((c) => c === 'bg_halt').length
     const resumes = engine.commands.filter((c) => c === 'bg_resume').length

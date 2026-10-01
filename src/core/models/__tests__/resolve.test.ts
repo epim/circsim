@@ -364,11 +364,19 @@ describe('Tier 1: Schematic Sim.* fields', () => {
 
 describe('Unresolved parts', () => {
   it('unknown IC with no Sim.* fields and non-R/C/L prefix → unresolved', () => {
-    const circuit = makeCircuit([makePart('U1', 'ESP32', 'Package:ESP32-WROOM-32')])
+    const circuit = makeCircuit([makePart('U1', 'FOO1234', 'Package:SOIC-8_3.9x4.9mm_P1.27mm')])
     const resolutions = resolveAll(circuit)
     const r = resolutions[0]
     expect(r.status).toBe('unresolved')
     expect(r.tier).toBe(6)
+  })
+
+  it('an ESP32 with no library is not unresolved: it is stubbed as interactive pins (issue #29)', () => {
+    const circuit = makeCircuit([makePart('U1', 'ESP32', 'Package:ESP32-WROOM-32')])
+    const r = resolveAll(circuit)[0]
+    expect(r.status).toBe('stubbed')
+    expect(r.model).toEqual({ kind: 'stub', mode: 'interactive-pins' })
+    expect(r.warnings.join(' ')).toMatch(/^stub:/)
   })
 
   it('D prefix without Sim.* and no library → unresolved', () => {

@@ -38,7 +38,9 @@ A behavioral model is a good check. It is not the real chip.
 
 ### MCUs and complex ICs are stubs
 
-Microcontrollers (ESP32, STM32, ATmega, RP2040, anything similar) have no SPICE model circsim can use. They appear as **interactive-pin stubs**: you can set each GPIO high, low, or Hi-Z and watch the rest of the circuit respond, but **the firmware does not run.** That's enough to verify:
+Microcontrollers (ESP32, STM32, ATmega, RP2040, anything similar) have no SPICE model circsim can use, and **the firmware does not run.** circsim recognizes the common ones by name and stubs them automatically, so they never sit there as an unexplained red part: each becomes an amber **supply-load stub** that draws the family's datasheet supply current from its supply pad and does nothing else (see [supply-load stubs](./models#supply-load-stubs)). The rail sags and loads like the real board, which is what a power check needs; the chip's pins are not simulated. A controller circsim recognizes but has no supply figure for is stubbed as interactive pins with no load, and says so.
+
+To play the part of the firmware, choose **Interactive pins** in the [Model Doctor](../guides/model-doctor#interactive-pins): you can then set each GPIO high, low, or Hi-Z and watch the rest of the circuit respond (the part then draws no supply current). That's enough to verify:
 
 - "If GPIO5 goes high, does the LED turn on?"
 - "Will the pull-up on this I²C line actually pull up?"

@@ -43,6 +43,28 @@ function sameOptions(a: CriticOptions, b: CriticOptions): boolean {
   return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k])
 }
 
+/** The memoised no-sim check outputs of one circuit, as plain entries (clone-safe). */
+export type StaticOutputs = [CheckId, CheckOutput][]
+
+/**
+ * The no-sim outputs memoised for `circuit`, or null when none are. A critic run
+ * on another thread (the board-open worker) hands these back so the main thread
+ * can prime its own cache and skip the expensive checks on the next audit.
+ */
+export function exportStaticOutputs(circuit: Circuit): StaticOutputs | null {
+  const entry = staticCache.get(circuit)
+  return entry && entry.outputs.size > 0 ? [...entry.outputs] : null
+}
+
+/**
+ * Seed the no-sim memo for `circuit` with outputs computed elsewhere (default
+ * options, same board). Never replaces an existing entry for the circuit.
+ */
+export function primeStaticOutputs(board: BoardModel, circuit: Circuit, outputs: StaticOutputs): void {
+  if (staticCache.has(circuit)) return
+  staticCache.set(circuit, { board, opts: { ...DEFAULT_CRITIC_OPTIONS }, outputs: new Map(outputs) })
+}
+
 /** Registry of checks. Each entry may declare what it needs; missing inputs → skipped. */
 const CHECKS: { id: CheckId; run: Check; needs?: 'op' }[] = [
   { id: 'floating', run: checkFloating },

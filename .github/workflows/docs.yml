@@ -6,6 +6,8 @@ on:
     branches: [master]
     paths:
       - 'website/**'
+      - 'scripts/corpus-manifest.json' # read by website/docs/gallery.data.ts
+      - 'test/corpus/baseline.json'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
