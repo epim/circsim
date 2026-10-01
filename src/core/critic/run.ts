@@ -23,6 +23,26 @@ import { checkThermal } from './checks/thermal'
 
 type Check = (ctx: CriticContext) => CheckOutput
 
+/**
+ * The no-sim checks (floating, clearance, decoupling, loop-area) depend only on
+ * the board, the extracted circuit and the options, never on an operating-point
+ * result. Their outputs are memoised per circuit object (the store replaces the
+ * board and the circuit wholesale whenever geometry or grounding changes), so a
+ * fresh op result re-runs only the op-dependent checks. The cache is keyed on
+ * the circuit, verified against the board and the options, and held weakly.
+ */
+interface StaticEntry {
+  board: BoardModel
+  opts: CriticOptions
+  outputs: Map<CheckId, CheckOutput>
+}
+const staticCache = new WeakMap<Circuit, StaticEntry>()
+
+function sameOptions(a: CriticOptions, b: CriticOptions): boolean {
+  const ka = Object.keys(a) as (keyof CriticOptions)[]
+  return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k])
+}
+
 /** Registry of checks. Each entry may declare what it needs; missing inputs → skipped. */
 const CHECKS: { id: CheckId; run: Check; needs?: 'op' }[] = [
   { id: 'floating', run: checkFloating },
@@ -47,12 +67,29 @@ export function runCritic(
   const ranBy: CheckId[] = []
   const skipped: { check: CheckId; reason: string }[] = []
 
+  let cached = staticCache.get(circuit)
+  if (!cached || cached.board !== board || !sameOptions(cached.opts, merged)) {
+    cached = { board, opts: merged, outputs: new Map() }
+    staticCache.set(circuit, cached)
+  }
+
   for (const check of CHECKS) {
     if (check.needs === 'op' && !opResult) {
       skipped.push({ check: check.id, reason: 'needs an operating-point simulation' })
       continue
     }
-    const out = check.run(ctx)
+    let out: CheckOutput
+    if (check.needs === 'op') {
+      out = check.run(ctx)
+    } else {
+      const hit = cached.outputs.get(check.id)
+      if (hit) {
+        out = hit
+      } else {
+        out = check.run(ctx)
+        cached.outputs.set(check.id, out)
+      }
+    }
     if (Array.isArray(out)) {
       findings.push(...out)
       ranBy.push(check.id)

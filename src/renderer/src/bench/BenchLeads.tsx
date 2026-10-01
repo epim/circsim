@@ -33,6 +33,7 @@ import {
   type JackDef, type LeadRender,
 } from './leads'
 import { leadPath, type Pt } from './leadGeometry'
+import { MIN_VIEWPORT_H, SHELF_HEADER_H } from '../ui/layoutPrefs'
 
 export interface BenchLeadsHandle { notifyFrame(): void }
 
@@ -220,7 +221,7 @@ const BenchLeads = forwardRef<BenchLeadsHandle, {
   ) : null
 
   return (
-    <div ref={containerRef} style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+    <div ref={containerRef} style={containerStyle}>
       {children}
       <BenchShelf jackHandlers={jackHandlers} />
       <svg
@@ -290,5 +291,15 @@ const BenchLeads = forwardRef<BenchLeadsHandle, {
     </div>
   )
 })
+
+// The container never shrinks below the board's minimum height plus the shelf
+// header strip, so the viewport cannot collapse (issue #33).
+const containerStyle: React.CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: MIN_VIEWPORT_H + SHELF_HEADER_H,
+  position: 'relative',
+}
 
 export default BenchLeads

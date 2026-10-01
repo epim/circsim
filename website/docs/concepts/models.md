@@ -10,7 +10,7 @@ circsim resolves every part through a **tiered pipeline**. The first tier that p
 
 1. **Your Model Doctor overrides** win over everything. If you've stubbed a part, imported a model for it, or hand-edited its pin map, that's final.
 2. **Schematic `Sim.*` fields**: if a matching `.kicad_sch` gives a part explicit KiCad simulation fields, circsim uses them. This is the highest-fidelity automatic source.
-3. **Primitive inference**: a reference starting with `R`, `C`, or `L` plus a parseable value becomes a resistor, capacitor, or inductor directly. (Values like `DNP`, `N/A`, or `TBD` are treated as "not fitted" and stubbed open.)
+3. **Primitive inference**: a reference starting with `R`, `C`, or `L` plus a parseable value becomes a resistor, capacitor, or inductor directly. (Values like `DNP`, `N/A`, or `TBD` are treated as "not fitted" and stubbed open.) The value reader accepts the spellings real boards and BOM exports use: `10k`, `4k7`, `4,7k` (decimal comma), `10 kΩ` and `10 kOhm` (spaces, omega or Ohm), `100nF`, `100NF`, `4.7µF` and `4.7μF` (micro sign or Greek mu, any case of u/n/p), `1e-9` (exponent form), and ratings after the value (`100nF/50V`). Case matters only for M: `M` is mega and `m` is milli, so `2m2` is 2.2 milli and `2M2` is 2.2 mega. A thousands-style comma such as `1,000` is ambiguous between a European decimal and a thousands separator, so it is not read at all.
 4. **The bundled model library**: the main path. circsim matches the part against its [built-in library](../reference/model-library) of diodes, LEDs, transistors, op-amps, the 555, logic, regulators, and more.
 5. **Your imported `.lib`/`.sub` files**: models you [import through the Model Doctor](../guides/model-doctor#import-a-lib) are prepended to the library, so your model for a given part number beats the bundled one.
 6. **Stub fallback**: anything still unmatched is flagged for you (red "no model," or a documented "open by design").
@@ -31,17 +31,19 @@ Not all models are equal, and circsim is explicit about which kind each part get
 
 ### Primitive-level models
 
-Diodes, LEDs, bipolar transistors, and discrete MOSFETs are modeled as **ngspice primitives**: real `.model` cards whose parameters (saturation current, forward voltage, transistor gain, MOSFET turn-on thresholds) come straight from the part's datasheet using SPICE's standard device equations. These are as good as SPICE gets at the hobbyist level. (The exact equation sets have names: *Gummel-Poon* for bipolar transistors, *VDMOS* for power MOSFETs, which you'll see in the [model library reference](../reference/model-library); you don't need them to use the models.)
+Diodes, LEDs, bipolar transistors, and discrete MOSFETs are modeled as **ngspice primitives**: real `.model` cards whose parameters (saturation current, forward voltage, transistor gain, MOSFET turn-on thresholds) are derived from the part's datasheet operating points using SPICE's standard device equations (the fitting script is in the repository, and CI rejects any card that reproduces a known third-party library card). These are as good as SPICE gets at the hobbyist level. (The exact equation sets have names: *Gummel-Poon* for bipolar transistors, *VDMOS* for power MOSFETs, which you'll see in the [model library reference](../reference/model-library); you don't need them to use the models.)
 
 ### Behavioral macromodels
 
-Op-amps, comparators, the NE555, linear regulators, the TL431 reference, and a few power-management ICs are **behavioral subcircuits**. They reproduce the part's terminal behavior (gain, bandwidth, slew rate, saturation voltages, current limit) without simulating the internal transistors. A behavioral op-amp will clip at the right rail and slew at the right rate, but its high-frequency and thermal quirks are approximate. It's good enough to catch design mistakes, but it isn't a substitute for the real chip. See [fidelity](./fidelity).
+Op-amps, comparators, the NE555, linear regulators, the TL431 reference, and a few power-management ICs are **behavioral subcircuits**. They reproduce the part's terminal behavior (gain, bandwidth, slew rate, saturation voltages, current limit) without simulating the internal transistors. A behavioral op-amp will clip at the right rail, slew at the right rate, and leave a rail promptly when its input reverses, and its supply pins carry its load current (as do the 555's, a regulator's, and a logic gate's), but its high-frequency and thermal quirks are approximate. It's good enough to catch design mistakes, but it isn't a substitute for the real chip. See [fidelity](./fidelity).
 
 Some behavioral models are deliberately *simplified operating-point stubs*: a battery-protection IC modeled in its normal (non-tripped) state, a switching LED driver modeled as its DC-average current sink. circsim documents exactly what each one does and doesn't capture.
 
 ### Digital logic
 
 The 74HC and CD4000 logic families use **behavioral digital models** (built on ngspice's XSPICE extension, which lets a real logic gate live inside an analog simulation). The gate does the right truth table with datasheet-typical thresholds and delays. Schmitt-trigger parts (the 74HC14, CD40106) carry true hysteresis, so an *RC astable* (an oscillator made from just a resistor, a capacitor, and one gate) built around one actually oscillates.
+
+Every gate output has a finite drive: roughly 40 ohm and 25 mA for 74HC at 5 V, roughly 400 ohm and 3 mA for CD4000 at 5 V (both scale with the rail). A logic pin wired straight to an LED, a relay coil, or a heavy load therefore sags toward the load instead of holding the rail. The active-low clear, preset, and master-reset pins of the 74HC74, 74HC164, and 74HC595 behave as active-low, so tying them high leaves the register free to clock.
 
 ## Stubs and interactive pins {#stubs-and-interactive-pins}
 
@@ -65,7 +67,7 @@ Each part shows a status in the **Parts** panel and, if it needs attention, in t
 | Stubbed | amber | You (or a heuristic) stubbed it open/short/interactive |
 | No model | red | Nothing matched, needs your attention |
 
-A red "no model" part contributes nothing to the simulation and appears in the fidelity banner. The [Model Doctor](../guides/model-doctor) is where you fix it: import a `.lib`, get one from an LLM and validate it against ngspice, stub it, or set an interactive-pin panel.
+A red "no model" part contributes nothing to the simulation and appears in the fidelity banner. The [Model Doctor](../guides/model-doctor) is where you fix it: import a `.lib`, get one from an LLM and validate it against ngspice, stub it, or set an interactive-pin panel. Imported and LLM-written models are [treated as code](../guides/model-doctor#models-are-code): circsim refuses any model carrying a control block or a file include.
 
 ## Related
 

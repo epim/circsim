@@ -1,416 +1,279 @@
 /**
  * core/critic/checks/irDrop.ts
  *
- * IR-drop (rail-sag) audit (spec §5 item 4). For each power rail it builds a
- * resistive graph of the rail's copper — track segments as resistors
- * (trackResistanceOhms), vias as small fixed resistors, pads snapped onto the
- * copper they sit on — injects the operating-point part currents at the sink
- * pads, nodal-solves for the voltage field, and reports the worst source→sink
- * sag as a percentage of the rail's op-solved nominal voltage.
+ * IR-drop (rail-sag) audit (spec §5 item 4). For each power rail it solves the
+ * rail's copper (railGraph.ts: tracks, vias, copper pours and pads as a
+ * resistive graph) with the operating point's branch currents injected at the
+ * load pads, and reports the worst supply-entry-to-load sag as a percentage of
+ * the rail's op-solved nominal voltage. The ground return is solved the same
+ * way: each load's return current enters the ground copper at its ground pad
+ * and the shift from the return entry is the ground shift. A load's round-trip
+ * drop is its supply sag plus its ground shift toward the rail.
  *
- * Needs an operating-point sim (registry `needs:'op'`). Even when one is
- * present its `partCurrents` may be missing — then this check no-ops. Parts
- * whose current the sim did not solve are NOT counted as sinks (no invented
- * numbers); the assumption string says so.
+ * Polarity: sag is toward 0 V. A positive rail falls at its loads and their
+ * ground pads rise; a negative rail's load current flows from ground through the
+ * part back into the rail, so the rail rises toward 0 V at the load and the
+ * ground there falls. A rail on which every current-carrying pad other than the
+ * entry feeds the rail (pushes current into a positive rail or pulls it out of a
+ * negative one) has no load to measure a sag at; it is named in the
+ * not-assessed line instead of passing silently.
+ *
+ * Needs an operating-point sim (registry `needs:'op'`) that carries branch
+ * currents (OpResult.padCurrents, built by deriveSolvedCurrents from the solve;
+ * a bare partCurrents map is still read, drawing each part's current from a
+ * positive rail's pads, returning it into a negative rail's pads and returning
+ * it on its ground pads). With no currents at all the
+ * check reports "not assessed". Parts whose current the solve could not resolve
+ * and pads the copper model does not connect to the supply entry are named in
+ * the not-assessed line: they are never silently counted as zero. A rail whose
+ * pads carry current but which could not be solved at all (no copper on the net,
+ * no pad on any copper, a solve that did not converge) is named there too.
  *
  * Supply-entry heuristic (the OpResult does not identify which pad the bench
- * supply is attached to — see buildCriticOpResult in the renderer store):
- *   1. a pad on the rail belonging to a connector-like ref (J1/P1/CN1/CON1/X1)
- *      — power usually enters a board on a connector;
- *   2. else the pad attached to the rail's widest incident track — supplies
- *      typically enter on the fattest copper;
- *   3. else the first pad in (ref, pad-number) order.
+ * supply is attached to; see issue #47):
+ *   1. a pad on the rail belonging to a connector-like ref (J1/P1/CN1/CON1/X1);
+ *   2. else the pad attached to the rail's widest incident track;
+ *   3. else the first pad in (ref, pad-number) order that touches copper.
  *
- * Numerical robustness: zero-length segments are resistance-floored, sinks in
- * a disconnected subgraph are ignored (only the source's connected component
- * is solved), zero total current or a singular matrix yields no finding — the
- * check never throws. Pure core; deterministic (rails and parts iterated in
- * sorted order).
+ * Never throws: a rail whose copper cannot be solved yields no finding for that
+ * rail, and says so in the not-assessed line when it carries current. Pure core; deterministic (rails and parts iterated in sorted order).
  */
 
-import type { Finding } from '../types'
+import type { CheckOutput, Finding, Severity } from '../types'
 import type { CriticContext } from '../context'
-import type { Pad, Vec2 } from '../../kicad/types'
 import { classifyRails } from '../classify'
-import { dist, padWorldPos, segLengthMm, trackResistanceOhms } from '../geom'
+import {
+  hasBranchCurrents,
+  minResistancePath,
+  padList,
+  railGapNotes,
+  solveRail,
+  viaResistanceOhms,
+  type GraphEdge,
+  type RailLoad,
+  type RailSolution,
+} from '../railGraph'
 
-/**
- * Assumed resistance of one plated via (Ω). ~0.5 mΩ is typical for a 0.3 mm
- * drill with ~20 µm barrel plating on a 1.6 mm board — small, but kept nonzero
- * so long via chains still register in the solve.
- */
-const VIA_RESISTANCE_OHMS = 0.5e-3
-/** Near-zero contact resistance (Ω) attaching a pad to the copper under it. */
-const PAD_CONTACT_OHMS = 1e-6
-/** Resistance floor (Ω) so zero-length segments can't produce a 0 Ω edge. */
-const MIN_EDGE_OHMS = 1e-9
-/** Coincidence grid (mm): endpoints within this snap to the same node. */
-const SNAP_GRID_MM = 1e-3
-/** Extra slack (mm) beyond the pad's half-size when snapping pads to copper. */
-const PAD_SNAP_SLACK_MM = 0.1
-/** Rails whose total sunk current is below this (A) are not reported. */
-const MIN_TOTAL_CURRENT_A = 1e-9
-/** Rails whose |nominal| is below this (V) can't express a % sag → skipped. */
+/** Rails whose |nominal| is below this (V) can't express a % sag, so are skipped. */
 const MIN_NOMINAL_V = 0.05
-/** Connector-ish refs, preferred as the rail's supply entry. */
-const CONNECTOR_REF_RE = /^(J|P|CN|CON|X)\d+$/i
 
-/**
- * Solve A·x = b by dense Gaussian elimination with partial pivoting. Returns
- * null (instead of throwing) when the matrix is singular (no usable pivot) or
- * the back-substituted solution is non-finite. Inputs are not mutated.
- * Exported for unit tests.
- */
-export function solveLinear(A: number[][], b: number[]): number[] | null {
-  const n = b.length
-  if (n === 0) return []
-  // Augmented working copy [A | b].
-  const M = A.map((row, i) => [...row, b[i]])
-  for (let col = 0; col < n; col++) {
-    let piv = col
-    for (let r = col + 1; r < n; r++) {
-      if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r
-    }
-    if (!(Math.abs(M[piv][col]) > 1e-15)) return null // singular (or NaN)
-    if (piv !== col) {
-      const t = M[piv]
-      M[piv] = M[col]
-      M[col] = t
-    }
-    for (let r = col + 1; r < n; r++) {
-      const f = M[r][col] / M[col][col]
-      if (f === 0) continue
-      for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c]
+interface Headline {
+  /** mm of track and of pour along the worst path, and its narrowest track. */
+  trackMm: number
+  pourMm: number
+  minWidthMm?: number
+  across: string
+}
+
+function pathHeadline(path: GraphEdge[]): Headline {
+  let trackMm = 0
+  let pourMm = 0
+  let minWidthMm: number | undefined
+  for (const e of path) {
+    if (e.kind === 'track') {
+      trackMm += e.lengthMm
+      if (e.widthMm !== undefined) minWidthMm = Math.min(minWidthMm ?? Infinity, e.widthMm)
+    } else if (e.kind === 'pour') {
+      pourMm += e.lengthMm
     }
   }
-  const x = new Array<number>(n).fill(0)
-  for (let r = n - 1; r >= 0; r--) {
-    let s = M[r][n]
-    for (let c = r + 1; c < n; c++) s -= M[r][c] * x[c]
-    x[r] = s / M[r][r]
-  }
-  return x.every(Number.isFinite) ? x : null
+  const parts: string[] = []
+  if (trackMm > 0 && minWidthMm !== undefined) parts.push(`${trackMm.toFixed(0)} mm of ${minWidthMm} mm track`)
+  if (pourMm > 0) parts.push(`${pourMm.toFixed(0)} mm of pour`)
+  return { trackMm, pourMm, minWidthMm, across: parts.length > 0 ? ` across ${parts.join(' and ')}` : '' }
 }
 
-interface Edge {
-  a: number
-  b: number
-  ohms: number
-  /** Physical copper length (mm); 0 for via / pad-contact edges. */
-  lengthMm: number
-  /** Track width (mm); undefined for via / pad-contact edges. */
-  widthMm?: number
-}
-
-interface RailPad {
-  ref: string
-  padNumber: string
-  node: number
-  pos: Vec2
-  /** Copper nodes this pad snapped onto (empty ⇒ stranded pad). */
-  contacts: number[]
-}
-
-/** True if `pad` has copper on `layer` ("*.Cu" pads touch every copper layer). */
-function padTouchesLayer(pad: Pad, layer: string): boolean {
-  return pad.layers.some((l) => l === layer || l === '*.Cu' || l === '*')
-}
-
-export function checkIrDrop(ctx: CriticContext): Finding[] {
+export function checkIrDrop(ctx: CriticContext): CheckOutput {
   const { board, circuit, opResult, opts } = ctx
-  const partCurrents = opResult?.partCurrents
-  if (!partCurrents) return []
+  if (!hasBranchCurrents(ctx)) {
+    return {
+      findings: [],
+      notAssessed: 'the operating point carries no branch currents to inject into the copper',
+    }
+  }
   const nodeVoltages = opResult?.nodeVoltages ?? {}
+  const { powerNetIds, groundNetIds } = classifyRails(circuit, ctx)
+  const netName = (id: number): string => board.netById.get(id)?.name ?? `net ${id}`
+  const nominalOf = (id: number): number | undefined => {
+    const net = circuit.nets.find((n) => n.id === id)
+    const v = net ? nodeVoltages[net.spiceNode] : undefined
+    return v !== undefined && Number.isFinite(v) && Math.abs(v) >= MIN_NOMINAL_V ? v : undefined
+  }
 
-  const { powerNetIds } = classifyRails(circuit, ctx)
   const findings: Finding[] = []
+  const notes: string[] = []
+  const severityFor = (pct: number): Severity | undefined =>
+    pct <= opts.irDropWarnPct ? undefined : pct > opts.irDropErrPct ? 'error' : 'warn'
 
+  // The supply scale ground shift is judged against: the highest rail in play.
+  let supplyV = 0
+  for (const id of powerNetIds) supplyV = Math.max(supplyV, Math.abs(nominalOf(id) ?? 0))
+
+  // ── ground return: shift from the return entry, per load ───────────────────
+  // A positive rail's load returns its current into ground and lifts it there; a
+  // negative rail's load draws its current out of ground and pulls it down. Each
+  // is a ground shift; a rail's round trip counts the one toward that rail.
+  const groundRiseByRef = new Map<string, number>()
+  const groundFallByRef = new Map<string, number>()
+  const noteShift = (byRef: Map<string, number>, ref: string, v: number): void => {
+    byRef.set(ref, Math.max(byRef.get(ref) ?? 0, v))
+  }
+  for (const gid of [...groundNetIds].sort((a, b) => a - b)) {
+    notes.push(...railGapNotes(ctx, gid, true, netName(gid)))
+    const sol = solveRail(ctx, gid, true)
+    if (!sol) continue
+    let worst: { load: RailLoad; shiftV: number } | undefined
+    for (const l of sol.loads) {
+      const shiftV = sol.volts[l.pad.node]
+      if (!Number.isFinite(shiftV)) continue
+      if (shiftV > 0) noteShift(groundRiseByRef, l.pad.ref, shiftV)
+      else if (shiftV < 0) noteShift(groundFallByRef, l.pad.ref, -shiftV)
+      if (!worst || Math.abs(shiftV) > Math.abs(worst.shiftV)) worst = { load: l, shiftV }
+    }
+    if (!worst || supplyV <= 0) continue
+    const shiftV = Math.abs(worst.shiftV)
+    const pct = (100 * shiftV) / supplyV
+    const severity = severityFor(pct)
+    if (!severity) continue
+    const rises = worst.shiftV > 0
+    // The current that moves the ground this way: returned into it, or drawn out.
+    const towardA = sol.loads.reduce((s, l) => s + Math.max(0, (rises ? -1 : 1) * l.amps), 0)
+    const head = pathHeadline(minResistancePath(sol, worst.load.pad.node))
+    const ref = worst.load.pad.ref
+    findings.push({
+      id: `ir-drop:${gid}`,
+      check: 'ir-drop',
+      severity,
+      title:
+        `"${netName(gid)}" return ${rises ? 'rises' : 'falls'} to ${worst.shiftV.toFixed(2)} V at ${ref} ` +
+        `(${pct.toFixed(1)}% of ${supplyV.toFixed(2)} V${head.across})`,
+      detail:
+        (rises
+          ? `The return current of ${ref} lifts ${netName(gid)} by about ${shiftV.toFixed(3)} V `
+          : `The current ${ref} draws out of ${netName(gid)} pulls it down by about ${shiftV.toFixed(3)} V `) +
+        `(${pct.toFixed(1)}% of the ${supplyV.toFixed(2)} V supply) between the return entry at ` +
+        `${sol.source.ref} pad ${sol.source.padNumber} and ${ref} pad ${worst.load.pad.padNumber}` +
+        (head.across ? `, over a path${head.across}.` : '.') +
+        ' Ground shift moves analog references and logic thresholds by the same amount.',
+      assumption: assumptionFor(ctx, sol, 'return'),
+      refs: [ref],
+      netId: gid,
+      location: worst.load.pad.pos,
+      suggestion: suggestionFor(sol, head),
+      metrics: {
+        dropV: shiftV,
+        sagPct: pct,
+        nominalV: supplyV,
+        totalSinkA: towardA,
+        pathLengthMm: head.trackMm + head.pourMm,
+        ...(head.minWidthMm !== undefined ? { minTrackWidthMm: head.minWidthMm } : {}),
+      },
+    })
+  }
+
+  // ── power rails: supply sag, plus the ground shift at the same load ────────
   for (const railId of [...powerNetIds].sort((a, b) => a - b)) {
-    // Nominal rail voltage from the op solve (the sim treats the whole net as
-    // one node, i.e. the voltage at the supply entry). Without it a % sag is
-    // undefined — skip rather than invent a number.
-    const net = circuit.nets.find((n) => n.id === railId)
-    const nominal = net ? nodeVoltages[net.spiceNode] : undefined
-    if (nominal === undefined || !Number.isFinite(nominal) || Math.abs(nominal) < MIN_NOMINAL_V) {
+    // Nominal rail voltage from the op solve (the sim treats the whole net as one
+    // node, i.e. the voltage at the supply entry). Without it a % sag is
+    // undefined: skip rather than invent a number.
+    const nominal = nominalOf(railId)
+    if (nominal === undefined) continue
+    notes.push(...railGapNotes(ctx, railId, false, netName(railId)))
+    const sol = solveRail(ctx, railId, false)
+    if (!sol) continue
+    if (sol.loadAmps < 1e-9) {
+      // Current on the rail, but every pad carrying it feeds the rail the way a
+      // supply does: nothing draws from the inferred entry, so no sag to measure.
+      if (sol.loads.length > 0) {
+        notes.push(
+          `${netName(railId)}: ${padList(sol.loads)} ${sol.loadSign > 0 ? 'push current into' : 'pull current out of'} ` +
+            `the rail as a supply would, and no load draws from the supply entry inferred at ` +
+            `${sol.source.ref} pad ${sol.source.padNumber}, so its sag was not measured`,
+        )
+      }
       continue
     }
 
-    // ── nodes: (layer, snapped position) of track endpoints and via barrels ──
-    const nodePos: Vec2[] = []
-    const nodeLayer: string[] = []
-    const nodeIdByKey = new Map<string, number>()
-    const nodeOf = (layer: string, p: Vec2): number => {
-      const key = `${layer}|${Math.round(p.x / SNAP_GRID_MM)}|${Math.round(p.y / SNAP_GRID_MM)}`
-      let id = nodeIdByKey.get(key)
-      if (id === undefined) {
-        id = nodePos.length
-        nodeIdByKey.set(key, id)
-        nodePos.push(p)
-        nodeLayer.push(layer)
-      }
-      return id
-    }
-
-    const edges: Edge[] = []
-    /** Widest track touching each node — feeds the "largest copper entry" heuristic. */
-    const nodeMaxTrackW: number[] = []
-    const noteWidth = (node: number, w: number): void => {
-      nodeMaxTrackW[node] = Math.max(nodeMaxTrackW[node] ?? 0, w)
-    }
-
-    // ── track segments → resistor edges ──────────────────────────────────────
-    for (const t of board.tracks) {
-      if (t.netId !== railId) continue
-      const a = nodeOf(t.layer, t.start)
-      const b = nodeOf(t.layer, t.end)
-      noteWidth(a, t.widthMm)
-      noteWidth(b, t.widthMm)
-      if (a === b) continue // zero-length: endpoints share a node already
-      const lengthMm = segLengthMm(t)
-      const ohms = trackResistanceOhms(lengthMm, t.widthMm, opts.copperOz)
-      if (!Number.isFinite(ohms)) continue // zero-width copper carries nothing
-      edges.push({ a, b, ohms: Math.max(ohms, MIN_EDGE_OHMS), lengthMm, widthMm: t.widthMm })
-    }
-
-    // ── vias → fixed small resistors joining their copper layers ─────────────
-    for (const via of board.vias) {
-      if (via.netId !== railId) continue
-      const cuLayers = via.layers.filter((l) => l.endsWith('.Cu') || l === '*.Cu')
-      for (let i = 0; i + 1 < cuLayers.length; i++) {
-        const a = nodeOf(cuLayers[i], via.at)
-        const b = nodeOf(cuLayers[i + 1], via.at)
-        if (a === b) continue
-        edges.push({ a, b, ohms: VIA_RESISTANCE_OHMS, lengthMm: 0 })
-      }
-    }
-    const copperNodeCount = nodePos.length
-
-    // ── pads → contact edges onto nearby copper nodes ─────────────────────────
-    // A pad gets its own node, joined by a near-zero resistance to every copper
-    // node within its reach (half its larger dimension + slack) on a layer it
-    // touches. Thru-hole pads ("*.Cu") thereby also stitch layers together.
-    const railPads: RailPad[] = []
-    for (const part of [...circuit.parts].sort((a, b) => a.ref.localeCompare(b.ref))) {
-      const fp = ctx.refToFootprint.get(part.ref)
-      if (!fp) continue
-      for (const pad of fp.pads) {
-        if (pad.netId !== railId) continue
-        const pos = padWorldPos(fp, pad)
-        const reach = Math.max(pad.size.w, pad.size.h) / 2 + PAD_SNAP_SLACK_MM
-        const node = nodePos.length
-        nodePos.push(pos)
-        nodeLayer.push('(pad)')
-        const contacts: number[] = []
-        for (let n = 0; n < copperNodeCount; n++) {
-          if (!padTouchesLayer(pad, nodeLayer[n])) continue
-          if (dist(pos, nodePos[n]) <= reach) {
-            edges.push({ a: node, b: n, ohms: PAD_CONTACT_OHMS, lengthMm: 0 })
-            contacts.push(n)
-          }
-        }
-        railPads.push({ ref: part.ref, padNumber: pad.number, node, pos, contacts })
-      }
-    }
-    if (railPads.length === 0) continue
-
-    // ── supply entry (see heuristic in the header comment) ────────────────────
-    railPads.sort((a, b) => a.ref.localeCompare(b.ref) || a.padNumber.localeCompare(b.padNumber))
-    let source = railPads.find((p) => CONNECTOR_REF_RE.test(p.ref) && p.contacts.length > 0)
-    if (!source) {
-      let bestW = 0
-      for (const p of railPads) {
-        const w = p.contacts.reduce((m, n) => Math.max(m, nodeMaxTrackW[n] ?? 0), 0)
-        if (w > bestW) {
-          bestW = w
-          source = p
-        }
-      }
-    }
-    if (!source) source = railPads[0]
-
-    // ── sinks: op-solved part currents, split across each part's rail pads ────
-    // The source part is excluded (its current is the feed, not a load); parts
-    // without a solved current are skipped rather than guessed.
-    const padsByRef = new Map<string, RailPad[]>()
-    for (const p of railPads) {
-      if (p.ref === source.ref) continue
-      const list = padsByRef.get(p.ref) ?? []
-      list.push(p)
-      padsByRef.set(p.ref, list)
-    }
-    const sinks: { pad: RailPad; amps: number }[] = []
-    for (const [ref, pads] of padsByRef) {
-      const amps = Math.abs(partCurrents[ref] ?? NaN)
-      if (!Number.isFinite(amps) || amps <= 0) continue
-      for (const pad of pads) sinks.push({ pad, amps: amps / pads.length })
-    }
-    if (sinks.length === 0) continue
-
-    // ── connected component containing the source ─────────────────────────────
-    const adj = new Map<number, { to: number; edge: Edge }[]>()
-    const link = (from: number, to: number, edge: Edge): void => {
-      let list = adj.get(from)
-      if (!list) {
-        list = []
-        adj.set(from, list)
-      }
-      list.push({ to, edge })
-    }
-    for (const e of edges) {
-      link(e.a, e.b, e)
-      link(e.b, e.a, e)
-    }
-    const inComp = new Set<number>([source.node])
-    const queue = [source.node]
-    while (queue.length > 0) {
-      const n = queue.pop()!
-      for (const { to } of adj.get(n) ?? []) {
-        if (!inComp.has(to)) {
-          inComp.add(to)
-          queue.push(to)
-        }
-      }
-    }
-    const reachableSinks = sinks.filter((s) => inComp.has(s.pad.node))
-    const totalAmps = reachableSinks.reduce((sum, s) => sum + s.amps, 0)
-    if (totalAmps < MIN_TOTAL_CURRENT_A) continue
-
-    // ── nodal solve: source = reference (0 V), sinks draw their currents ──────
-    const idx = new Map<number, number>()
-    for (const n of [...inComp].sort((a, b) => a - b)) {
-      if (n !== source.node) idx.set(n, idx.size)
-    }
-    const n = idx.size
-    if (n === 0) continue
-    const G: number[][] = Array.from({ length: n }, () => new Array<number>(n).fill(0))
-    const rhs = new Array<number>(n).fill(0)
-    for (const e of edges) {
-      if (!inComp.has(e.a) || !inComp.has(e.b)) continue
-      const g = 1 / e.ohms
-      const ia = idx.get(e.a)
-      const ib = idx.get(e.b)
-      if (ia !== undefined) G[ia][ia] += g
-      if (ib !== undefined) G[ib][ib] += g
-      if (ia !== undefined && ib !== undefined) {
-        G[ia][ib] -= g
-        G[ib][ia] -= g
-      }
-    }
-    for (const s of reachableSinks) {
-      const i = idx.get(s.pad.node)
-      if (i !== undefined) rhs[i] -= s.amps
-    }
-    const v = solveLinear(G, rhs)
-    if (v === null) continue // singular copper graph → degrade to silence
-
-    // ── worst sag ─────────────────────────────────────────────────────────────
-    let worst: { pad: RailPad; dropV: number } | undefined
-    for (const s of reachableSinks) {
-      const i = idx.get(s.pad.node)
-      if (i === undefined) continue
-      const dropV = Math.max(0, -v[i])
-      if (!Number.isFinite(dropV)) continue
-      if (!worst || dropV > worst.dropV) worst = { pad: s.pad, dropV }
+    // Sag toward 0 V: a +5 V rail falls below the entry, a -12 V rail rises above
+    // it. The ground shift that adds to it is the one toward the rail: the
+    // return's rise under a positive rail's load, its fall under a negative one's.
+    const dir = -sol.loadSign
+    const groundShiftByRef = sol.loadSign > 0 ? groundRiseByRef : groundFallByRef
+    let worst: { load: RailLoad; sagV: number; shiftV: number; totalV: number } | undefined
+    for (const l of sol.loads) {
+      const sagV = Math.max(0, dir * sol.volts[l.pad.node])
+      if (!Number.isFinite(sagV)) continue
+      const shiftV = groundShiftByRef.get(l.pad.ref) ?? 0
+      const totalV = sagV + shiftV
+      if (!worst || totalV > worst.totalV) worst = { load: l, sagV, shiftV, totalV }
     }
     if (!worst) continue
 
-    const sagPct = (100 * worst.dropV) / Math.abs(nominal)
-    if (sagPct <= opts.irDropWarnPct) continue
-    const severity = sagPct > opts.irDropErrPct ? 'error' : 'warn'
+    const sagPct = (100 * worst.totalV) / Math.abs(nominal)
+    const severity = severityFor(sagPct)
+    if (!severity) continue
 
-    // ── path metrics for the headline: min-resistance route source → sink ─────
-    const path = minResistancePath(adj, inComp, source.node, worst.pad.node)
-    const pathLengthMm = path.reduce((sum, e) => sum + e.lengthMm, 0)
-    const widths = path.map((e) => e.widthMm).filter((w): w is number => w !== undefined)
-    const minWidthMm = widths.length > 0 ? Math.min(...widths) : undefined
-
-    const netName = board.netById.get(railId)?.name ?? `net ${railId}`
-    // Sag is toward 0 V: 5 V drops to 4.81 V, −12 V rises to −11.8 V.
-    const sinkV = nominal >= 0 ? nominal - worst.dropV : nominal + worst.dropV
-    const across =
-      pathLengthMm > 0 && minWidthMm !== undefined
-        ? ` across ${pathLengthMm.toFixed(0)} mm of ${minWidthMm} mm track`
-        : ''
+    const pad = worst.load.pad
+    const head = pathHeadline(minResistancePath(sol, pad.node))
+    const sinkV = nominal >= 0 ? nominal - worst.totalV : nominal + worst.totalV
+    const roundTrip =
+      worst.shiftV > 0 ? ` (${worst.sagV.toFixed(3)} V on the supply, ${worst.shiftV.toFixed(3)} V on the return)` : ''
 
     findings.push({
       id: `ir-drop:${railId}`,
       check: 'ir-drop',
       severity,
-      title: `"${netName}" rail sags to ${sinkV.toFixed(2)}V at ${worst.pad.ref} (${worst.dropV.toFixed(2)} V drop${across})`,
+      title: `"${netName(railId)}" rail sags to ${sinkV.toFixed(2)}V at ${pad.ref} (${worst.totalV.toFixed(2)} V drop${head.across})`,
       detail:
-        `Copper resistance on ${netName} drops about ${worst.dropV.toFixed(3)} V ` +
+        `Copper resistance on ${netName(railId)} drops about ${worst.totalV.toFixed(3)} V ` +
         `(${sagPct.toFixed(1)}% of the ${nominal.toFixed(2)} V rail) between the supply entry ` +
-        `at ${source.ref} pad ${source.padNumber} and ${worst.pad.ref} pad ${worst.pad.padNumber}, ` +
-        `with the rail carrying ~${totalAmps.toFixed(2)} A of op-point load` +
-        (across ? ` — the worst path runs${across}.` : '.') +
+        `at ${sol.source.ref} pad ${sol.source.padNumber} and ${pad.ref} pad ${pad.padNumber}${roundTrip}, ` +
+        `with the rail carrying ~${sol.loadAmps.toFixed(2)} A of op-point load` +
+        (head.across ? `, and the worst path runs${head.across}.` : '.') +
         ` Sagging rails brown-out ICs and shift analog references.`,
-      assumption:
-        `${opts.copperOz} oz copper; vias ≈ ${(VIA_RESISTANCE_OHMS * 1000).toFixed(1)} mΩ each; ` +
-        `supply entry inferred at ${source.ref} (connector/widest-copper heuristic); ` +
-        `sink currents from the operating-point sim — parts without a solved current are not counted`,
-      refs: [worst.pad.ref],
+      assumption: assumptionFor(ctx, sol, 'supply', worst.shiftV > 0),
+      refs: [pad.ref],
       netId: railId,
-      location: worst.pad.pos,
-      suggestion:
-        'Widen or shorten the supply trace, add a copper pour or a second feed, or move the load closer to the supply entry.',
+      location: pad.pos,
+      suggestion: suggestionFor(sol, head),
       metrics: {
-        dropV: worst.dropV,
+        dropV: worst.sagV,
+        groundShiftV: worst.shiftV,
+        roundTripV: worst.totalV,
         sagPct,
         nominalV: nominal,
         sinkV,
-        totalSinkA: totalAmps,
-        pathLengthMm,
-        ...(minWidthMm !== undefined ? { minTrackWidthMm: minWidthMm } : {}),
+        totalSinkA: sol.loadAmps,
+        pathLengthMm: head.trackMm + head.pourMm,
+        ...(head.minWidthMm !== undefined ? { minTrackWidthMm: head.minWidthMm } : {}),
       },
     })
   }
 
-  return findings
+  if (notes.length === 0) return findings
+  return { findings, notAssessed: `partly assessed: ${notes.join('; ')}` }
 }
 
-/**
- * Min-resistance route between two nodes (Dijkstra, O(V²) — rail graphs are
- * small). Returns the edges along the route, or [] when unreachable.
- */
-function minResistancePath(
-  adj: Map<number, { to: number; edge: Edge }[]>,
-  inComp: Set<number>,
-  from: number,
-  to: number,
-): Edge[] {
-  const distOhms = new Map<number, number>()
-  const prev = new Map<number, { node: number; edge: Edge }>()
-  const done = new Set<number>()
-  distOhms.set(from, 0)
-  for (;;) {
-    let cur: number | undefined
-    let best = Infinity
-    for (const [node, d] of distOhms) {
-      if (!done.has(node) && d < best) {
-        best = d
-        cur = node
-      }
-    }
-    if (cur === undefined) break
-    if (cur === to) break
-    done.add(cur)
-    for (const { to: next, edge } of adj.get(cur) ?? []) {
-      if (!inComp.has(next)) continue
-      const cand = best + edge.ohms
-      if (cand < (distOhms.get(next) ?? Infinity)) {
-        distOhms.set(next, cand)
-        prev.set(next, { node: cur, edge })
-      }
-    }
+function assumptionFor(ctx: CriticContext, sol: RailSolution, kind: 'supply' | 'return', withReturn = false): string {
+  const via = ctx.board.vias[0]
+  const viaMohm = via ? viaResistanceOhms(via, ctx.board.boardThicknessMm) * 1000 : 1.4
+  const pour = sol.graph.hasPour
+    ? `; pours meshed at ~${ctx.opts.zoneMeshMm} mm with the outline taken as the fill (no thermal reliefs, clearance islands or keepouts)`
+    : ''
+  return (
+    `${ctx.opts.copperOz} oz copper; vias ≈ ${viaMohm.toFixed(1)} mΩ each (20 µm plating)${pour}; ` +
+    `${kind === 'return' ? 'return' : 'supply'} entry inferred at ${sol.source.ref} (connector/widest-copper heuristic); ` +
+    `currents from the operating-point solve (LEDs, resistors and bench sources measured, other parts by KCL at the nets)` +
+    (kind === 'supply' && !withReturn ? '; ground return not included' : '')
+  )
+}
+
+function suggestionFor(sol: RailSolution, head: Headline): string {
+  if (head.pourMm > 0) {
+    return 'The path runs through a copper pour: widen its narrowest section (a neck, or the gap between slots and cutouts), stitch it to a second layer with vias, or move the load closer to the supply entry.'
   }
-  if (!distOhms.has(to)) return []
-  const path: Edge[] = []
-  let n = to
-  while (n !== from) {
-    const p = prev.get(n)
-    if (!p) return []
-    path.push(p.edge)
-    n = p.node
+  if (sol.graph.hasPour) {
+    return 'Widen or shorten the trace, connect the load to the copper pour on this net, or move it closer to the supply entry.'
   }
-  return path.reverse()
+  return 'Widen or shorten the trace, add a copper pour or a second feed, or move the load closer to the supply entry.'
 }
