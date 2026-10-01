@@ -76,6 +76,7 @@ export default defineConfig({
             { text: 'Run the Board Critic audit', link: '/guides/run-critic' },
             { text: 'Save your setup & export a report', link: '/guides/save-and-report' },
             { text: 'Read the warnings & fidelity banner', link: '/guides/warnings' },
+            { text: 'Run circsim from the command line', link: '/guides/headless-cli' },
           ],
         },
       ],
