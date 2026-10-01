@@ -19,6 +19,7 @@
  */
 
 import React, { useEffect, useState } from 'react'
+import { openDocsAndReport } from './docsLink'
 
 export interface AboutProps {
   open: boolean
@@ -42,6 +43,12 @@ const FALLBACK_PROVENANCE =
 export default function About({ open, onClose }: AboutProps): React.ReactElement | null {
   const [texts, setTexts] = useState<LicenseTexts | null>(null)
   const [loadError, setLoadError] = useState(false)
+  // #62: shown when the fidelity link could not open anything.
+  const [docsMessage, setDocsMessage] = useState<string | null>(null)
+  const openDocs = (): void => {
+    if (typeof window === 'undefined') return
+    void openDocsAndReport(window.circsim, setDocsMessage)
+  }
 
   useEffect(() => {
     if (!open) return
@@ -131,21 +138,18 @@ export default function About({ open, onClose }: AboutProps): React.ReactElement
               style={linkStyle}
               role="button"
               tabIndex={0}
-              onClick={() => {
-                if (typeof window !== 'undefined' && window.circsim?.openDocs) {
-                  void window.circsim.openDocs()
-                }
-              }}
+              onClick={openDocs}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  if (typeof window !== 'undefined' && window.circsim?.openDocs) {
-                    void window.circsim.openDocs()
-                  }
-                }
+                if (e.key === 'Enter' || e.key === ' ') openDocs()
               }}
             >
               What can circsim tell you? (fidelity &amp; limits)
             </span>
+            {docsMessage && (
+              <span style={{ display: 'block', marginTop: 4, color: '#f99' }} role="alert">
+                {docsMessage}
+              </span>
+            )}
           </p>
         </div>
       </div>

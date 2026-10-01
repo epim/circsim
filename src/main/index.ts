@@ -12,10 +12,11 @@
  *  - CSP: allows worker-src blob: for troika-three-text (Spec §5).
  */
 
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, net } from 'electron'
 import { join } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { createProductionSupervisor, unwrapPort } from './simhostSupervisor'
+import { openFidelityDocs } from './openDocs'
 
 /** Shape of resources/models/index.json (only the fields we read here). */
 interface ModelIndex {
@@ -151,20 +152,20 @@ function registerIpcHandlers(): void {
   })
 
   /**
-   * Open the "what circsim can tell you" fidelity doc.
-   * In packaged builds, open the bundled docs/what-circsim-can-tell-you.md
-   * via shell.openPath (rendered as plain text). In dev, open it from the
-   * project root. If the file is not found, fall back to a no-op (graceful).
+   * Open the "what circsim can tell you" fidelity doc and report the outcome.
+   * Online: the published page via the system browser; offline (or if that
+   * hand-off throws): the bundled docs/what-circsim-can-tell-you.md via
+   * shell.openPath. shell.openPath never rejects, so its resolved error string
+   * is returned to the renderer as `{ ok: false, error }` (issue #62).
    * Task 28 — Spec §16 risk 7, §12.
    */
-  ipcMain.handle('circsim:openDocs', async () => {
-    try {
-      await shell.openPath(docPath('what-circsim-can-tell-you.md'))
-    } catch {
-      // Non-fatal: if the doc isn't present (CI runner without a display),
-      // the promise still resolves so the UI doesn't stall.
-    }
-  })
+  ipcMain.handle('circsim:openDocs', () =>
+    openFidelityDocs({
+      shell,
+      localPath: docPath('what-circsim-can-tell-you.md'),
+      isOnline: () => net.isOnline()
+    })
+  )
 
   /**
    * Return the licensing texts surfaced in the About dialog (Task 27, Spec §14):
