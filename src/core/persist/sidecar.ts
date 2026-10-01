@@ -42,6 +42,7 @@ import type { CircuitNet } from '../netlist/extract'
 import type { PinMap } from '../models/types'
 import type { UserStubOverride } from '../models/resolve'
 import { UNWIRED, type Instrument } from '../spicegen/instruments'
+import { MAX_MODEL_TEXT, SUBCKT_NAME_RE, definesSubckt, unsafeModelTextReason } from '../models/libText'
 
 // --- constants -------------------------------------------------------------
 
@@ -49,8 +50,8 @@ export const SIDECAR_FORMAT = 'circsim-sidecar'
 export const SIDECAR_VERSION = 1
 /** Files larger than this are refused (a sidecar holds settings, not data). */
 export const MAX_SIDECAR_BYTES = 8 * 1024 * 1024
-/** Per-model text cap. */
-export const MAX_MODEL_TEXT = 1024 * 1024
+/** Per-model text cap (defined with the model-text check in core/models/libText). */
+export { MAX_MODEL_TEXT, unsafeModelTextReason }
 
 // --- types -----------------------------------------------------------------
 
@@ -167,7 +168,6 @@ function entriesOf(v: unknown): [string, unknown][] {
 }
 
 const ID_RE = /^[A-Za-z0-9_.-]{1,64}$/
-const SUBCKT_NAME_RE = /^[A-Za-z0-9_.$-]{1,128}$/
 const COLOR_RE = /^#[0-9a-fA-F]{3,8}$/
 const TERMINALS = new Set(['net', 'A', 'W', 'Lo', 'clamp', 'gnd'])
 const STUB_MODES = new Set<string>(['open', 'short', 'interactive-pins'])
@@ -191,28 +191,6 @@ function parsePinMap(v: unknown): PinMap | null {
   return out
 }
 
-/**
- * Directives a model's text may contain. `.control` / `.endc` blocks can run
- * shell commands inside ngspice and `.include` / `.lib` read arbitrary files, so
- * anything outside this list is refused when model text comes from a sidecar.
- */
-const ALLOWED_MODEL_DIRECTIVES = new Set([
-  'subckt', 'ends', 'model', 'param', 'func', 'global',
-  'options', 'option', 'temp', 'ic', 'nodeset', 'end',
-])
-
-/** null when the model text is acceptable; otherwise the reason it is not. */
-export function unsafeModelTextReason(text: string): string | null {
-  if (text.length > MAX_MODEL_TEXT) return 'the model text is larger than 1 MB'
-  for (const raw of text.split(/\r\n|\r|\n/)) {
-    const line = raw.trim()
-    if (!line.startsWith('.')) continue
-    const directive = line.slice(1).split(/[\s(]/, 1)[0].toLowerCase()
-    if (!ALLOWED_MODEL_DIRECTIVES.has(directive)) return `it uses the .${directive} directive`
-  }
-  return null
-}
-
 function parseUserModel(v: unknown): UserModelRecord | string {
   if (!isObj(v)) return 'it is not an object'
   const { mpn, subcktText, subcktName, pinMap, provenance } = v
@@ -224,6 +202,11 @@ function parseUserModel(v: unknown): UserModelRecord | string {
   if (provenance !== 'llm-generated' && provenance !== 'user-import') return 'its provenance is not valid'
   const unsafe = unsafeModelTextReason(subcktText)
   if (unsafe) return `${unsafe}, which circsim will not load from a saved file`
+  // An older build saved only a comment line for an imported model; binding that would
+  // make the board fail to load ("unknown subckt"), so it is skipped with a note instead.
+  if (!definesSubckt(subcktText, subcktName)) {
+    return `its text does not define .subckt ${subcktName} (an old build saved only a comment); import the .lib again`
+  }
   return { mpn, subcktText, subcktName, pinMap: pins, provenance }
 }
 
