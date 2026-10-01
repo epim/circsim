@@ -472,15 +472,23 @@ describe('bundled model library — Milestone 2 power-path discretes', () => {
     expect(e!.defaultPinMap).toEqual({ '1': '2', '2': '1' })
   })
 
-  it('DSMAJ24A card: bv=26.7 ibv=1m cjo=280p rs=1.16 n=1 (datasheet clamp figures)', () => {
-    const card = diodesText.match(/^\s*\.model\s+DSMAJ24A\s+D\([^)]*\)/im)?.[0] ?? ''
-    expect(card, 'DSMAJ24A card must exist in diodes.lib').toBeTruthy()
-    expect(card).toMatch(/\bbv=26\.7\b/i)
-    expect(card).toMatch(/\bibv=1m\b/i)
-    expect(card).toMatch(/\bcjo=280p\b/i)
-    // rs carries the clamp slope: (38.9V - 26.7V - ~0.24V junction)/10.3A ~ 1.16
-    expect(card).toMatch(/\brs=1\.1[0-9]?\b/i)
-    expect(card).toMatch(/\bn=1\b/i)
+  it('DSMAJ24A is a two-branch subckt: forward diode and a separate reverse clamp (issue #86)', () => {
+    const joined = diodesText.replace(/\r?\n\+/g, ' ')
+    const block = joined.match(/^\s*\.subckt\s+DSMAJ24A\s+a\s+k\b[\s\S]*?^\s*\.ends/im)?.[0] ?? ''
+    expect(block, 'DSMAJ24A .subckt (terminals a k: position 1 anode, 2 cathode) must exist').toBeTruthy()
+    // forward path: its own small rs, no breakdown parameters on it
+    const fwd = block.match(/\.model\s+DSMAJ24A_F\s+D\(([^)]*)\)/i)?.[1] ?? ''
+    expect(fwd).toMatch(/\bcjo=280p\b/i)
+    expect(fwd).not.toMatch(/\bbv=/i)
+    const fwdRs = Number(/\brs=([\d.]+)(m?)/i.exec(fwd)?.[1]) * (/\brs=[\d.]+m/i.test(fwd) ? 1e-3 : 1)
+    expect(fwdRs).toBeLessThan(0.2)
+    // reverse clamp: breakdown diode carries the clamp slope, a blocking diode keeps
+    // it out of the forward path
+    const zener = block.match(/\.model\s+DSMAJ24A_Z\s+D\(([^)]*)\)/i)?.[1] ?? ''
+    expect(zener).toMatch(/\bibv=1m\b/i)
+    expect(zener).toMatch(/\bbv=2[6-9]\.?\d*\b/i)
+    expect(zener).toMatch(/\brs=0?\.\d+/i)
+    expect(block).toMatch(/\.model\s+DSMAJ24A_B\s+D\(/i)
   })
 })
 

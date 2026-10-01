@@ -12,7 +12,7 @@ This isn't fine print. It's the core of the product. circsim's job is to catch t
 
 **Signal waveforms at the schematic level.** Resistors, capacitors, inductors, standard diodes, BJTs, and op-amps are modeled well enough to catch the big design mistakes: a wrong RC time constant, an op-amp clipping, an oscillator off by 10×.
 
-**Logic-gate behavior.** The bundled 74HC library uses datasheet-typical propagation delays and drive strengths. Truth tables and simple timing are trustworthy.
+**Logic-gate behavior.** The bundled 74HC and CD4000 libraries use datasheet-typical propagation delays and a simple output stage: a source resistance plus a drive-current limit, so a gate output sags under load and a bare LED or a short to ground draws a bounded current instead of amps. Truth tables and simple timing are trustworthy. The output stage is a typical-value approximation: it does not model the difference between source and sink strength, temperature, or the exact shape of the datasheet output curves.
 
 **The NE555 timer.** The bundled 555 is a behavioral subcircuit from the datasheet block diagram. Oscillation frequency and duty cycle match the RC formula within a few percent.
 
