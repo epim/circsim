@@ -213,20 +213,19 @@ function parseNcMarkers(root: SExpr): Vec[] {
 
 /**
  * Sheet position of a library pin for a placed instance. Library coordinates
- * are Y up and the sheet is Y down. The instance mirror (`(mirror x)` flips Y,
- * `(mirror y)` flips X) applies first, then the counter-clockwise rotation,
- * then the translation to the instance origin.
+ * are Y up and the sheet is Y down. The counter-clockwise rotation applies
+ * first, then the instance mirror (`(mirror x)` flips Y, `(mirror y)` flips X)
+ * in the rotated frame, as KiCad does, then the translation to the instance
+ * origin. The order matters for 90 and 270 degree rotations.
  */
 function pinSheetPos(pin: LibPlacedPin, at: Vec, rotDeg: number, mirror: string): Vec {
-  let px = pin.x
-  let py = pin.y
-  if (mirror === 'x') py = -py
-  else if (mirror === 'y') px = -px
   const rad = (rotDeg * Math.PI) / 180
   const c = Math.cos(rad)
   const s = Math.sin(rad)
-  const rx = px * c - py * s
-  const ry = px * s + py * c
+  let rx = pin.x * c - pin.y * s
+  let ry = pin.x * s + pin.y * c
+  if (mirror === 'x') ry = -ry
+  else if (mirror === 'y') rx = -rx
   return { x: at.x + rx, y: at.y - ry }
 }
 

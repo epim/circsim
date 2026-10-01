@@ -203,6 +203,19 @@ describe('parseSchematicSimData — no-connects', () => {
     expect(parseSchematicSimData(sch('0', '(mirror y)', [[48, 49]])).get('U9')!.noConnects).toEqual(['1'])
   })
 
+  it('rotates first and then mirrors (rot 90 with a mirror)', () => {
+    // Pin 1 lib (2, 1), pin 2 lib (-2, -1). Rotate 90 -> pin 1 (-1, 2), pin 2 (1, -2).
+    // mirror x flips Y: pin 1 -> sheet (49, 52), pin 2 -> sheet (51, 48).
+    // Mirror-then-rotate would swap these, marking pin 1 at (51, 48).
+    expect(parseSchematicSimData(sch('90', '(mirror x)', [[49, 52]])).get('U9')!.noConnects).toEqual(['1'])
+    expect(parseSchematicSimData(sch('90', '(mirror x)', [[51, 48]])).get('U9')!.noConnects).toEqual(['2'])
+    // mirror y flips X: pin 1 -> sheet (51, 48), pin 2 -> sheet (49, 52).
+    expect(parseSchematicSimData(sch('90', '(mirror y)', [[51, 48]])).get('U9')!.noConnects).toEqual(['1'])
+    expect(parseSchematicSimData(sch('90', '(mirror y)', [[49, 52]])).get('U9')!.noConnects).toEqual(['2'])
+    // Rotate 270 -> pin 1 (1, -2); mirror x -> (1, 2) -> sheet (51, 48).
+    expect(parseSchematicSimData(sch('270', '(mirror x)', [[51, 48]])).get('U9')!.noConnects).toEqual(['1'])
+  })
+
   it('only considers pins of the placed unit', () => {
     // Unit 2's pin 3 is at lib (0, 4): sheet (50, 46). Placed as unit 1 it does not exist.
     expect(parseSchematicSimData(sch('0', '', [[50, 46]], 1)).get('U9')!.noConnects).toEqual([])
