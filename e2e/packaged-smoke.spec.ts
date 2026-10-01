@@ -67,14 +67,13 @@ async function dumpDiagnostics(
         .filter((v, i, a) => a.indexOf(v) === i),
     }))
     console.log(`[diag] testids: ${state.testIds.join(', ')}`)
-    console.log(`[diag] body text:
-${state.text}`)
+    console.log('[diag] body text:')
+    console.log(state.text)
   } catch (e) {
     console.log(`[diag] could not read page state: ${String(e)}`)
   }
-  console.log(`[diag] renderer log (${rendererLog.length} lines):
-${rendererLog.slice(-60).join('
-')}`)
+  console.log(`[diag] renderer log (${rendererLog.length} lines):`)
+  for (const line of rendererLog.slice(-60)) console.log(line)
 }
 
 test('packaged app: open sample → power on → op annotations (real ngspice from bundle)', async () => {
