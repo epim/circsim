@@ -11,6 +11,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { createRingBuffer, feedSamples } from '../ringBuffer'
+import { createBenchTimeline } from '../benchTimeline'
 
 describe('RingBuffer', () => {
   it('starts empty with correct capacity', () => {
@@ -184,45 +185,39 @@ describe('RingBuffer.readWindow (issue #59)', () => {
     expect(Array.from(first.values)).toEqual([0, 1, 2, 3])
   })
 
-  it('starts a new acquisition on a bench-window restart', () => {
+  it('append clears the ring on a time it cannot place in order', () => {
+    // feedSamples never does this across a restart (it stores run time); the
+    // guard keeps readWindow's binary search valid for any direct caller.
     const rb = createRingBuffer(32)
-    for (let i = 0; i < 10; i++) rb.append(i, i * 1e-3) // old epoch, t up to 9 ms
+    for (let i = 0; i < 10; i++) rb.append(i, i * 1e-3)
     expect(rb.newestTime).toBeCloseTo(9e-3, 12)
-    // benchRestarted: ngspice restarts the transient at t = 0.
     rb.append(100, 0)
     rb.append(101, 1e-3)
     rb.append(102, 2e-3)
-    // Stored times are raw sim times, so the old epoch is gone.
     expect(rb.length).toBe(3)
     expect(rb.newestTime).toBeCloseTo(2e-3, 12)
     expect(Array.from(rb.read(0, rb.length).values)).toEqual([100, 101, 102])
     expect(Array.from(rb.readWindow(0, 1).values)).toEqual([100, 101, 102])
   })
 
-  it('restart works on a wrapped ring and keeps appending correctly', () => {
+  it('the ordering guard works on a wrapped ring and keeps appending correctly', () => {
     const rb = createRingBuffer(4)
     for (let i = 0; i < 7; i++) rb.append(i, i) // wrapped
-    rb.append(50, 0) // restart
+    rb.append(50, 0) // out of order: cleared
     for (let i = 1; i < 6; i++) rb.append(50 + i, i) // wraps again
     expect(Array.from(rb.read(0, rb.length).times)).toEqual([2, 3, 4, 5])
     expect(Array.from(rb.readWindow(3, 4).values)).toEqual([53, 54])
   })
 
-  it('a ring created after a restart agrees with rings that lived through it', () => {
-    // Probe A lives through a bench-window restart; probe B is added after it
-    // (syncRingBuffers creates its ring mid-run, fed raw sim time).
-    const a = createRingBuffer(64)
-    for (let t = 0; t <= 30; t++) a.append(t, t)
-    for (let t = 0; t <= 5; t++) a.append(100 + t, t) // restart
-    const b = createRingBuffer(64)
-    for (let t = 0; t <= 5; t++) b.append(200 + t, t)
-    expect(b.newestTime).toBe(a.newestTime)
-    // Follow window anchored on the shared latest time shows both traces.
-    const latest = Math.max(a.newestTime, b.newestTime)
-    const wa = a.readWindow(latest - 1, latest)
-    const wb = b.readWindow(latest - 1, latest)
-    expect(Array.from(wa.times)).toEqual([4, 5])
-    expect(Array.from(wb.times)).toEqual([4, 5])
+  it('shiftTimes moves every stored time on a wrapped ring', () => {
+    const rb = createRingBuffer(4)
+    for (let i = 0; i < 6; i++) rb.append(i, i) // wrapped: times 2..5
+    rb.shiftTimes(10)
+    expect(Array.from(rb.read(0, rb.length).times)).toEqual([12, 13, 14, 15])
+    expect(rb.newestTime).toBe(15)
+    rb.append(9, 16)
+    expect(rb.length).toBe(4)
+    expect(Array.from(rb.readWindow(14, 16).values)).toEqual([4, 5, 9])
   })
 
   it('equal times are not a restart', () => {
@@ -250,5 +245,144 @@ describe('RingBuffer.readWindow (issue #59)', () => {
     // The linear scan cost about 1.5 ms per frame here (about 90 ms for 60).
     // A binary search plus a 10k-point copy is well under 1 ms per frame.
     expect(elapsed).toBeLessThan(25)
+  })
+})
+
+// ─── issue #59 / Spec 7.5: one run time axis across bench-window restarts ─────
+
+/** A samples batch: one shared time column, as ingestSamples passes it. */
+function batch(...times: number[]): Float64Array {
+  return new Float64Array(times)
+}
+
+/** Feed the same batch to several rings, in order, through one timeline. */
+function feedAll(
+  timeline: ReturnType<typeof createBenchTimeline>,
+  simTime: Float64Array,
+  rings: ReturnType<typeof createRingBuffer>[],
+): void {
+  for (const rb of rings) {
+    feedSamples(rb, simTime, simTime.map(t => t * 10), timeline)
+  }
+}
+
+function times(rb: ReturnType<typeof createRingBuffer>): number[] {
+  return Array.from(rb.read(0, rb.length).times)
+}
+
+describe('feedSamples with a bench timeline (Spec 7.5)', () => {
+  it('keeps history across a restart and continues the axis', () => {
+    const tl = createBenchTimeline()
+    const a = createRingBuffer(64)
+    feedAll(tl, batch(0, 1, 2), [a])
+    feedAll(tl, batch(3, 4), [a])
+    feedAll(tl, batch(0, 1), [a]) // restart: raw time back to 0
+    expect(times(a)).toEqual([0, 1, 2, 3, 4, 4, 5])
+    // Values are the raw readings; the old window is still readable.
+    expect(Array.from(a.readWindow(0, 3).values)).toEqual([0, 10, 20, 30])
+    expect(Array.from(a.readWindow(4.5, 5).values)).toEqual([10])
+  })
+
+  it('a ring created after a restart lands on the same axis', () => {
+    const tl = createBenchTimeline()
+    const a = createRingBuffer(64)
+    feedAll(tl, batch(0, 10, 20, 30), [a])
+    feedAll(tl, batch(0, 5), [a]) // restart
+    const b = createRingBuffer(64) // probe added mid-window
+    feedAll(tl, batch(6, 7), [a, b])
+    expect(times(b)).toEqual([36, 37])
+    expect(b.newestTime).toBe(a.newestTime)
+    const latest = Math.max(a.newestTime, b.newestTime)
+    expect(Array.from(a.readWindow(latest - 1, latest).times)).toEqual([36, 37])
+    expect(Array.from(b.readWindow(latest - 1, latest).times)).toEqual([36, 37])
+  })
+
+  it('a fresh ring fed first in the restart batch is moved onto the run axis', () => {
+    const tl = createBenchTimeline()
+    const a = createRingBuffer(64)
+    feedAll(tl, batch(0, 10, 20, 30), [a])
+    const b = createRingBuffer(64)
+    feedAll(tl, batch(0, 5), [b, a]) // b (empty) is fed before a (history)
+    expect(times(a)).toEqual([0, 10, 20, 30, 30, 35])
+    expect(times(b)).toEqual([30, 35])
+    feedAll(tl, batch(6), [b, a])
+    expect(times(b)).toEqual([30, 35, 36])
+    expect(a.newestTime).toBe(36)
+  })
+
+  it('a regression where every ring is empty is a fresh run at zero', () => {
+    const tl = createBenchTimeline()
+    const old = createRingBuffer(64)
+    feedAll(tl, batch(0, 30), [old])
+    feedAll(tl, batch(0, 5), [old]) // restart: offset 30
+    // Fresh Run: the store drops the old rings and creates empty ones.
+    const a = createRingBuffer(64)
+    const b = createRingBuffer(64)
+    feedAll(tl, batch(0, 1), [a, b])
+    feedAll(tl, batch(2), [a, b])
+    expect(times(a)).toEqual([0, 1, 2])
+    expect(times(b)).toEqual([0, 1, 2])
+  })
+
+  it('one batch fed to many rings counts once, as the same array or a copy', () => {
+    const tl = createBenchTimeline()
+    const a = createRingBuffer(64)
+    const b = createRingBuffer(64)
+    const c = createRingBuffer(64)
+    const first = batch(0, 1, 2)
+    feedAll(tl, first, [a, b])
+    feedAll(tl, batch(0, 1, 2), [c]) // an equal copy of the same batch
+    const next = batch(3, 4)
+    feedAll(tl, next, [a, b, c])
+    for (const rb of [a, b, c]) expect(times(rb)).toEqual([0, 1, 2, 3, 4])
+  })
+
+  it('a restart batch equal to the previous batch is still a restart', () => {
+    // One batch per window: the first batch after the restart repeats the
+    // previous window's batch exactly.
+    const tl = createBenchTimeline()
+    const a = createRingBuffer(64)
+    feedAll(tl, batch(0, 30), [a])
+    feedAll(tl, batch(0, 30), [a])
+    feedAll(tl, batch(0, 30), [a])
+    expect(times(a)).toEqual([0, 30, 30, 60, 60, 90])
+  })
+
+  it('an empty batch changes nothing', () => {
+    const tl = createBenchTimeline()
+    const a = createRingBuffer(8)
+    feedAll(tl, batch(0, 1), [a])
+    feedSamples(a, new Float64Array(0), new Float64Array(0), tl)
+    feedAll(tl, batch(2), [a])
+    expect(times(a)).toEqual([0, 1, 2])
+  })
+
+  it('readWindow across restarts on a wrapped ring matches a linear scan', () => {
+    const tl = createBenchTimeline()
+    const a = createRingBuffer(50)
+    // Three windows of 30 samples each (raw 0..29 us): 90 samples, wrapped.
+    for (let w = 0; w < 3; w++) {
+      for (let k = 0; k < 30; k += 10) {
+        const t = new Float64Array(10)
+        for (let i = 0; i < 10; i++) t[i] = (k + i) * 1e-6
+        feedSamples(a, t, t.map((_, i) => w * 100 + k + i), tl)
+      }
+    }
+    expect(a.length).toBe(50)
+    const stored = times(a)
+    for (let i = 1; i < stored.length; i++) expect(stored[i]).toBeGreaterThanOrEqual(stored[i - 1])
+    const windows: [number, number][] = [
+      [0, 1],
+      [40e-6, 60e-6],
+      [58e-6, 58e-6],
+      [29e-6, 31e-6],
+      [80e-6, 90e-6],
+    ]
+    for (const [lo, hi] of windows) {
+      const got = a.readWindow(lo, hi)
+      const want = linearWindow(a, lo, hi)
+      expect(Array.from(got.times)).toEqual(want.times)
+      expect(Array.from(got.values)).toEqual(want.values)
+    }
   })
 })

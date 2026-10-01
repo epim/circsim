@@ -16,7 +16,7 @@ Attach as many as you like: each gets its own color and its own trace.
 Press **`Run`**. circsim streams a live transient simulation and the scope starts drawing. Use the toolbar **Pace** control to run at `0.1×` (slow enough to watch a fast signal), `1×` (real time), or `max` (as fast as it solves). Press **`Pause`** to freeze, **`Resume`** (or `Run`) to continue.
 
 ::: info Why it "comes alive"
-The transient starts from the circuit's initial state rather than a pre-solved DC point, so you watch capacitors charge and oscillators start up: the "power on and see it come alive" moment. For very long runs, circsim restarts the window every ~30 seconds to bound memory; the scope starts a fresh trace at each restart, and the time axis begins again at zero. Reading the visible window costs the same however long the run has been going.
+The transient starts from the circuit's initial state rather than a pre-solved DC point, so you watch capacitors charge and oscillators start up: the "power on and see it come alive" moment. For very long runs, circsim restarts the window every ~30 seconds to bound memory; your scope history is kept.
 :::
 
 ## Frame the waveform
