@@ -72,3 +72,20 @@ export function resolvePackagedExe(
   }
   return candidates.find(c => existsSync(c)) ?? null
 }
+
+/**
+ * Read the renderer's Sim log pane (ngspice stdout/stderr relayed by the
+ * SimHost). Used on failure so a CI run that cannot
+ * be reproduced locally still shows what ngspice said. Never throws.
+ */
+export async function readSimDiagnostics(page: Page): Promise<string> {
+  try {
+    await page.locator('[data-testid="bottom-tab-log"]').click({ timeout: 5_000 })
+    return await page.evaluate(() => {
+      const title = [...document.querySelectorAll('span')].find(s => s.textContent === 'Sim Log')
+      return title?.parentElement?.parentElement?.innerText ?? '(sim log pane not found)'
+    })
+  } catch (err) {
+    return `(could not read sim diagnostics: ${String(err)})`
+  }
+}

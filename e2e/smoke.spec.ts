@@ -27,7 +27,7 @@
 import { test, expect } from '@playwright/test'
 import { _electron as electron, type ElectronApplication } from '@playwright/test'
 import { join } from 'path'
-import { pipeAppOutput } from './util'
+import { pipeAppOutput, readSimDiagnostics } from './util'
 
 const APP_MAIN = join(__dirname, '..', 'out', 'main', 'index.js')
 
@@ -56,7 +56,19 @@ async function launchApp(): Promise<{ app: ElectronApplication; page: import('@p
 test.describe('circsim smoke E2E', () => {
   let app: ElectronApplication
 
-  test.afterEach(async () => {
+  test.afterEach(async ({}, testInfo) => {
+    // On failure, attach what ngspice said: CI legs (notably macOS) cannot be
+    // reproduced locally, and the screenshot alone does not show the sim log.
+    if (testInfo.status !== testInfo.expectedStatus && app) {
+      const win = app.windows()[0]
+      if (win) {
+        const diag = await readSimDiagnostics(win)
+        process.stdout.write(`[sim-diagnostics] ${testInfo.title}
+${diag}
+`)
+        await testInfo.attach('sim-log', { body: diag, contentType: 'text/plain' })
+      }
+    }
     // Close the app after each test to avoid cross-contamination
     try {
       await app?.close()
