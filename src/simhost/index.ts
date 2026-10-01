@@ -805,11 +805,20 @@ export class SimHost {
   }
 
   private async doLoadCircuit(deckLines: string[]): Promise<void> {
+    // ngSpice_Circ treats every array entry as exactly ONE card and never splits
+    // on embedded newlines, so a multi-line entry (a pasted .subckt block, a
+    // joined run of resistors) would reach the parser as a single malformed
+    // card. Split here so no caller can regress it (issue #18). The split comes
+    // BEFORE the gate: the gate must judge exactly the cards the engine will be
+    // handed, so a control block hidden behind a newline is seen as its own card
+    // and rejected, while a legitimate multi-line .subckt entry still loads. Any
+    // line break the split leaves behind (a lone CR, a NUL) still fails the gate.
+    const cards = deckLines.flatMap((line) => String(line).split(/\r?\n/))
     // The deck gate (issue #35): ngspice runs .control blocks found anywhere in
     // a deck, so nothing reaches the engine until sanitizeDeck passes. A refused
     // deck also drops the previously loaded circuit, so a later runOp/runTransient
     // cannot silently simulate a stale circuit as if the new one had loaded.
-    const gate = sanitizeDeck(deckLines)
+    const gate = sanitizeDeck(cards)
     if (!gate.ok) {
       if (this.deckLoaded) {
         await this.engine.command('destroy all', false)
@@ -821,11 +830,7 @@ export class SimHost {
     if (this.deckLoaded) {
       await this.engine.command('destroy all', false) // Spec §7.4 gotcha 5
     }
-    // ngSpice_Circ treats every array entry as exactly ONE card and never splits
-    // on embedded newlines, so a multi-line entry (a pasted .subckt block, a
-    // joined run of resistors) would reach the parser as a single malformed
-    // card. Split here so no caller can regress it (issue #18).
-    this.currentDeck = deckLines.flatMap((line) => line.split(/\r?\n/))
+    this.currentDeck = cards
     this.engine.loadCircuit(this.currentDeck)
     this.deckLoaded = true
     this.vectorCount = 0

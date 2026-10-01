@@ -102,6 +102,24 @@ describe('SimHost deck gate', () => {
     expect(engine.loads).toEqual([])
   })
 
+  it('splits a legitimate multi-line entry (issue #18) and gates the split cards', async () => {
+    const engine = new StubEngine()
+    const { host } = makeHost(engine)
+    await host.loadCircuit(['* t', '.subckt tsub a b\nr1 a b 1000\n.ends', 'r2 a 0 1k\r\nr3 b 0 1k', '.end'])
+    expect(engine.loads).toEqual([
+      ['* t', '.subckt tsub a b', 'r1 a b 1000', '.ends', 'r2 a 0 1k', 'r3 b 0 1k', '.end']
+    ])
+  })
+
+  it('refuses a control block hidden behind CRLF, a lone CR, or a NUL', async () => {
+    for (const bad of ['r1 a 0 1k\r\n.control\r\nshell calc\r\n.endc', 'r1 a 0 1k\r.control', 'r1 a 0 1k\0.control']) {
+      const engine = new StubEngine()
+      const { host } = makeHost(engine)
+      await expect(host.loadCircuit(['* t', bad, '.end'])).rejects.toThrow(/deck rejected/)
+      expect(engine.loads).toEqual([])
+    }
+  })
+
   it('a refused reload drops the previously loaded circuit instead of leaving it live', async () => {
     const engine = new StubEngine()
     const { host } = makeHost(engine)
