@@ -12,6 +12,9 @@
     "scripts/**/*",
     "test/**/*"
   ],
+  "exclude": [
+    "src/main/__tests__/respawn.integration.test.ts"
+  ],
   "compilerOptions": {
     "composite": true,
     "types": ["node"],

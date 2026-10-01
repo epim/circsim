@@ -27,6 +27,7 @@ export default defineConfig({
       { text: 'Guides', link: '/guides/' },
       { text: 'Reference', link: '/reference/' },
       { text: 'Concepts', link: '/concepts/validation-bench' },
+      { text: 'Gallery', link: '/gallery' },
       {
         text: 'v0.2.8',
         items: [

@@ -17,7 +17,7 @@ import { describe, it, expect } from 'vitest'
 import { parseBoard } from '../../kicad/board'
 import { extract } from '../../netlist/extract'
 import { runCritic } from '../run'
-import type { OpResult } from '../types'
+import type { CriticOptions, OpResult } from '../types'
 
 // VCC = net 1, GND = net 2. U1 and LOAD1 both draw from VCC; one VCC track of
 // the given width carries the rail. The caller sets the track width.
@@ -49,10 +49,14 @@ function op(total: number): OpResult {
   }
 }
 
-function ampFindings(trackWidthMm: number, opResult: OpResult) {
+function ampFindings(
+  trackWidthMm: number,
+  opResult: OpResult,
+  opts?: Partial<CriticOptions>,
+) {
   const b = board(trackWidthMm)
   const c = extract(b)
-  return runCritic(b, c, opResult).findings.filter((f) => f.check === 'ampacity')
+  return runCritic(b, c, opResult, opts).findings.filter((f) => f.check === 'ampacity')
 }
 
 describe('checkAmpacity', () => {
@@ -87,5 +91,49 @@ describe('checkAmpacity', () => {
   it('returns no findings when partCurrents is missing despite an opResult', () => {
     const findings = ampFindings(0.25, { nodeVoltages: {} })
     expect(findings).toHaveLength(0)
+  })
+
+  // Copper-weight scaling (issue #69). IPC-2221: I = k dT^0.44 A^0.725 with
+  // A = width_mil x thickness_mil, so rated current scales as oz^0.725.
+  describe('copper weight', () => {
+    // Independent closed form for a 0.25 mm external trace at 1 oz (1.378 mil).
+    const widthMil = 0.25 / 0.0254
+    const rated = (oz: number) =>
+      0.048 * Math.pow(10, 0.44) * Math.pow(widthMil * 1.378 * oz, 0.725)
+
+    it('rated current for 0.25mm matches the IPC-2221 closed form at 0.5, 1 and 2 oz', () => {
+      for (const oz of [0.5, 1, 2]) {
+        // 4 A total -> 2 A rail, above the rating at every weight tested.
+        const f = ampFindings(0.25, op(4), { copperOz: oz }).find((x) => x.netId === 1)
+        expect(f, `${oz} oz`).toBeDefined()
+        expect(f!.metrics!.ratedA).toBeCloseTo(rated(oz), 9)
+      }
+      // Pinned absolute values: 0.25mm rates ~0.88 A at 1 oz (see header).
+      expect(rated(1)).toBeCloseTo(0.88, 1)
+      expect(rated(2)).toBeCloseTo(1.45, 1)
+      expect(rated(0.5)).toBeCloseTo(0.53, 1)
+    })
+
+    it('2 oz raises the rating by 2^0.725 and 0.5 oz lowers it by the same factor', () => {
+      const r1 = ampFindings(0.25, op(4), { copperOz: 1 })[0].metrics!.ratedA
+      const r2 = ampFindings(0.25, op(4), { copperOz: 2 })[0].metrics!.ratedA
+      const rHalf = ampFindings(0.25, op(4), { copperOz: 0.5 })[0].metrics!.ratedA
+      expect(r2 / r1).toBeCloseTo(Math.pow(2, 0.725), 9)
+      expect(r1 / rHalf).toBeCloseTo(Math.pow(2, 0.725), 9)
+      expect(r2).toBeGreaterThan(r1)
+      expect(rHalf).toBeLessThan(r1)
+    })
+
+    it('a 1.2 A rail on 0.25mm is flagged at 1 oz but clean at 2 oz (rated ~1.45 A)', () => {
+      const load = op(2.4) // rail ~1.2 A
+      expect(ampFindings(0.25, load, { copperOz: 1 }).find((x) => x.netId === 1)).toBeDefined()
+      expect(ampFindings(0.25, load, { copperOz: 2 }).find((x) => x.netId === 1)).toBeUndefined()
+    })
+
+    it('a 0.7 A rail on 0.25mm is clean at 1 oz but flagged at 0.5 oz (rated ~0.53 A)', () => {
+      const load = op(1.4) // rail ~0.7 A
+      expect(ampFindings(0.25, load, { copperOz: 1 }).find((x) => x.netId === 1)).toBeUndefined()
+      expect(ampFindings(0.25, load, { copperOz: 0.5 }).find((x) => x.netId === 1)).toBeDefined()
+    })
   })
 })
