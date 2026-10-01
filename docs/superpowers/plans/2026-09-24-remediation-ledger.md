@@ -92,7 +92,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #85 74HC74, 74HC164 and 74HC595 active-low PRE_N, CLR_N and MR_N controls behave active-high | M | merged | fix/12-logic-output-resistance | #98 | 1 | 712d533 | sonnet rung, both reviewers APPROVE; merge with #118 resolved by a sonnet agent and reviewed by opus (APPROVE); merged 2026-09-30 22:30 PDT; canary green |
 | #86 DSMAJ24A TVS forward path inherits the 1.16 ohm clamp series resistance: 1.87 V at 1 A | M | merged | fix/14-datasheet-diode-bjt-cards | #104 | 1 | c18dd90 | sonnet rung, both reviewers APPROVE; merged 2026-09-30 22:42 PDT; canary green (2079 unit, 167 characterization) |
 | #87 LM358 output low level is 69 mV against a 20 mV maximum (rout=100 ohm in the output stage) | M | merged | fix/2-supply-current-and-opamp | #118 | 4 | e503bc8 | escalated to opus (4 rounds), both reviewers APPROVE; merged 2026-09-30 22:10 PDT; canary green; note: macos-14 CI flaked once with ngspice memory required in the fine-step 555 test, green on rerun |
-| #131 Floating negative supply pin joins VCC through the supply-current source and is never reported as undriven | M | in-progress | fix/131-floating-supply-pin-undriven | | 0 | | filed 2026-09-30 from the #96 merge review; started 2026-10-01 01:20 PDT (wf_f8fa4f4a-ba9) |
+| #131 Floating negative supply pin joins VCC through the supply-current source and is never reported as undriven | M | in-review | fix/131-floating-supply-pin-undriven | #132 | 2 | | sonnet rung, reviewer APPROVE; merge queue |
 
 ## Wave log
 
