@@ -83,7 +83,7 @@ Model one channel (e.g. channel A of a dual/quad) at the pinned pads. Node order
 
 | Part | Matches | Notes |
 | --- | --- | --- |
-| NE555 | NE555(P/N), LM555, TLC555, ICM7555, "555" | From the datasheet block diagram; frequency & duty within a few percent of the RC formula |
+| NE555 | NE555(P/N), LM555, TLC555, ICM7555, "555" | From the datasheet block diagram; period within 3 percent and duty within 2 points of the RC formula (see [fidelity](../concepts/fidelity#where-each-claim-is-checked)) |
 
 ## Regulators & references: behavioral
 
@@ -108,7 +108,7 @@ These are deliberately simplified operating-point stubs: they model a single ste
 
 ## Digital logic: behavioral (XSPICE)
 
-Correct truth tables with datasheet-typical thresholds. Schmitt-trigger parts carry true hysteresis, so RC astables built around them oscillate. Outputs are not ideal: each gate drives its pin through a source resistance and a drive-current limit (74HC about 40 ohm and 25 mA at 5 V, CD4000 about 400 ohm and 3 mA at 5 V, scaled with the rail), so an unbuffered LED or a heavy load pulls the pin down. Asynchronous controls (`PRE_N`, `CLR_N`, `MR_N`) are active low. All match by part number.
+Correct truth tables with datasheet-typical thresholds. The plain gates carry datasheet-typical propagation delays; the Schmitt-trigger parts carry true hysteresis (so RC astables built around them oscillate) but no propagation delay, and flip-flop clock-to-output delay is currently about twice the datasheet value (see [fidelity](../concepts/fidelity)). Outputs are not ideal: each gate drives its pin through a source resistance and a drive-current limit (74HC about 40 ohm and 25 mA at 5 V, CD4000 about 400 ohm and 3 mA at 5 V, scaled with the rail), so an unbuffered LED or a heavy load pulls the pin down. Asynchronous controls (`PRE_N`, `CLR_N`, `MR_N`) are active low. All match by part number.
 
 **74HC family** (default rail 5 V): `74HC00` NAND, `74HC04` inverter, `74HC08` AND, `74HC14` Schmitt inverter, `74HC32` OR, `74HC74` dual D flip-flop, `74HC86` XOR, `74HC164` shift register, `74HC595` shift register + latch. Accepts 74HCT / SN74HC / 74LS aliases.
 
