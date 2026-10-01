@@ -95,6 +95,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #131 Floating negative supply pin joins VCC through the supply-current source and is never reported as undriven | M | merged | fix/131-floating-supply-pin-undriven | #132 | 2 | 9ad8890 | sonnet rung (2 rounds), reviewer APPROVE; merged 2026-10-01 01:55 PDT; canary green |
 | #136 74HC flip-flop and shift-register clock-to-output delay is twice the library delaysNs | M | todo | | | 0 | | filed by D2 (#138) 2026-10-01: 74HC74 and 74HC164 clk-to-Q 2.1x datasheet |
 | #144 openBoard parity test races the background board hash: boardSha256 null on a slow runner | U | merged | fix/144-board-hash-race | #146 | 1 | 9136ec0 | sonnet rung, reviewer APPROVE; merged 2026-10-01 04:30 PDT; canary green |
+| #147 Thermal check never runs: nothing derives per-part power from the solved branch currents | C | todo | | | 0 | | filed 2026-10-01 from the #93 merge; candidate for wave 2 alongside W2.1 copper-aware solve |
 
 ## Wave log
 
