@@ -31,6 +31,11 @@ function readIndex(): LibraryIndex {
   return JSON.parse(readFileSync(join(MODELS_DIR, 'index.json'), 'utf8')) as LibraryIndex
 }
 
+/** Supply-load stubs (issue #29): selected by src/core/models/stubRules.ts, never by libraryMatch. */
+function isStubEntry(entry: LibraryEntry): boolean {
+  return entry.id.startsWith('stub-')
+}
+
 /** All non-index files in resources/models/. */
 function modelFiles(): string[] {
   return readdirSync(MODELS_DIR).filter((f) => f !== 'index.json' && !f.startsWith('.'))
@@ -111,6 +116,10 @@ describe('bundled model library — index resolution (Spec §8.5)', () => {
         expect(entry.defaultPinMap).toBeUndefined()
         return
       }
+      // A supply-load stub binds its two pads at resolution time (stubRules.ts), from
+      // the schematic, a datasheet pinout when it has one, or the net names; it needs no
+      // pin map of its own.
+      if (isStubEntry(entry)) return
       const hasPinMaps = entry.pinMaps && Object.keys(entry.pinMaps).length > 0
       const hasDefault = entry.defaultPinMap && Object.keys(entry.defaultPinMap).length > 0
       expect(
@@ -131,6 +140,9 @@ describe('bundled model library — index resolution (Spec §8.5)', () => {
   it.each(readIndex().entries.map((e) => [e.id, e] as const))(
     'entry %s has at least one match criterion',
     (_id, entry) => {
+      // Stubs are chosen by name patterns in stubRules.ts and are deliberately never
+      // matched by libraryMatch; the stub tests below check that they carry no criteria.
+      if (isStubEntry(entry)) return
       const m = entry.match
       const has =
         (m.mpn && m.mpn.length > 0) ||
@@ -199,7 +211,11 @@ describe('bundled model library — Task 14b IC + digital entries (Spec §8.5)',
     for (const part of ['00', '04', '08', '14', '32', '74', '86', '164', '595']) {
       expect(digIds, `missing 74HC${part}`).toContain(`logic-74hc${part}`)
     }
-    expect(digIds.length).toBe(9)
+    // The nine above plus the 74HC02, 74HC10 and 74HC20 added for issue #29.
+    for (const part of ['02', '10', '20']) {
+      expect(digIds, `missing 74HC${part}`).toContain(`logic-74hc${part}`)
+    }
+    expect(digIds.length).toBe(12)
   })
 
   it('every subckt entry references a .subckt that exists in opamp/regulators/555 files', () => {
@@ -436,14 +452,14 @@ describe('bundled model library — Milestone 2 power-path discretes', () => {
     // defaultPinMap keeps the KiCad convention (pad 1 = cathode) — it only
     // applies to unmatched footprints, WITH a pinmap-unverified warning.
     expect(e!.defaultPinMap).toEqual({ '1': '2', '2': '1' })
-    // Both footprint shapes get a pinMap — with the right polarity EACH:
-    // the bare EasyEDA dimension-pattern name (how routed boards present JLC
-    // footprints) is pad-1 = anode; KiCad's D_SMC is pad-1 = cathode. See the
-    // 'JLC/EasyEDA diode polarity' block for the D7 story.
-    expect(selectPinMap(e!, 'SMC_L7.1-W6.2-LS8.1-R-RD')).toEqual({
-      pinMap: { '1': '1', '2': '2' },
-      warnings: [],
-    })
+    // KiCad's D_SMC is pad-1 = cathode and confident. The bare EasyEDA
+    // dimension-pattern name (how routed boards present JLC footprints) carries
+    // no convention: default map plus a pinmap-unverified polarity warning (see
+    // the 'JLC/EasyEDA diode polarity' block, issue #5).
+    const easyeda = selectPinMap(e!, 'SMC_L7.1-W6.2-LS8.1-R-RD')
+    expect(easyeda.pinMap).toEqual({ '1': '2', '2': '1' })
+    expect(easyeda.warnings).toHaveLength(1)
+    expect(easyeda.warnings[0]).toMatch(/^pinmap-unverified:.*polarity/)
     expect(selectPinMap(e!, 'Diode_SMD:D_SMC_Handsoldering')).toEqual({
       pinMap: { '1': '2', '2': '1' },
       warnings: [],
@@ -472,15 +488,23 @@ describe('bundled model library — Milestone 2 power-path discretes', () => {
     expect(e!.defaultPinMap).toEqual({ '1': '2', '2': '1' })
   })
 
-  it('DSMAJ24A card: bv=26.7 ibv=1m cjo=280p rs=1.16 n=1 (datasheet clamp figures)', () => {
-    const card = diodesText.match(/^\s*\.model\s+DSMAJ24A\s+D\([^)]*\)/im)?.[0] ?? ''
-    expect(card, 'DSMAJ24A card must exist in diodes.lib').toBeTruthy()
-    expect(card).toMatch(/\bbv=26\.7\b/i)
-    expect(card).toMatch(/\bibv=1m\b/i)
-    expect(card).toMatch(/\bcjo=280p\b/i)
-    // rs carries the clamp slope: (38.9V - 26.7V - ~0.24V junction)/10.3A ~ 1.16
-    expect(card).toMatch(/\brs=1\.1[0-9]?\b/i)
-    expect(card).toMatch(/\bn=1\b/i)
+  it('DSMAJ24A is a two-branch subckt: forward diode and a separate reverse clamp (issue #86)', () => {
+    const joined = diodesText.replace(/\r?\n\+/g, ' ')
+    const block = joined.match(/^\s*\.subckt\s+DSMAJ24A\s+a\s+k\b[\s\S]*?^\s*\.ends/im)?.[0] ?? ''
+    expect(block, 'DSMAJ24A .subckt (terminals a k: position 1 anode, 2 cathode) must exist').toBeTruthy()
+    // forward path: its own small rs, no breakdown parameters on it
+    const fwd = block.match(/\.model\s+DSMAJ24A_F\s+D\(([^)]*)\)/i)?.[1] ?? ''
+    expect(fwd).toMatch(/\bcjo=280p\b/i)
+    expect(fwd).not.toMatch(/\bbv=/i)
+    const fwdRs = Number(/\brs=([\d.]+)(m?)/i.exec(fwd)?.[1]) * (/\brs=[\d.]+m/i.test(fwd) ? 1e-3 : 1)
+    expect(fwdRs).toBeLessThan(0.2)
+    // reverse clamp: breakdown diode carries the clamp slope, a blocking diode keeps
+    // it out of the forward path
+    const zener = block.match(/\.model\s+DSMAJ24A_Z\s+D\(([^)]*)\)/i)?.[1] ?? ''
+    expect(zener).toMatch(/\bibv=1m\b/i)
+    expect(zener).toMatch(/\bbv=2[6-9]\.?\d*\b/i)
+    expect(zener).toMatch(/\brs=0?\.\d+/i)
+    expect(block).toMatch(/\.model\s+DSMAJ24A_B\s+D\(/i)
   })
 })
 
@@ -525,10 +549,11 @@ describe('bundled model library — Milestone 3 behavioral power-IC stubs', () =
     const block = powerIcText.match(/\.subckt\s+BQ7791502[\s\S]*?\.ends\s+BQ7791502/i)?.[0] ?? ''
     expect(block, '.subckt BQ7791502 block must exist').toBeTruthy()
     // E-sources holding chg and dsg at v(vdd) relative to vss (NORMAL mode:
-    // both external-FET drivers ON), plus a tiny load so the part draws ~0.
+    // both external-FET drivers ON), plus a 1.5Meg load that draws the datasheet
+    // Iq (about 8 uA at 12 V) from the supply pin (issue #2).
     expect(block).toMatch(/^\s*echg\s+chg\s+vss\s+vdd\s+vss\s+1\b/im)
     expect(block).toMatch(/^\s*edsg\s+dsg\s+vss\s+vdd\s+vss\s+1\b/im)
-    expect(block).toMatch(/^\s*r\w*\s+vdd\s+vss\s+10Meg\b/im)
+    expect(block).toMatch(/^\s*r\w*\s+vdd\s+vss\s+1\.5Meg\b/im)
     // Documented simplifications: no protection trips, no balancing, no AVDD/VTB.
     expect(powerIcText).toMatch(/no protection trips/i)
     expect(powerIcText).toMatch(/cell balancing/i)
@@ -681,6 +706,162 @@ describe('bundled model library — M9 documented opens', () => {
     expect(e!.note).toMatch(/Dual precision monostable/i)
     expect(e!.note).toMatch(/edge-triggered event model/i)
     expect(e!.note).toMatch(/XSPICE digital family/i)
+  })
+})
+
+describe('macromodel structure: supply-pin current, pole clamp, smooth decisions (issues #2, #13, #19, #42, #87)', () => {
+  const lib = (f: string): string => readFileSync(join(MODELS_DIR, f), 'utf8').replace(/\r?\n\+/g, ' ')
+  /** The text of one .subckt body, continuation lines folded. */
+  function body(file: string, name: string): string {
+    const m = lib(file).match(new RegExp(`^\\s*\\.subckt\\s+${name}\\b[\\s\\S]*?^\\s*\\.ends\\b`, 'im'))
+    expect(m, `${file}: .subckt ${name} must exist`).toBeTruthy()
+    return m![0]
+  }
+
+  it('opamp_core: a 0 V sense source after rout feeds supply sources between vcc and vee (no draw through ground)', () => {
+    const b = body('opamp.lib', 'opamp_core')
+    expect(b).toMatch(/^\s*rout\s+obuf\s+osns\b/im)
+    expect(b).toMatch(/^\s*vsns\s+osns\s+out\s+0\s*$/im)
+    // The output buffer is referenced to the vee pin, not to node 0.
+    expect(b).toMatch(/^\s*bout\s+obuf\s+vee\s+v\s*=/im)
+    // Sourced output current moves vcc -> vee; quiescent current is constant.
+    expect(b).toMatch(/^\s*bsrc\s+vcc\s+vee\s+i\s*=.*i\(vsns\)/im)
+    expect(b).toMatch(/^\s*biq\s+vcc\s+vee\s+i\s*=\s*iq\b/im)
+    // No source in the core returns its current through the global ground node
+    // except the internal signal-level ones (e, vpole, limits).
+    expect(b).not.toMatch(/^\s*bout\s+obuf\s+0\b/im)
+  })
+
+  it('opamp_core: iq is a parameter and every wrapper states its package supply current', () => {
+    const core = body('opamp.lib', 'opamp_core')
+    expect(core).toMatch(/\.subckt\s+opamp_core[^\n]*params:[^\n]*\biq=/i)
+    for (const [name, iq] of [['LM358', '0.7m'], ['LM324', '0.7m'], ['TL072', '1.4m']] as const) {
+      expect(body('opamp.lib', name), `${name} iq`).toMatch(new RegExp(`\\biq=${iq.replace('.', '\\.')}\\b`))
+    }
+    // LM339 is four LM393 cells sharing the rails: 0.2 mA each (0.8 mA typ).
+    expect(body('opamp.lib', 'LM339_QUAD').match(/params:\s*iq=0\.2m/gi)).toHaveLength(4)
+  })
+
+  it('opamp_core: the pole node is bounded to the output rail limits (issue #13)', () => {
+    const b = body('opamp.lib', 'opamp_core')
+    // A clamp current on vpole and drive gates that close at each limit.
+    expect(b).toMatch(/^\s*bclp\s+vpole\s+0\s+i\s*=/im)
+    expect(b).toMatch(/^\s*bg\s+0\s+vpole\s+i\s*=.*tanh\(\(v\(vpole\)\s*-\s*v\(chi\)\)/im)
+    expect(b).toMatch(/^\s*bg\s+0\s+vpole\s+i\s*=.*tanh\(\(v\(vpole\)\s*-\s*v\(clo\)\)/im)
+  })
+
+  it('opamp_core: keeps the node names the solve uses to find and settle a latched op-amp', () => {
+    // src/core/solve/bistable.ts finds every op-amp core by its vpole, clo, chi
+    // and vmid nodes, pins vpole to probe stability, and re-solves with a
+    // .nodeset on vpole. Renaming any of them silently turns that check off.
+    const b = body('opamp.lib', 'opamp_core')
+    expect(b).toMatch(/^\s*blo\s+clo\s+0\s+v\s*=/im)
+    expect(b).toMatch(/^\s*bhi\s+chi\s+0\s+v\s*=/im)
+    expect(b).toMatch(/^\s*bmid\s+vmid\s+0\s+v\s*=/im)
+    expect(b).toMatch(/^\s*cp\s+vpole\s+0\b/im)
+    // The output follows vpole, so a pole parked at a limit is an output at that limit.
+    expect(b).toMatch(/^\s*bout\s+obuf\s+vee\s+v\s*=\s*v\(vpole\)\s*-\s*v\(vee\)/im)
+  })
+
+  it('opamp_core and NE555 decisions are smooth at the operating point: no hard comparator or clamp ternaries (issue #19)', () => {
+    // The NE555 latch-state decision is the one hard ternary allowed, and only
+    // multiplied by the memory ramp, which is 0 at time 0: the operating point
+    // never sees it (see the latch test below).
+    const latchGated = /\(time < 1e-6 \? time\/1e-6 : 1\)\*\(v\(q,gnd\) > 0\.5 \? 1 : 0\)/g
+    const noHard = (text: string, what: string, allowLatch: boolean): void => {
+      for (const line of text.split(/\r?\n/)) {
+        if (/^\s*\*/.test(line)) continue
+        // Otherwise the only ternary allowed is the NE555 start-up ramp on `time`.
+        const stripped = (allowLatch ? line.replace(latchGated, '') : line).replace(/\(time < 1e-6 \? [^)]*\)/g, '')
+        expect(stripped, `${what}: hard ternary in: ${line}`).not.toMatch(/\?/)
+      }
+    }
+    noHard(body('opamp.lib', 'opamp_core'), 'opamp_core', false)
+    noHard(body('timer555.lib', 'NE555'), 'NE555', true)
+  })
+
+  it('LM358 and LM324 saturate to a low on-resistance so VOL meets the datasheet (issue #87)', () => {
+    for (const name of ['LM358', 'LM324']) {
+      const b = body('opamp.lib', name)
+      expect(b, name).toMatch(/\bdsat=80\b/)
+      expect(b, name).toMatch(/\bvsatlo=0\.005\b/)
+    }
+  })
+
+  it('NE555: output current is mirrored into vcc, and the supply draw is datasheet-sized', () => {
+    const b = body('timer555.lib', 'NE555')
+    expect(b).toMatch(/^\s*vsns\s+osns\s+out\s+0\s*$/im)
+    expect(b).toMatch(/^\s*bsrc\s+vcc\s+gnd\s+i\s*=.*i\(vsns\)/im)
+    expect(b).toMatch(/^\s*rq\s+vcc\s+gnd\s+1\.8k\b/im)
+    // The latch is algebraic and references its own output (that is its memory),
+    // not a bare integrator and not a lagged node.
+    expect(b).toMatch(/^\s*bq\s+q\s+gnd\s+v\s*=.*v\(q,\s*gnd\)/im)
+    expect(b).not.toMatch(/^\s*blatch\s+0\s+q\s+i\b/im)
+  })
+
+  it('NE555: no capacitor or resistor sits on the latch node (solver-step chatter, review of PR #118)', () => {
+    // A stiff lag on a regenerative node rings under trapezoidal integration when
+    // the solver step is many times the lag (a function generator picks 5 us at
+    // 1 kHz), which chattered the output at every threshold crossing. The latch
+    // must stay algebraic: no capacitor or resistor may touch q or qd.
+    const b = body('timer555.lib', 'NE555')
+    for (const line of b.split(/\r?\n/).filter((l) => !/^\s*\*/.test(l))) {
+      const tok = line.trim().split(/\s+/)
+      if (/^[cr]/i.test(tok[0] ?? '')) {
+        expect(tok.slice(1, 3), `reactive or resistive element on a latch node: ${line}`).not.toContain('q')
+        expect(tok.slice(1, 3), `reactive or resistive element on a latch node: ${line}`).not.toContain('qd')
+      }
+    }
+  })
+
+  it('NE555: the latch memory is a hard decision on q, off at time 0, and the readouts use it (review of PR #118)', () => {
+    // A smooth regenerative memory (a tanh of q inside the q equation) folds: as
+    // THRES creeps through the comparator band, the branch the latch sits on
+    // ends with the slope of its equation at zero, Newton cannot step past it,
+    // and ngspice aborted the sample blinker with "Timestep too small ... node
+    // x_u1.q" at 2 us and 5 us steps. A hard decision ends the branch at a jump
+    // where the slope stays 1. It is multiplied by the memory ramp so the
+    // operating point never sees it, and the output and discharge readouts use
+    // the same decision so neither moves along a branch (a readout that did let
+    // the discharge switch hold THRES at the threshold).
+    const b = body('timer555.lib', 'NE555')
+    const gated = '(time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0)'
+    const lineOf = (name: string): string =>
+      b.split(/\r?\n/).find((l) => new RegExp(`^\\s*${name}\\s`, 'i').test(l)) ?? ''
+    for (const name of ['bq', 'bqd', 'bdisch']) {
+      expect(lineOf(name), `${name} reads the latch through the gated hard decision`).toContain(gated)
+    }
+    expect(lineOf('bq'), 'no smooth function of q inside the latch memory').not.toMatch(/tanh\([^)]*v\(q,gnd\)/i)
+    // Every hard decision on q is gated by the memory ramp.
+    const decisions = b.match(/v\(q,gnd\) > 0\.5 \?/g) ?? []
+    expect(decisions.length).toBe(b.split(gated).length - 1)
+  })
+
+  it('reg_lin: input current is the delivered output current plus Iq (issue #2) and dropout depends on load (issue #42)', () => {
+    const b = body('regulators.lib', 'reg_lin')
+    expect(b).toMatch(/^\s*biq\s+vin\s+gnd\s+i\s*=.*i\(vsense\).*iq\b/im)
+    expect(b).toMatch(/^\s*bdrp\s+dp\s+gnd\s+v\s*=\s*dropl\s*\+\s*\(drop\s*-\s*dropl\)\s*\*/im)
+    expect(b).toMatch(/^\s*blf\s+lf\s+gnd\s+v\s*=.*i\(vsense\)/im)
+    expect(b).not.toMatch(/^\s*biq\s+vin\s+gnd\s+i\s*=\s*iq\s*$/im)
+  })
+
+  it('every regulator wrapper states a light-load dropout below its rated-load dropout', () => {
+    const text = lib('regulators.lib')
+    const wrappers = [...text.matchAll(/^\s*xr\s+vin\s+gnd\s+vout\s+reg_lin\s+params:(.*)$/gim)]
+    expect(wrappers.length).toBeGreaterThanOrEqual(5)
+    for (const w of wrappers) {
+      const num = (k: string): number => Number(new RegExp(`\\b${k}=([0-9.]+)`).exec(w[1])?.[1])
+      expect(num('dropl'), w[0]).toBeGreaterThan(0)
+      expect(num('dropl'), w[0]).toBeLessThan(num('drop'))
+      expect(num('ilim'), w[0]).toBeGreaterThan(num('irated'))
+    }
+  })
+
+  it('light-load dropout values: 78xx 1.5 V, AMS1117 1.0 V (datasheet dropout-vs-load curves)', () => {
+    expect(body('regulators.lib', '7805')).toMatch(/drop=2\.0 dropl=1\.5\b/)
+    expect(body('regulators.lib', '7812')).toMatch(/drop=2\.0 dropl=1\.5\b/)
+    expect(body('regulators.lib', 'AMS1117-3.3')).toMatch(/drop=1\.2 dropl=1\.0\b/)
+    expect(body('regulators.lib', 'AMS1117-5.0')).toMatch(/drop=1\.2 dropl=1\.0\b/)
   })
 })
 
@@ -970,32 +1151,34 @@ describe('logic4000.json — CD4000 XSPICE family (Spec §8.5)', () => {
   })
 })
 
-// ─── JLC/EasyEDA diode polarity — pad 1 = ANODE ──────────────────────────────
+
+// ─── JLC/EasyEDA diode polarity: unknowable from the footprint name ──────────
 //
 // KiCad's Diode_SMD convention is pad 1 = cathode, and every two-terminal
-// diode entry's generic pinMap encodes it ({"1":"2","2":"1"}). JLC/EasyEDA
-// libraries use the OPPOSITE convention: symbol pin 1 = A (anode), so pad 1 =
-// anode. Confirmed by the led_lantern rev B designer on the design files
-// (D7 SS54, footprint JLC-MCP:SMC_L7.1-W6.2-LS8.1-R-RD: pad 1 = /VBUS_C =
-// anode; same for every JLC-MCP diode, e.g. the SS14s). Before the fix the
-// generic (D_)?SMC regex matched the JLC name, so circsim modeled the diode
-// REVERSED with no warning — the op solve showed the charge path dead.
-// EasyEDA-origin footprints are recognizable by the JLC lib prefix or by the
-// bare dimension-pattern name (…_L7.1-W6.2…); KiCad-official names never use
-// that shape (their dimension tokens carry an 'mm' suffix, e.g. L6.3mm_D2.5mm).
+// diode entry's pinMaps encode it ({"1":"2","2":"1"}). JLC/EasyEDA libraries
+// have NO single convention: on the led_lantern rev B board pad 1 is the anode
+// on D7 (SS54, JLC-MCP:SMC_L7.1-W6.2-LS8.1-R-RD) but the cathode on D2
+// (B5819W, JLC-MCP:SOD-123_L2.8-W1.8-LS3.7-RD) and on D8/D9 (SS14,
+// SMA_L4.2-W2.6-LS5.0-RD_1). The earlier "pad 1 = anode" key was generalized
+// from D7 alone (issue #5). EasyEDA-origin footprints are recognizable by the
+// JLC lib prefix or by the bare dimension-pattern name (..._L7.1-W6.2...);
+// KiCad-official names never use that shape (their dimension tokens carry an
+// 'mm' suffix, e.g. L6.3mm_D2.5mm). For those names selectPinMap never claims a
+// polarity: it returns the KiCad default with a pinmap-unverified warning, and
+// only the schematic's A/K pin names (resolve.ts) make the polarity known.
 
-describe('JLC/EasyEDA diode polarity — pad 1 = anode, matched BEFORE the KiCad-convention key', () => {
+describe('JLC/EasyEDA diode polarity: never a confident footprint-name guess (issue #5)', () => {
   const index = readIndex()
   const byId = new Map(index.entries.map((e) => [e.id, e]))
 
-  const JLC_ANODE_FIRST = { '1': '1', '2': '2' }
   const KICAD_CATHODE_FIRST = { '1': '2', '2': '1' }
 
   // [entry id, representative JLC/EasyEDA libId (prefixed and bare forms mixed),
   //  representative KiCad-convention libId]
   const CASES: Array<[string, string, string]> = [
     ['schottky-ss54', 'JLC-MCP:SMC_L7.1-W6.2-LS8.1-R-RD', 'Diode_SMD:D_SMC'], // lantern D7
-    ['diode-1n5819', 'JLC-MCP:SMA_L4.4-W2.8-LS5.4-R-RD', 'Diode_SMD:D_SMA'], // lantern D8/D9 (SS14)
+    ['diode-1n5819', 'SMA_L4.2-W2.6-LS5.0-RD_1', 'Diode_SMD:D_SMA'], // lantern D8/D9 (SS14), the real name
+    ['diode-1n5819', 'JLC-MCP:SOD-123_L2.8-W1.8-LS3.7-RD', 'Diode_SMD:D_SOD-123'], // lantern D2 (B5819W)
     ['diode-1n4148', 'JLC-MCP:SOD-323_L1.8-W1.3-LS2.5-RD', 'Diode_SMD:D_SOD-323'],
     ['diode-1n4001', 'SMA_L4.4-W2.8-LS5.4-R-RD', 'Diode_SMD:D_SMA'],
     ['zener-5v1', 'JLC-MCP:SOD-123_L2.8-W1.8-LS3.7-RD', 'Diode_SMD:D_SOD-123'],
@@ -1003,15 +1186,16 @@ describe('JLC/EasyEDA diode polarity — pad 1 = anode, matched BEFORE the KiCad
     ['tvs-smaj24a', 'JLC-MCP:SMA_L4.4-W2.8-LS5.4-R-RD', 'Diode_SMD:D_SMA'],
   ]
 
-  it.each(CASES)('%s: JLC/EasyEDA footprint %s → anode-first pinMap, NO warning', (id, jlcLibId) => {
+  it.each(CASES)('%s: JLC/EasyEDA footprint %s → KiCad default map WITH a polarity-unverified warning', (id, jlcLibId) => {
     const e = byId.get(id)
     expect(e, `${id} entry must exist`).toBeDefined()
     const { pinMap, warnings } = selectPinMap(e!, jlcLibId)
-    expect(pinMap).toEqual(JLC_ANODE_FIRST)
-    expect(warnings).toHaveLength(0)
+    expect(pinMap).toEqual(KICAD_CATHODE_FIRST)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toMatch(/^pinmap-unverified:.*polarity/)
   })
 
-  it.each(CASES)('%s: KiCad-convention footprint (arg 2) still cathode-first', (id, _jlc, kicadLibId) => {
+  it.each(CASES)('%s: KiCad-convention footprint (arg 3) still cathode-first and confident', (id, _jlc, kicadLibId) => {
     const e = byId.get(id)!
     const { pinMap, warnings } = selectPinMap(e, kicadLibId)
     expect(pinMap).toEqual(KICAD_CATHODE_FIRST)

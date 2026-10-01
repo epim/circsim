@@ -364,11 +364,19 @@ describe('Tier 1: Schematic Sim.* fields', () => {
 
 describe('Unresolved parts', () => {
   it('unknown IC with no Sim.* fields and non-R/C/L prefix → unresolved', () => {
-    const circuit = makeCircuit([makePart('U1', 'ESP32', 'Package:ESP32-WROOM-32')])
+    const circuit = makeCircuit([makePart('U1', 'FOO1234', 'Package:SOIC-8_3.9x4.9mm_P1.27mm')])
     const resolutions = resolveAll(circuit)
     const r = resolutions[0]
     expect(r.status).toBe('unresolved')
     expect(r.tier).toBe(6)
+  })
+
+  it('an ESP32 with no library is not unresolved: it is stubbed as interactive pins (issue #29)', () => {
+    const circuit = makeCircuit([makePart('U1', 'ESP32', 'Package:ESP32-WROOM-32')])
+    const r = resolveAll(circuit)[0]
+    expect(r.status).toBe('stubbed')
+    expect(r.model).toEqual({ kind: 'stub', mode: 'interactive-pins' })
+    expect(r.warnings.join(' ')).toMatch(/^stub:/)
   })
 
   it('D prefix without Sim.* and no library → unresolved', () => {
@@ -609,7 +617,10 @@ describe('tier 3 — schematic A/K pins override footprint-convention pin maps',
   }
 
   it('D7 replay: schematic (1=A,2=K) beats a wrong-confident regex map + note pushed', () => {
-    const circuit = makeCircuit([makePart('D7', 'SS54', 'SMC_L7.1-W6.2-LS8.1-R-RD')])
+    // A KiCad-named footprint (confident cathode-first key) on a part whose symbol
+    // says pin 1 = A: the schematic wins and the contradiction is reported.
+    // (JLC/EasyEDA-origin names are never confident any more: issue #5.)
+    const circuit = makeCircuit([makePart('D7', 'SS54', 'Diode_SMD:D_SMC')])
     const [r] = resolveAll(circuit, d7SchData(['A', 'K']), undefined, [KICAD_ONLY_SS54])
     expect(r.status).toBe('ok')
     expect(r.tier).toBe(3)
@@ -631,9 +642,9 @@ describe('tier 3 — schematic A/K pins override footprint-convention pin maps',
     expect(r.warnings.some(w => w.startsWith('schematic-pinmap:'))).toBe(false)
   })
 
-  it('agreement against the REAL index (JLC keys present): anode-first, NO note', async () => {
-    // Post-f6680b6 the real ss54 entry maps the bare EasyEDA name anode-first,
-    // agreeing with the schematic — the correction note must NOT appear.
+  it('EasyEDA footprint against the REAL index: the schematic decides, no correction note, no unverified warning', async () => {
+    // The footprint name cannot know polarity (issue #5); the attached schematic
+    // says pin 1 = A, so the map is anode-first and nothing needs flagging.
     const { readFileSync } = await import('node:fs')
     const { join } = await import('node:path')
     const entries = (

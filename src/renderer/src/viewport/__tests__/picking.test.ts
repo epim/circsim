@@ -34,6 +34,9 @@ import { createPicker, type PickEvent } from '../picking'
 import { parseBoard } from '../../../../core/kicad/board'
 import { buildCopper } from '../copperGeometry'
 import { kicadToWorld } from '../boardGeometry'
+import { NetTintTable } from '../netTint'
+import { assembleBoard } from '../boardAssembly'
+import { makeSyntheticBoard, BIG_BOARD } from './syntheticBoard'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -90,7 +93,7 @@ function makePlaneMesh(
 
 // ─── basic registration and raycast ──────────────────────────────────────────
 
-describe('createPicker — copper mesh registration + raycast', () => {
+describe('createPicker: copper mesh registration + raycast', () => {
   it('raycastFirst returns null when no objects registered', () => {
     const picker = createPicker(() => {})
     const cam = makeTopDownCamera()
@@ -145,7 +148,7 @@ describe('createPicker — copper mesh registration + raycast', () => {
 
 // ─── fixture-rc: R1 pad 1 → net 1 ────────────────────────────────────────────
 
-describe('createPicker — fixture-rc copper geometry hit test', () => {
+describe('createPicker: fixture-rc copper geometry hit test', () => {
   const fixturePath = path.resolve(
     __dirname,
     '../../../../../fixtures/fixture-rc.kicad_pcb'
@@ -281,7 +284,7 @@ describe('createPicker — fixture-rc copper geometry hit test', () => {
 
 // ─── hover event emission ─────────────────────────────────────────────────────
 
-describe('createPicker — hover events', () => {
+describe('createPicker: hover events', () => {
   it('onPointerMove emits hoverNet when pointer hits a copper mesh', () => {
     const events: PickEvent[] = []
     const picker = createPicker(e => events.push(e))
@@ -357,7 +360,7 @@ describe('createPicker — hover events', () => {
 
 // ─── click events ─────────────────────────────────────────────────────────────
 
-describe('createPicker — click events', () => {
+describe('createPicker: click events', () => {
   it('onClick emits clickNet with netId and worldPos', () => {
     const events: PickEvent[] = []
     const picker = createPicker(e => events.push(e))
@@ -392,7 +395,7 @@ describe('createPicker — click events', () => {
 
 // ─── component box picking ─────────────────────────────────────────────────────
 
-describe('createPicker — component box picking', () => {
+describe('createPicker: component box picking', () => {
   it('onClick on component mesh emits clickComponent with ref', () => {
     const events: PickEvent[] = []
     const picker = createPicker(e => events.push(e))
@@ -432,7 +435,7 @@ describe('createPicker — component box picking', () => {
 
 // ─── clearHover ───────────────────────────────────────────────────────────────
 
-describe('createPicker — clearHover', () => {
+describe('createPicker: clearHover', () => {
   it('clearHover emits clearHover event', () => {
     const events: PickEvent[] = []
     const picker = createPicker(e => events.push(e))
@@ -460,7 +463,7 @@ describe('createPicker — clearHover', () => {
 
 // ─── emissive boost on hover ──────────────────────────────────────────────────
 
-describe('createPicker — emissive boost on hover', () => {
+describe('createPicker: emissive boost on hover', () => {
   it('hovers boost emissive on matching net meshes', () => {
     const picker = createPicker(() => {})
     const cam = makeTopDownCamera()
@@ -519,7 +522,7 @@ describe('createPicker — emissive boost on hover', () => {
 
 // ─── clear (board reload) ─────────────────────────────────────────────────────
 
-describe('createPicker — clear on board reload', () => {
+describe('createPicker: clear on board reload', () => {
   it('clear removes all registered objects so raycasts miss', () => {
     const picker = createPicker(() => {})
     const cam = makeTopDownCamera()
@@ -560,7 +563,7 @@ describe('createPicker — clear on board reload', () => {
 
 // ─── setExternalHighlight (critic) leaves LED-owned materials alone ────────────
 
-describe('createPicker — setExternalHighlight skips LED materials', () => {
+describe('createPicker: setExternalHighlight skips LED materials', () => {
   it('does not zero the emissive of an LED component box while dimming a normal part', () => {
     const picker = createPicker(() => {})
 
@@ -679,5 +682,283 @@ describe('raycastTargets — returns both net and component under the cursor', (
 
     const ndc = worldToNDC(45, 45)
     expect(picker.raycastTargets(ndc, cam)).toBeNull()
+  })
+})
+
+// ─── merged copper layer: net resolution + tint-table emissive (#57, #58) ─────
+
+/**
+ * One merged "copper layer" mesh with three 4x4 squares side by side at
+ * x = -10 (net 1), 0 (net 2), 10 (net 3), and a netIndex attribute, the way
+ * buildCopperLayers lays copper out.
+ */
+function makeLayer(z = 0) {
+  const netIds = [101, 102, 103]
+  const centers = [-10, 0, 10]
+  const pos: number[] = []
+  const idx: number[] = []
+  centers.forEach((cx, k) => {
+    pos.push(cx - 2, -2, 0, cx + 2, -2, 0, cx + 2, 2, 0, cx - 2, -2, 0, cx + 2, 2, 0, cx - 2, 2, 0)
+    for (let i = 0; i < 6; i++) idx.push(k)
+  })
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  geo.setAttribute('netIndex', new THREE.Float32BufferAttribute(idx, 1))
+  const tints = new NetTintTable(netIds, new THREE.Color(0xb87333))
+  const mat = tints.createMaterial()
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.position.z = z
+  mesh.updateMatrixWorld(true)
+  return { netIds, tints, mat, mesh }
+}
+
+describe('createPicker: merged copper layer', () => {
+  it('resolves the net of the square under the pointer', () => {
+    const { netIds, tints, mesh } = makeLayer()
+    const picker = createPicker(() => {})
+    picker.registerCopperLayer(mesh, netIds, tints)
+    const cam = makeTopDownCamera()
+    expect(picker.raycastFirst(worldToNDC(-10, 0), cam)!.netId).toBe(101)
+    expect(picker.raycastFirst(worldToNDC(0, 1), cam)!.netId).toBe(102)
+    expect(picker.raycastFirst(worldToNDC(10, -1), cam)!.netId).toBe(103)
+    expect(picker.raycastFirst(worldToNDC(5, 0), cam)).toBeNull()
+  })
+
+  it('hover writes emissive for the hovered net only, in the tint table', () => {
+    const { netIds, tints, mesh } = makeLayer()
+    const picker = createPicker(() => {})
+    picker.registerCopperLayer(mesh, netIds, tints)
+    const cam = makeTopDownCamera()
+
+    picker.onPointerMove(worldToNDC(0, 0), cam)
+    expect(tints.getEmissive(102)!.r).toBeGreaterThan(0)
+    expect(tints.getEmissive(101)!.r).toBe(0)
+    expect(tints.getEmissive(103)!.r).toBe(0)
+
+    picker.onPointerMove(worldToNDC(10, 0), cam)
+    expect(tints.getEmissive(102)!.r).toBe(0)
+    expect(tints.getEmissive(103)!.r).toBeGreaterThan(0)
+
+    picker.onPointerMove(worldToNDC(40, 40), cam)
+    expect(tints.getEmissive(103)!.r).toBe(0)
+  })
+
+  it('a hover change touches only the previous and the new net (#77)', () => {
+    const { netIds, tints, mesh } = makeLayer()
+    const picker = createPicker(() => {})
+    picker.registerCopperLayer(mesh, netIds, tints)
+    const cam = makeTopDownCamera()
+    const spy = vi.spyOn(tints, 'setEmissive')
+
+    picker.onPointerMove(worldToNDC(-10, 0), cam)   // nothing -> 101
+    expect(spy.mock.calls.map(c => c[0])).toEqual([101])
+    spy.mockClear()
+    picker.onPointerMove(worldToNDC(10, 0), cam)    // 101 -> 103
+    expect(spy.mock.calls.map(c => c[0]).sort()).toEqual([101, 103])
+    spy.mockClear()
+    picker.onPointerMove(worldToNDC(10, 1), cam)    // still 103: no work
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('hover never bumps a material version (#77)', () => {
+    const { netIds, tints, mat, mesh } = makeLayer()
+    const picker = createPicker(() => {})
+    picker.registerCopperLayer(mesh, netIds, tints)
+    const cam = makeTopDownCamera()
+    const before = mat.version
+    for (const x of [-10, 0, 10, 40, -10, 0]) picker.onPointerMove(worldToNDC(x, 0), cam)
+    expect(mat.version).toBe(before)
+  })
+
+  it('legacy per-net meshes: hover never bumps their material versions either (#77)', () => {
+    const picker = createPicker(() => {})
+    const cam = makeTopDownCamera()
+    const mats = [0, 1, 2].map(() => new THREE.MeshStandardMaterial())
+    mats.forEach((mat, i) => {
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), mat)
+      mesh.position.set(-10 + 10 * i, 0, 0)
+      mesh.updateMatrixWorld(true)
+      picker.registerCopperMesh(mesh, i + 1)
+    })
+    const before = mats.map(m => m.version)
+    for (const x of [-10, 0, 10, 40, -10]) picker.onPointerMove(worldToNDC(x, 0), cam)
+    expect(mats.map(m => m.version)).toEqual(before)
+  })
+
+  it('external highlight boosts the net in the table and clear removes it', () => {
+    const { netIds, tints, mesh } = makeLayer()
+    const picker = createPicker(() => {})
+    picker.registerCopperLayer(mesh, netIds, tints)
+    picker.setExternalHighlight(103, [])
+    expect(tints.getEmissive(103)!.r).toBeGreaterThan(0)
+    picker.setExternalHighlight(null, [])
+    expect(tints.getEmissive(103)!.r).toBe(0)
+  })
+
+  it('clear resets table emissive', () => {
+    const { netIds, tints, mesh } = makeLayer()
+    const picker = createPicker(() => {})
+    picker.registerCopperLayer(mesh, netIds, tints)
+    picker.onPointerMove(worldToNDC(0, 0), makeTopDownCamera())
+    picker.clear()
+    expect(tints.getEmissive(102)!.r).toBe(0)
+  })
+
+  it('front and back layers resolve nearest-first by plane', () => {
+    const front = makeLayer(1.6)
+    const back = makeLayer(0)
+    const picker = createPicker(() => {})
+    picker.registerCopperLayer(front.mesh, [201, 202, 203], front.tints)
+    picker.registerCopperLayer(back.mesh, [301, 302, 303], back.tints)
+    const cam = makeTopDownCamera()
+    expect(picker.raycastFirst(worldToNDC(0, 0), cam)!.netId).toBe(202)
+    const both = picker.raycastTargets(worldToNDC(0, 0), cam)
+    expect(both!.netId).toBe(202)
+  })
+})
+
+// ─── instanced component boxes ─────────────────────────────────────────────────
+
+function makeBoxInstances(refs: string[], xs: number[]) {
+  const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial(), refs.length)
+  const m = new THREE.Matrix4()
+  xs.forEach((x, i) => {
+    m.compose(new THREE.Vector3(x, 0, 2), new THREE.Quaternion(), new THREE.Vector3(3, 3, 1))
+    mesh.setMatrixAt(i, m)
+    mesh.setColorAt(i, new THREE.Color(0x336633))
+  })
+  mesh.instanceMatrix.needsUpdate = true
+  mesh.computeBoundingSphere()
+  mesh.updateMatrixWorld(true)
+  return mesh
+}
+
+describe('createPicker: instanced component boxes', () => {
+  it('resolves the ref of the instance under the pointer', () => {
+    const picker = createPicker(() => {})
+    const mesh = makeBoxInstances(['R1', 'C2', 'U3'], [-10, 0, 10])
+    picker.registerComponentInstances(mesh, ['R1', 'C2', 'U3'])
+    const cam = makeTopDownCamera()
+    expect(picker.raycastFirst(worldToNDC(-10, 0), cam)!.ref).toBe('R1')
+    expect(picker.raycastFirst(worldToNDC(0, 0), cam)!.ref).toBe('C2')
+    expect(picker.raycastFirst(worldToNDC(10, 0), cam)!.ref).toBe('U3')
+    expect(picker.raycastFirst(worldToNDC(5, 0), cam)).toBeNull()
+  })
+
+  it('click on an instance emits clickComponent', () => {
+    const events: PickEvent[] = []
+    const picker = createPicker(e => events.push(e))
+    picker.registerComponentInstances(makeBoxInstances(['R1', 'C2'], [-10, 10]), ['R1', 'C2'])
+    picker.onClick(worldToNDC(10, 0), makeTopDownCamera())
+    expect(events).toEqual([{ type: 'clickComponent', ref: 'C2' }])
+  })
+
+  it('finds the net behind an instanced box (raycastTargets)', () => {
+    const picker = createPicker(() => {})
+    const { netIds, tints, mesh: layer } = makeLayer()
+    picker.registerCopperLayer(layer, netIds, tints)
+    picker.registerComponentInstances(makeBoxInstances(['R1'], [0]), ['R1'])
+    const cam = makeTopDownCamera()
+    expect(picker.raycastFirst(worldToNDC(0, 0), cam)!.ref).toBe('R1')
+    const both = picker.raycastTargets(worldToNDC(0, 0), cam)!
+    expect(both.ref).toBe('R1')
+    expect(both.netId).toBe(102)
+  })
+
+  it('external highlight recolors only the named instances and restores them', () => {
+    const picker = createPicker(() => {})
+    const mesh = makeBoxInstances(['R1', 'C2', 'U3'], [-10, 0, 10])
+    picker.registerComponentInstances(mesh, ['R1', 'C2', 'U3'])
+    const colorOf = (i: number) => {
+      const c = new THREE.Color()
+      mesh.getColorAt(i, c)
+      return c.getHex()
+    }
+    const base = new THREE.Color(0x336633).getHex()
+    expect(colorOf(0)).toBe(base)
+
+    picker.setExternalHighlight(null, ['C2'])
+    expect(colorOf(1)).not.toBe(base)
+    expect(colorOf(0)).toBe(base)
+    expect(colorOf(2)).toBe(base)
+
+    picker.setExternalHighlight(null, ['U3'])
+    expect(colorOf(1)).toBe(base)
+    expect(colorOf(2)).not.toBe(base)
+
+    picker.setExternalHighlight(null, [])
+    expect(colorOf(2)).toBe(base)
+  })
+
+  it('highlights every instance that shares a ref', () => {
+    const picker = createPicker(() => {})
+    const mesh = makeBoxInstances(['R?', 'R?', 'C1'], [-10, 0, 10])
+    picker.registerComponentInstances(mesh, ['R?', 'R?', 'C1'])
+    const base = new THREE.Color(0x336633).getHex()
+    picker.setExternalHighlight(null, ['R?'])
+    const c = new THREE.Color()
+    mesh.getColorAt(0, c)
+    expect(c.getHex()).not.toBe(base)
+    mesh.getColorAt(1, c)
+    expect(c.getHex()).not.toBe(base)
+    mesh.getColorAt(2, c)
+    expect(c.getHex()).toBe(base)
+  })
+})
+
+// ─── scale: pick cost on the 1500-part, 20000-track board (#58) ───────────────
+
+describe('createPicker: pick cost at scale (#58)', () => {
+  it('a hover pick on the synthetic big board costs a small fraction of raycasting all of it', () => {
+    const board = makeSyntheticBoard(BIG_BOARD)
+    const picker = createPicker(() => {})
+    const a = assembleBoard(board, picker)
+    a.copperGroup.updateMatrixWorld(true)
+    a.componentGroup.updateMatrixWorld(true)
+
+    const cam = new THREE.OrthographicCamera(-120, 120, 90, -90, 0.1, 1000)
+    cam.position.set(0, 0, 200)
+    cam.lookAt(0, 0, 0)
+    cam.updateProjectionMatrix()
+    cam.updateMatrixWorld(true)
+
+    // Build the index outside the timed region, as scene.loadBoard does.
+    picker.warm()
+
+    let s = 12345
+    const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296 }
+    const pts = Array.from({ length: 60 }, () => ({ x: rnd() * 2 - 1, y: rnd() * 2 - 1 }))
+
+    // Indexed hover pick: mean per move over 60 positions, best of 3 passes.
+    let indexed = Infinity
+    for (let rep = 0; rep < 3; rep++) {
+      const start = performance.now()
+      for (const p of pts) picker.onPointerMove(p, cam)
+      indexed = Math.min(indexed, (performance.now() - start) / pts.length)
+    }
+
+    // Reference on the same board, camera and machine: the triangle-by-triangle
+    // raycast of every copper and component mesh that hover picking used before
+    // #58. Ten positions are enough, it is the slow side.
+    const rc = new THREE.Raycaster()
+    const refPts = pts.slice(0, 10)
+    const refStart = performance.now()
+    let refHits = 0
+    for (const p of refPts) {
+      rc.setFromCamera(new THREE.Vector2(p.x, p.y), cam)
+      refHits += rc.intersectObjects([a.copperGroup, a.componentGroup], true).length
+    }
+    const brute = (performance.now() - refStart) / refPts.length
+    expect(refHits).toBeGreaterThan(0) // the reference really walks geometry
+
+    // Intent: hover picking resolves copper through the spatial index instead of
+    // scanning every primitive (about 25 ms per move before the fix, 11.8 ms in
+    // the issue). No absolute millisecond bound: CI runners are up to 5x slower
+    // than a dev machine, so compare against the full raycast on the same
+    // runner, where its speed cancels. The indexed pick is a few thousandths of
+    // the full cast; requiring under a tenth passes with about 25x headroom and
+    // still fails when a pick falls back to scanning the board.
+    const ratio = indexed / Math.max(brute, 0.001)
+    expect(ratio).toBeLessThan(0.1)
   })
 })

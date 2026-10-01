@@ -33,6 +33,7 @@ import {
   type JackDef, type LeadRender,
 } from './leads'
 import { leadPath, type Pt } from './leadGeometry'
+import { MIN_VIEWPORT_H, SHELF_HEADER_H } from '../ui/layoutPrefs'
 
 export interface BenchLeadsHandle { notifyFrame(): void }
 
@@ -161,7 +162,8 @@ const BenchLeads = forwardRef<BenchLeadsHandle, {
     const target = resolveDrop(hit ?? null, d.jack)
     const st = store.getState()
     if (target) {
-      st.assignTerminal(d.jack.instId, d.jack.terminal, target)
+      // pointMm is where the clip landed (KiCad mm): recorded as the lead's copper position.
+      st.assignTerminal(d.jack.instId, d.jack.terminal, target, hit?.pointMm)
     } else if (d.jack.target && !(d.jack.instId === GROUND_INST_ID)) {
       // A wired clip released off-board detaches (ground never detaches, spec §7).
       st.detachTerminalWire(d.jack.instId, d.jack.terminal)
@@ -220,7 +222,7 @@ const BenchLeads = forwardRef<BenchLeadsHandle, {
   ) : null
 
   return (
-    <div ref={containerRef} style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+    <div ref={containerRef} style={containerStyle}>
       {children}
       <BenchShelf jackHandlers={jackHandlers} />
       <svg
@@ -290,5 +292,15 @@ const BenchLeads = forwardRef<BenchLeadsHandle, {
     </div>
   )
 })
+
+// The container never shrinks below the board's minimum height plus the shelf
+// header strip, so the viewport cannot collapse (issue #33).
+const containerStyle: React.CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: MIN_VIEWPORT_H + SHELF_HEADER_H,
+  position: 'relative',
+}
 
 export default BenchLeads

@@ -25,6 +25,17 @@
       "source": "1N4148 datasheet VF at 100 mA (about 1.0 V typ per lib header; +/-0.2 V covers vendor curve spread)"
     },
     {
+      "id": "diode-1n4148-vf-10ma",
+      "entry": "diode-1n4148",
+      "quantity": "Vf at IF=10 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":0.65,"max":1},
+      "source": "1N4148 datasheet (onsemi/Fairchild): VF 1.0 V maximum at IF=10 mA"
+    },
+    {
       "id": "diode-1n4148-vbr-100ua",
       "entry": "diode-1n4148",
       "quantity": "reverse breakdown voltage at IR=100 uA",
@@ -91,6 +102,17 @@
       "source": "1N5819 datasheet: VF about 0.45 V typ, 0.60 V maximum at 1 A, 25 C"
     },
     {
+      "id": "diode-1n5819-vf-3a",
+      "entry": "diode-1n5819",
+      "quantity": "Vf at IF=3 A",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 3","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":0.6,"max":0.9},
+      "source": "1N5819 datasheet: VF 0.9 V maximum at IF=3 A"
+    },
+    {
       "id": "diode-1n5819-vbr-1ma",
       "entry": "diode-1n5819",
       "quantity": "reverse breakdown voltage at IR=1 mA",
@@ -139,7 +161,7 @@
       "entry": "tvs-smaj24a",
       "quantity": "breakdown voltage at IT=1 mA",
       "unit": "V",
-      "setup": {"kind":"deck","deck":["i1 a 0 dc 1m","d1 a 0 {{model}}"]},
+      "setup": {"kind":"deck","deck":["i1 a 0 dc 1m","x1 a 0 {{model}}"]},
       "analysis": {"type":"op"},
       "measure": {"expr":"-v(a)"},
       "expect": {"min":26.7,"max":29.5},
@@ -150,18 +172,18 @@
       "entry": "tvs-smaj24a",
       "quantity": "clamping voltage at Ipp=10.3 A",
       "unit": "V",
-      "setup": {"kind":"deck","deck":["i1 a 0 dc 10.3","d1 a 0 {{model}}"]},
+      "setup": {"kind":"deck","deck":["i1 a 0 dc 10.3","x1 a 0 {{model}}"]},
       "analysis": {"type":"op"},
       "measure": {"expr":"-v(a)"},
       "expect": {"typ":38.9,"abs":1},
-      "source": "SMAJ24A datasheet: VC 38.9 V at IPP=10.3 A (10/1000 us); the lib fits its series resistance to this figure"
+      "source": "SMAJ24A datasheet: VC 38.9 V at IPP=10.3 A (10/1000 us); the lib fits the breakdown branch of its reverse clamp to this figure"
     },
     {
       "id": "tvs-smaj24a-ir-standoff",
       "entry": "tvs-smaj24a",
       "quantity": "leakage at VRWM=24 V",
       "unit": "A",
-      "setup": {"kind":"deck","deck":["v1 a 0 dc -24","d1 a 0 {{model}}"]},
+      "setup": {"kind":"deck","deck":["v1 a 0 dc -24","x1 a 0 {{model}}"]},
       "analysis": {"type":"op"},
       "measure": {"expr":"abs(i(v1))"},
       "expect": {"min":0,"max":0.000001},
@@ -172,12 +194,22 @@
       "entry": "tvs-smaj24a",
       "quantity": "forward voltage at IF=1 A",
       "unit": "V",
-      "setup": {"kind":"deck","deck":["i1 0 a dc 1","d1 a 0 {{model}}"]},
+      "setup": {"kind":"deck","deck":["i1 0 a dc 1","x1 a 0 {{model}}"]},
       "analysis": {"type":"op"},
       "measure": {"expr":"v(a)"},
       "expect": {"min":0.7,"max":1.5},
-      "source": "SMAJ series datasheet: forward path is an ordinary silicon junction, about 1 V at 1 A (band is wide and family-typical)",
-      "knownFailing": "#86"
+      "source": "SMAJ series datasheet: forward path is an ordinary silicon junction, about 1 V at 1 A (band is wide and family-typical); the reverse clamp is a separate branch so the forward drop does not inherit its series resistance (#86)"
+    },
+    {
+      "id": "tvs-smaj24a-vf-25a",
+      "entry": "tvs-smaj24a",
+      "quantity": "forward voltage at IF=25 A",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 25","x1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":2,"max":3.5},
+      "source": "SMAJ series datasheet: VF 3.5 V maximum at IF=25 A (issue #86: the clamp series resistance used to put this near 30 V)"
     },
     {
       "id": "zener-5v1-vz-5ma",
@@ -254,8 +286,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"v(a)"},
       "expect": {"min":1.8,"max":2},
-      "source": "typical red indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib",
-      "knownFailing": "#41"
+      "source": "typical red indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib"
     },
     {
       "id": "led-red-vf-20ma",
@@ -266,8 +297,18 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"v(a)"},
       "expect": {"min":1.8,"max":2},
-      "source": "typical red indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib",
-      "knownFailing": "#41"
+      "source": "typical red indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib"
+    },
+    {
+      "id": "led-red-vf-10ma",
+      "entry": "led-red",
+      "quantity": "Vf at IF=10 mA (red)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"typ":1.85,"abs":0.1},
+      "source": "red indicator LED class, 1.8 to 2.0 V at 20 mA (led.lib); derived from the stated 20 mA target and the card slope (n, rs), band +/-0.1 V; datasheets state Vf at 20 mA only"
     },
     {
       "id": "led-green-vf-20ma",
@@ -278,8 +319,18 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"v(a)"},
       "expect": {"min":2.1,"max":2.2},
-      "source": "typical green indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib",
-      "knownFailing": "#41"
+      "source": "typical green indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib"
+    },
+    {
+      "id": "led-green-vf-10ma",
+      "entry": "led-green",
+      "quantity": "Vf at IF=10 mA (green)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"typ":2.09,"abs":0.1},
+      "source": "green indicator LED class, 2.1 to 2.2 V at 20 mA (led.lib); derived from the stated 20 mA target and the card slope (n, rs), band +/-0.1 V; datasheets state Vf at 20 mA only"
     },
     {
       "id": "led-blue-vf-20ma",
@@ -290,8 +341,18 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"v(a)"},
       "expect": {"min":3,"max":3.2},
-      "source": "typical blue indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib",
-      "knownFailing": "#41"
+      "source": "typical blue indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib"
+    },
+    {
+      "id": "led-blue-vf-10ma",
+      "entry": "led-blue",
+      "quantity": "Vf at IF=10 mA (blue)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"typ":3,"abs":0.1},
+      "source": "blue indicator LED class, 3.0 to 3.2 V at 20 mA (led.lib); derived from the stated 20 mA target and the card slope (n, rs), band +/-0.1 V; datasheets state Vf at 20 mA only"
     },
     {
       "id": "led-white-vf-20ma",
@@ -302,8 +363,18 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"v(a)"},
       "expect": {"min":3,"max":3.4},
-      "source": "typical white indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib",
-      "knownFailing": "#41"
+      "source": "typical white indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib"
+    },
+    {
+      "id": "led-white-vf-10ma",
+      "entry": "led-white",
+      "quantity": "Vf at IF=10 mA (white)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"typ":3.1,"abs":0.1},
+      "source": "white indicator LED class, 3.0 to 3.4 V at 20 mA (led.lib); derived from the stated 20 mA target and the card slope (n, rs), band +/-0.1 V; datasheets state Vf at 20 mA only"
     },
     {
       "id": "led-red-vr",
@@ -611,8 +682,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.0003,"max":0.0012},
-      "source": "LM358 datasheet: ICC 0.7 mA typ, 1.2 mA max at V+=5 V, no load, both amplifiers",
-      "knownFailing": "#2"
+      "source": "LM358 datasheet: ICC 0.7 mA typ, 1.2 mA max at V+=5 V, no load, both amplifiers"
     },
     {
       "id": "opamp-lm324-vos-follower",
@@ -634,8 +704,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.0003,"max":0.0012},
-      "source": "LM324 datasheet: ICC 0.7 mA typ, 1.2 mA max at V+=5 V, no load, all four amplifiers",
-      "knownFailing": "#2"
+      "source": "LM324 datasheet: ICC 0.7 mA typ, 1.2 mA max at V+=5 V, no load, all four amplifiers"
     },
     {
       "id": "opamp-tl072-vos-follower",
@@ -657,8 +726,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.0005,"max":0.0025},
-      "source": "TL072 datasheet: ICC 1.4 mA typ, 2.5 mA max per package, no load",
-      "knownFailing": "#2"
+      "source": "TL072 datasheet: ICC 1.4 mA typ, 2.5 mA max per package, no load"
     },
     {
       "id": "opamp-lm358-voh",
@@ -679,9 +747,52 @@
       "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vin in 0 dc 1","x1 0 in out vcc 0 {{model}}","rl vcc out 10k"]},
       "analysis": {"type":"op"},
       "measure": {"expr":"v(out)"},
-      "expect": {"min":0,"max":0.05},
-      "source": "LM358 datasheet: VOL 5 mV typ, 20 mV max at V+=5 V, RL=10 k to V+",
-      "knownFailing": "#87"
+      "expect": {"min":0,"max":0.02},
+      "source": "LM358 datasheet: VOL 5 mV typ, 20 mV max at V+=5 V, RL=10 k to V+ (band is the 20 mV datasheet maximum)"
+    },
+    {
+      "id": "opamp-lm324-vol",
+      "entry": "opamp-lm324",
+      "quantity": "output low level, V-=0, RL=10k to V+",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vin in 0 dc 1","x1 0 in out vcc 0 {{model}}","rl vcc out 10k"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)"},
+      "expect": {"min":0,"max":0.02},
+      "source": "LM324 datasheet: VOL 5 mV typ, 20 mV max at V+=5 V, RL=10 k to V+"
+    },
+    {
+      "id": "opamp-lm358-icc-sourcing-40ma",
+      "entry": "opamp-lm358",
+      "quantity": "supply current while a follower sources 40 mA into 100 ohm (load current plus Iq)",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 12","vin in 0 dc 4","x1 in out out vcc 0 {{model}}","rl out 0 100"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vcc)"},
+      "expect": {"typ":0.0407,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): Isupply = Iload (40 mA) + ICC (0.7 mA typ, LM358 datasheet)"
+    },
+    {
+      "id": "opamp-lm358-comparator-recovery",
+      "entry": "opamp-lm358",
+      "quantity": "output 30 us after the input crosses, following 1 ms of saturation at +10.5 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 12","vp p 0 dc 3 pulse(3 1 1m 10n 10n 1m 2m)","vn n 0 dc 2","x1 p n out vcc 0 {{model}}","rl out 0 10k"]},
+      "analysis": {"type":"tran","step":"100n","stop":"1.2m"},
+      "measure": {"expr":"v(out)","at":0.00103},
+      "expect": {"min":0,"max":5},
+      "source": "LM358 datasheet slew 0.5 V/us: the output leaves a rail within one slew time (about 11 us to mid-supply), not after as long as it was saturated (issue #13)"
+    },
+    {
+      "id": "opamp-lm358-pole-node-bounded",
+      "entry": "opamp-lm358",
+      "quantity": "internal pole node 1 ms into saturation (must sit at the output rail limit, 10.5 V)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 12","vp p 0 dc 3 pulse(3 1 1m 10n 10n 1m 2m)","vn n 0 dc 2","x1 p n out vcc 0 {{model}}","rl out 0 10k"]},
+      "analysis": {"type":"tran","step":"100n","stop":"1.2m"},
+      "measure": {"expr":"v(x1.xa.vpole)","at":0.00099},
+      "expect": {"min":10,"max":11},
+      "source": "Model invariant: vcc - vsathi = 10.5 V; an unclamped pole node reached 483 V (issue #13)"
     },
     {
       "id": "opamp-lm324-voh",
@@ -714,8 +825,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.005,"max":0.0062},
-      "source": "KCL: the supply delivers the quiescent current plus every milliamp the output sources (LM358 ICC 0.7 mA typ plus 5 mA load)",
-      "knownFailing": "#2"
+      "source": "KCL: the supply delivers the quiescent current plus every milliamp the output sources (LM358 ICC 0.7 mA typ plus 5 mA load)"
     },
     {
       "id": "opamp-lm358-slew",
@@ -803,8 +913,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.0001,"max":0.001},
-      "source": "LM393 datasheet: ICC 0.4 mA typ, 1.0 mA max at VCC=5 V, both comparators, no load",
-      "knownFailing": "#2"
+      "source": "LM393 datasheet: ICC 0.4 mA typ, 1.0 mA max at VCC=5 V, both comparators, no load"
     },
     {
       "id": "comparator-lm339-icc",
@@ -815,8 +924,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.0002,"max":0.002},
-      "source": "LM339 datasheet: ICC 0.8 mA typ, 2.0 mA max at VCC=5 V, all four comparators, no load",
-      "knownFailing": "#2"
+      "source": "LM339 datasheet: ICC 0.8 mA typ, 2.0 mA max at VCC=5 V, all four comparators, no load"
     },
     {
       "id": "reg-7805-vout",
@@ -841,6 +949,17 @@
       "source": "7805 datasheet: dropout 2 V typ at IO=1 A"
     },
     {
+      "id": "reg-7805-dropout-100ma",
+      "entry": "reg-7805",
+      "quantity": "dropout (Vin minus Vout) at Iout=100 mA, Vin=6 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 6","x1 vin 0 vout {{model}}","il vout 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(vout)"},
+      "expect": {"typ":1.5,"abs":0.3},
+      "source": "7805 datasheet dropout-vs-load curve: about 1.5 V at light load (2 V at 1 A) (dropout falls with load, issue #42)"
+    },
+    {
       "id": "reg-7805-iin-1a",
       "entry": "reg-7805",
       "quantity": "input current at Iout=1 A (at least 1 A plus Iq)",
@@ -849,8 +968,29 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vin)"},
       "expect": {"min":1,"max":1.02},
-      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current",
-      "knownFailing": "#2"
+      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current"
+    },
+    {
+      "id": "reg-7805-iin-100ma",
+      "entry": "reg-7805",
+      "quantity": "input current at Iout=100 mA (load current plus Iq)",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 10","x1 vin 0 vout {{model}}","il vout 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vin)"},
+      "expect": {"min":0.1,"max":0.112},
+      "source": "Current conservation at the input pin (issue #2): Iin = Iout (100 mA) + Iq (5 mA typ, 7805 datasheet)"
+    },
+    {
+      "id": "reg-7805-6v5-90ma",
+      "entry": "reg-7805",
+      "quantity": "output at Vin=6.5 V, Iout=90 mA (in regulation: light-load dropout is about 1.5 V)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 6.5","x1 vin 0 vout {{model}}","il vout 0 dc 0.09"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vout)"},
+      "expect": {"min":4.9,"max":5.1},
+      "source": "7805 datasheet dropout-vs-load curve: about 1.5 V at 100 mA, so Vin=6.5 V regulates at 5 V (issue #42 measured 4.50 V)"
     },
     {
       "id": "reg-7805-iq",
@@ -886,6 +1026,17 @@
       "source": "7812 datasheet: dropout 2 V typ at IO=1 A"
     },
     {
+      "id": "reg-7812-dropout-100ma",
+      "entry": "reg-7812",
+      "quantity": "dropout (Vin minus Vout) at Iout=100 mA, Vin=13 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 13","x1 vin 0 vout {{model}}","il vout 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(vout)"},
+      "expect": {"typ":1.5,"abs":0.3},
+      "source": "7812 datasheet dropout-vs-load curve: about 1.5 V at light load (2 V at 1 A) (dropout falls with load, issue #42)"
+    },
+    {
       "id": "reg-7812-iin-1a",
       "entry": "reg-7812",
       "quantity": "input current at Iout=1 A (at least 1 A plus Iq)",
@@ -894,8 +1045,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vin)"},
       "expect": {"min":1,"max":1.02},
-      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current",
-      "knownFailing": "#2"
+      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current"
     },
     {
       "id": "reg-7812-iq",
@@ -931,6 +1081,17 @@
       "source": "lib header: dropout about 1.7 V (78xx style)"
     },
     {
+      "id": "reg-7833-dropout-100ma",
+      "entry": "reg-7833",
+      "quantity": "dropout (Vin minus Vout) at Iout=100 mA, Vin=4.4 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 4.4","x1 vin 0 vout {{model}}","il vout 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(vout)"},
+      "expect": {"typ":1.3,"abs":0.3},
+      "source": "78xx 3.3 V dropout-vs-load curve: about 1.3 V at light load (1.7 V at rated load) (dropout falls with load, issue #42)"
+    },
+    {
       "id": "reg-7833-iin-1a",
       "entry": "reg-7833",
       "quantity": "input current at Iout=1 A (at least 1 A plus Iq)",
@@ -939,8 +1100,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vin)"},
       "expect": {"min":1,"max":1.02},
-      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current",
-      "knownFailing": "#2"
+      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current"
     },
     {
       "id": "reg-7833-iq",
@@ -973,8 +1133,29 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"v(vin)-v(vout)"},
       "expect": {"typ":1.15,"abs":0.15},
-      "source": "AMS1117 datasheet: dropout 1.1 V typ, 1.3 V max at IO=1 A",
-      "knownFailing": "#42"
+      "source": "AMS1117 datasheet: dropout 1.1 V typ, 1.3 V max at IO=1 A"
+    },
+    {
+      "id": "reg-ams1117-3v3-dropout-100ma",
+      "entry": "reg-ams1117-3v3",
+      "quantity": "dropout (Vin minus Vout) at Iout=100 mA, Vin=4.1 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 4.1","x1 vin 0 vout {{model}}","il vout 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(vout)"},
+      "expect": {"typ":1,"abs":0.15},
+      "source": "AMS1117 datasheet dropout-vs-load curve: about 1.0 V at 100 mA (1.2 V at 1 A) (dropout falls with load, issue #42)"
+    },
+    {
+      "id": "reg-ams1117-3v3-liion-90ma",
+      "entry": "reg-ams1117-3v3",
+      "quantity": "output from a 4.2 V Li-ion cell at Iout=90 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 4.2","x1 vin 0 vout {{model}}","il vout 0 dc 0.09"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vout)"},
+      "expect": {"typ":3.2,"abs":0.1},
+      "source": "AMS1117 datasheet dropout-vs-load curve: about 1.0 V at 100 mA, so 4.2 V in gives about 3.2 V out (issue #42 measured 2.90 V)"
     },
     {
       "id": "reg-ams1117-3v3-iin-1a",
@@ -985,8 +1166,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vin)"},
       "expect": {"min":1,"max":1.02},
-      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current",
-      "knownFailing": "#2"
+      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current"
     },
     {
       "id": "reg-ams1117-3v3-iq",
@@ -1013,14 +1193,24 @@
     {
       "id": "reg-ams1117-5v0-dropout-1a",
       "entry": "reg-ams1117-5v0",
-      "quantity": "dropout (Vin minus Vout) at Iout=1 A, Vin=6.3 V",
+      "quantity": "dropout (Vin minus Vout) at Iout=1 A, Vin=6.1 V",
       "unit": "V",
-      "setup": {"kind":"deck","deck":["vin vin 0 dc 6.3","x1 vin 0 vout {{model}}","il vout 0 dc 1"]},
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 6.1","x1 vin 0 vout {{model}}","il vout 0 dc 1"]},
       "analysis": {"type":"op"},
       "measure": {"expr":"v(vin)-v(vout)"},
       "expect": {"typ":1.15,"abs":0.15},
-      "source": "AMS1117 datasheet: dropout 1.1 V typ, 1.3 V max at IO=1 A",
-      "knownFailing": "#42"
+      "source": "AMS1117 datasheet: dropout 1.1 V typ, 1.3 V max at IO=1 A"
+    },
+    {
+      "id": "reg-ams1117-5v0-dropout-100ma",
+      "entry": "reg-ams1117-5v0",
+      "quantity": "dropout (Vin minus Vout) at Iout=100 mA, Vin=5.9 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 5.9","x1 vin 0 vout {{model}}","il vout 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(vout)"},
+      "expect": {"typ":1,"abs":0.15},
+      "source": "AMS1117 datasheet dropout-vs-load curve: about 1.0 V at 100 mA (1.2 V at 1 A) (dropout falls with load, issue #42)"
     },
     {
       "id": "reg-ams1117-5v0-iin-1a",
@@ -1031,8 +1221,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vin)"},
       "expect": {"min":1,"max":1.02},
-      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current",
-      "knownFailing": "#2"
+      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current"
     },
     {
       "id": "reg-ams1117-5v0-iq",
@@ -1109,8 +1298,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vdd)"},
       "expect": {"min":0.000002,"max":0.00002},
-      "source": "BQ77915 datasheet: ICC about 8 uA typ in NORMAL mode (lib header)",
-      "knownFailing": "#2"
+      "source": "BQ77915 datasheet: ICC about 8 uA typ in NORMAL mode (lib header)"
     },
     {
       "id": "charger-ltc4020-intvcc",
@@ -1220,8 +1408,18 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.001,"max":0.006},
-      "source": "NE555 datasheet: ICC 3 mA typ, 6 mA max at Vcc=5 V, output low, no load",
-      "knownFailing": "#2"
+      "source": "NE555 datasheet: ICC 3 mA typ, 6 mA max at Vcc=5 V, output low, no load"
+    },
+    {
+      "id": "timer-ne555-icc-loaded",
+      "entry": "timer-ne555",
+      "quantity": "supply current, output high into 100 ohm, Vcc=5 V (load current plus ICC)",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vt trig 0 dc 0","vth thres 0 dc 0","vr reset 0 dc 5","x1 0 trig out reset ctrl thres disch vcc {{model}}","rl out 0 100"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vcc)"},
+      "expect": {"typ":0.044,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): Isupply = Iload (about 41 mA at VOH = Vcc - 0.5 V) + ICC (about 3 mA, NE555 datasheet)"
     },
     {
       "id": "logic-74hc00-voh",
@@ -1364,8 +1562,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":4.32,"abs":0.12},
-      "source": "74HC00 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance",
-      "knownFailing": "#12"
+      "source": "74HC00 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance"
     },
     {
       "id": "logic-74hc04-voh-4ma",
@@ -1376,8 +1573,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":4.32,"abs":0.12},
-      "source": "74HC04 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance",
-      "knownFailing": "#12"
+      "source": "74HC04 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance"
     },
     {
       "id": "logic-74hc08-voh-4ma",
@@ -1388,8 +1584,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":4.32,"abs":0.12},
-      "source": "74HC08 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance",
-      "knownFailing": "#12"
+      "source": "74HC08 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance"
     },
     {
       "id": "logic-74hc14-voh-4ma",
@@ -1400,8 +1595,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":4.32,"abs":0.12},
-      "source": "74HC14 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance",
-      "knownFailing": "#12"
+      "source": "74HC14 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance"
     },
     {
       "id": "logic-74hc32-voh-4ma",
@@ -1412,8 +1606,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":4.32,"abs":0.12},
-      "source": "74HC32 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance",
-      "knownFailing": "#12"
+      "source": "74HC32 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance"
     },
     {
       "id": "logic-74hc86-voh-4ma",
@@ -1424,8 +1617,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":4.32,"abs":0.12},
-      "source": "74HC86 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance",
-      "knownFailing": "#12"
+      "source": "74HC86 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance"
     },
     {
       "id": "logic-74hc74-preset",
@@ -1436,8 +1628,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1q)","at":0.0000018},
       "expect": {"min":4.4,"max":4.5},
-      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: PRE_N low forces Q high asynchronously",
-      "knownFailing": "#85"
+      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: PRE_N low forces Q high asynchronously"
     },
     {
       "id": "logic-74hc74-clear",
@@ -1448,8 +1639,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1q)","at":0.0000018},
       "expect": {"min":0,"max":0.1},
-      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: CLR_N low forces Q low asynchronously",
-      "knownFailing": "#85"
+      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: CLR_N low forces Q low asynchronously"
     },
     {
       "id": "logic-74hc74-clocked-d1",
@@ -1460,8 +1650,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1q)","at":0.0000018},
       "expect": {"min":4.4,"max":4.5},
-      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: Q follows D on the rising clock edge",
-      "knownFailing": "#85"
+      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: Q follows D on the rising clock edge"
     },
     {
       "id": "logic-74hc164-shift-q7",
@@ -1472,8 +1661,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"10u"},
       "measure": {"expr":"v(q7)","at":0.0000098},
       "expect": {"min":4.4,"max":4.5},
-      "source": "74HC164 datasheet (NXP/TI), Vcc=4.5 V, 25 C: data at A and B appears at Q7 after eight rising clocks",
-      "knownFailing": "#85"
+      "source": "74HC164 datasheet (NXP/TI), Vcc=4.5 V, 25 C: data at A and B appears at Q7 after eight rising clocks"
     },
     {
       "id": "logic-74hc164-clear-q0",
@@ -1484,8 +1672,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"10u"},
       "measure": {"expr":"v(q0)","at":0.0000098},
       "expect": {"min":0,"max":0.1},
-      "source": "74HC164 datasheet (NXP/TI), Vcc=4.5 V, 25 C: master reset clears all outputs",
-      "knownFailing": "#85"
+      "source": "74HC164 datasheet (NXP/TI), Vcc=4.5 V, 25 C: master reset clears all outputs"
     },
     {
       "id": "logic-74hc595-latch-q7",
@@ -1496,8 +1683,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"15u"},
       "measure": {"expr":"v(q7)","at":0.000014},
       "expect": {"min":4.4,"max":4.5},
-      "source": "74HC595 datasheet (NXP/TI), Vcc=4.5 V, 25 C: STCP rising edge copies the shift register to the output latch",
-      "knownFailing": "#85"
+      "source": "74HC595 datasheet (NXP/TI), Vcc=4.5 V, 25 C: STCP rising edge copies the shift register to the output latch"
     },
     {
       "id": "logic-74hc595-reset-q0",
@@ -1508,8 +1694,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"15u"},
       "measure": {"expr":"v(q0)","at":0.000014},
       "expect": {"min":0,"max":0.1},
-      "source": "74HC595 datasheet (NXP/TI), Vcc=4.5 V, 25 C: MR_N low clears the shift register",
-      "knownFailing": "#85"
+      "source": "74HC595 datasheet (NXP/TI), Vcc=4.5 V, 25 C: MR_N low clears the shift register"
     },
     {
       "id": "logic-cd4011-voh",
@@ -1556,6 +1741,61 @@
       "source": "CD4011/CD40106 datasheet (TI), VDD=10 V, 25 C: VOL 0.05 V maximum at IO under 1 uA"
     },
     {
+      "id": "logic-74hc00-icc-loaded",
+      "entry": "logic-74hc00",
+      "quantity": "supply current with 1Y high into 1 kohm at Vcc=4.5 V (load current)",
+      "unit": "A",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"1A":0,"1B":1},"loadsOhms":{"1Y":1000}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"-i(vpsu_vcc)","at":0.0000018},
+      "expect": {"typ":0.0045,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): the dac_bridge output current is drawn from VCC; Iload = 4.5 V / 1 kohm"
+    },
+    {
+      "id": "logic-74hc00-icc-low",
+      "entry": "logic-74hc00",
+      "quantity": "supply current with 1Y low into 1 kohm at Vcc=4.5 V (no load current from VCC)",
+      "unit": "A",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"1A":1,"1B":1},"loadsOhms":{"1Y":1000}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"-i(vpsu_vcc)","at":0.0000018},
+      "expect": {"min":-0.000001,"max":0.000001},
+      "source": "A low output sinks nothing from VCC; CMOS static supply current is microamps, below this band (issue #2)"
+    },
+    {
+      "id": "logic-74hc14-icc-loaded",
+      "entry": "logic-74hc14",
+      "quantity": "supply current with the Schmitt output 1Y high into 1 kohm at Vcc=4.5 V",
+      "unit": "A",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"1A":0},"loadsOhms":{"1Y":1000}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"-i(vpsu_vcc)","at":0.0000018},
+      "expect": {"typ":0.0045,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): the Schmitt B-source current is drawn from VCC; Iload = 4.5 V / 1 kohm"
+    },
+    {
+      "id": "logic-cd4011-icc-loaded",
+      "entry": "logic-cd4011",
+      "quantity": "supply current with 1Y high into 2.2 kohm at Vcc=10 V",
+      "unit": "A",
+      "setup": {"kind":"logic","vcc":10,"inputs":{"1A":0,"1B":1},"loadsOhms":{"1Y":2200}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"-i(vpsu_vcc)","at":0.0000018},
+      "expect": {"typ":0.00409,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): Iload = Vpad / 2.2 kohm, with the pad sagging to about 9 V through the output stage resistance (issue #12, see logic-cd4011-voh-drive)"
+    },
+    {
+      "id": "logic-cd40106-icc-loaded",
+      "entry": "logic-cd40106",
+      "quantity": "supply current with the Schmitt output 1Y high into 2.2 kohm at Vcc=10 V",
+      "unit": "A",
+      "setup": {"kind":"logic","vcc":10,"inputs":{"1A":0},"loadsOhms":{"1Y":2200}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"-i(vpsu_vcc)","at":0.0000018},
+      "expect": {"typ":0.00409,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): Iload = Vpad / 2.2 kohm, with the pad sagging to about 9 V through the output stage resistance (issue #12, see logic-cd4011-voh-drive)"
+    },
+    {
       "id": "logic-cd4011-voh-drive",
       "entry": "logic-cd4011",
       "quantity": "output high level with a 2.2 kohm load (about 4.5 mA)",
@@ -1564,8 +1804,986 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":9,"abs":0.5},
-      "source": "CD4011 datasheet: VOH 9.5 V min at IOH=-1.6 mA, VDD=10 V; output resistance of a few hundred ohms",
-      "knownFailing": "#12"
+      "source": "CD4011 datasheet: VOH 9.5 V min at IOH=-1.6 mA, VDD=10 V; output resistance of a few hundred ohms"
+    },
+    {
+      "id": "stub-mcu-esp32-supply-current",
+      "entry": "stub-mcu-esp32",
+      "quantity": "supply current at 3.3 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 3.3","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.1,"rel":0.05},
+      "source": "ESP32 datasheet, current consumption by RF mode: Active (RF working) Rx 802.11b/g/n about 95 to 100 mA"
+    },
+    {
+      "id": "stub-mcu-esp8266-supply-current",
+      "entry": "stub-mcu-esp8266",
+      "quantity": "supply current at 3.3 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 3.3","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.06,"rel":0.05},
+      "source": "ESP8266EX datasheet, current consumption: Rx 802.11b/g/n about 56 to 62 mA"
+    },
+    {
+      "id": "stub-mcu-stm32f1-supply-current",
+      "entry": "stub-mcu-stm32f1",
+      "quantity": "supply current at 3.3 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 3.3","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.036,"rel":0.05},
+      "source": "STM32F103 datasheet (DS5319), supply current in Run mode at 72 MHz with all peripherals enabled, 36 mA typical"
+    },
+    {
+      "id": "stub-mcu-stm32f4-supply-current",
+      "entry": "stub-mcu-stm32f4",
+      "quantity": "supply current at 3.3 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 3.3","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.1,"rel":0.05},
+      "source": "STM32F405/407 datasheet (DS8626), Run mode at 168 MHz with all peripherals enabled, about 90 to 100 mA"
+    },
+    {
+      "id": "stub-mcu-stm32-lowpower-supply-current",
+      "entry": "stub-mcu-stm32-lowpower",
+      "quantity": "supply current at 3.3 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 3.3","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.01,"rel":0.05},
+      "source": "STM32G0/L0/L4 datasheets, Run mode at 48 to 80 MHz, about 5 to 12 mA"
+    },
+    {
+      "id": "stub-mcu-atmega-supply-current",
+      "entry": "stub-mcu-atmega",
+      "quantity": "supply current at 5 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 5","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.01,"rel":0.05},
+      "source": "ATmega328P datasheet, active supply current versus frequency, 16 MHz at 5 V about 10 mA"
+    },
+    {
+      "id": "stub-mcu-attiny-supply-current",
+      "entry": "stub-mcu-attiny",
+      "quantity": "supply current at 5 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 5","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.005,"rel":0.05},
+      "source": "ATtiny85 datasheet, active supply current at 8 MHz, 5 V about 5 mA"
+    },
+    {
+      "id": "stub-mcu-rp2040-supply-current",
+      "entry": "stub-mcu-rp2040",
+      "quantity": "supply current at 3.3 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 3.3","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.025,"rel":0.05},
+      "source": "RP2040 datasheet, both cores at 125 MHz, core plus IO about 20 to 25 mA"
+    },
+    {
+      "id": "stub-mcu-nrf52-supply-current",
+      "entry": "stub-mcu-nrf52",
+      "quantity": "supply current at 3 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 3","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.006,"rel":0.05},
+      "source": "nRF52832/52840 product specification, radio Rx 1 Mbps BLE with DC/DC at 3 V about 5.4 to 6.5 mA"
+    },
+    {
+      "id": "stub-mcu-samd21-supply-current",
+      "entry": "stub-mcu-samd21",
+      "quantity": "supply current at 3.3 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 3.3","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.006,"rel":0.05},
+      "source": "SAM D21 datasheet, active mode at 48 MHz, 3.3 V about 5 to 6 mA"
+    },
+    {
+      "id": "stub-mcu-ch32v003-supply-current",
+      "entry": "stub-mcu-ch32v003",
+      "quantity": "supply current at 5 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 5","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.008,"rel":0.05},
+      "source": "CH32V003 datasheet, run mode at 48 MHz about 8 mA"
+    },
+    {
+      "id": "stub-mcu-msp430-supply-current",
+      "entry": "stub-mcu-msp430",
+      "quantity": "supply current at 2.2 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 2.2","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.00023,"rel":0.05},
+      "source": "MSP430G2553 datasheet, active mode at 1 MHz, 2.2 V, 230 uA typical"
+    },
+    {
+      "id": "stub-ws2812b-supply-current",
+      "entry": "stub-ws2812b",
+      "quantity": "supply current at 5 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 5","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.001,"rel":0.05},
+      "source": "WS2812B datasheet gives 20 mA per colour channel when lit but no dark-state current; the roughly 1 mA idle draw is the vendor-reported figure (Adafruit NeoPixel guide), stated as such in stubs.lib"
+    },
+    {
+      "id": "stub-ch340-supply-current",
+      "entry": "stub-ch340",
+      "quantity": "supply current at 5 V, working condition",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 5","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"typ":0.012,"rel":0.05},
+      "source": "CH340 datasheet, operating supply current about 12 mA at 5 V"
+    },
+    {
+      "id": "stub-mcu-esp32-off-below-brownout",
+      "entry": "stub-mcu-esp32",
+      "quantity": "supply current with the rail at 1.0 V (below the 2.3 V minimum supply)",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 1.0","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"min":0,"max":0.001},
+      "source": "ESP32 datasheet: minimum VDD3P3 2.3 V (brown-out detector 2.43 V); a rail below it carries no load"
+    },
+    {
+      "id": "stub-ws2812b-off-below-minimum",
+      "entry": "stub-ws2812b",
+      "quantity": "supply current with the rail at 1.0 V (below the 3.5 V minimum supply)",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vdd vdd 0 dc 1.0","x1 vdd 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vdd)"},
+      "expect": {"min":0,"max":0.0001},
+      "source": "WS2812B datasheet: supply 3.5 to 5.3 V; a rail below it carries no load"
+    },
+    {
+      "id": "reg-lm317-vref",
+      "entry": "reg-lm317",
+      "quantity": "reference voltage v(out) - v(adj), Vin=12 V, Iout about 10 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 12","x1 vin adj out {{model}}","r1 out adj 240","r2 adj 0 720","rl out 0 500"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)-v(adj)"},
+      "expect": {"min":1.2,"max":1.3},
+      "source": "LM317 datasheet: reference voltage 1.25 V typ (1.20 to 1.30 V), 3 V <= Vin-Vout <= 40 V, 10 mA <= Iout"
+    },
+    {
+      "id": "reg-lm317-vout-divider",
+      "entry": "reg-lm317",
+      "quantity": "Vout with R1=240 and R2=720 (1.25 x (1 + R2/R1) + 50 uA x R2 = 5.04 V)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 12","x1 vin adj out {{model}}","r1 out adj 240","r2 adj 0 720","rl out 0 500"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)"},
+      "expect": {"min":4.8,"max":5.3},
+      "source": "LM317 datasheet: Vout = Vref x (1 + R2/R1) + IADJ x R2, Vref 1.2 to 1.3 V, IADJ 50 uA typ"
+    },
+    {
+      "id": "reg-lm317-iadj",
+      "entry": "reg-lm317",
+      "quantity": "ADJ pin current",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 12","vadj adj 0 dc 0","x1 vin adj out {{model}}","rl out 0 1k"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"i(vadj)"},
+      "expect": {"min":0.00002,"max":0.0001},
+      "source": "LM317 datasheet: adjustment-pin current 50 uA typ, 100 uA max"
+    },
+    {
+      "id": "reg-lm317-dropout",
+      "entry": "reg-lm317",
+      "quantity": "Vin - Vout at Iout=1 A with Vin=6 V and the divider set for 5 V (dropout)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 6","x1 vin adj out {{model}}","r1 out adj 240","r2 adj 0 720","il out 0 dc 1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(out)"},
+      "expect": {"typ":2,"abs":0.7},
+      "source": "LM317 datasheet: dropout (input-output differential) about 2 V at 1 A, 1.5 V at light load"
+    },
+    {
+      "id": "reg-ap2112k-vout",
+      "entry": "reg-ap2112k-3v3",
+      "quantity": "Vout at Vin=5 V, Iout=100 mA, EN tied to VIN",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 5","x1 vin 0 out vin {{model}}","il out 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)"},
+      "expect": {"min":3.2,"max":3.4},
+      "source": "AP2112K-3.3 datasheet: output voltage 3.3 V +/-1.5 percent"
+    },
+    {
+      "id": "reg-ap2112k-dropout",
+      "entry": "reg-ap2112k-3v3",
+      "quantity": "dropout (Vin minus Vout) at Iout=600 mA, Vin=3.4 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 3.4","x1 vin 0 out vin {{model}}","il out 0 dc 0.6"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(out)"},
+      "expect": {"min":0.1,"max":0.4},
+      "source": "AP2112K-3.3 datasheet: dropout 250 mV typ, 400 mV max at 600 mA"
+    },
+    {
+      "id": "reg-ap2112k-iq",
+      "entry": "reg-ap2112k-3v3",
+      "quantity": "quiescent (ground) current, no load",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 5","x1 vin 0 out vin {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vin)"},
+      "expect": {"min":0.00003,"max":0.00009},
+      "source": "AP2112K-3.3 datasheet: quiescent current 55 uA typ, 70 uA max"
+    },
+    {
+      "id": "reg-ap2112k-disable",
+      "entry": "reg-ap2112k-3v3",
+      "quantity": "output with EN low, 1 kohm load",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 5","ven en 0 dc 0","x1 vin 0 out en {{model}}","rl out 0 1k"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)"},
+      "expect": {"min":-0.001,"max":0.05},
+      "source": "AP2112K-3.3 datasheet: EN low (below 0.4 V) disables the output"
+    },
+    {
+      "id": "reg-mcp1700-vout",
+      "entry": "reg-mcp1700-3v3",
+      "quantity": "Vout at Vin=5 V, Iout=50 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 5","x1 vin 0 out {{model}}","il out 0 dc 0.05"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)"},
+      "expect": {"min":3.23,"max":3.37},
+      "source": "MCP1700-3302 datasheet: output voltage 3.3 V +/-2 percent"
+    },
+    {
+      "id": "reg-mcp1700-dropout",
+      "entry": "reg-mcp1700-3v3",
+      "quantity": "dropout at Iout=250 mA, Vin=3.5 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 3.5","x1 vin 0 out {{model}}","il out 0 dc 0.25"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(out)"},
+      "expect": {"min":0.1,"max":0.35},
+      "source": "MCP1700 datasheet: dropout voltage 178 mV typ, 350 mV max at 250 mA (3.3 V option)"
+    },
+    {
+      "id": "reg-mcp1700-iq",
+      "entry": "reg-mcp1700-3v3",
+      "quantity": "quiescent current, no load",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 5","x1 vin 0 out {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vin)"},
+      "expect": {"min":8e-7,"max":0.000004},
+      "source": "MCP1700 datasheet: quiescent current 1.6 uA typ, 4 uA max"
+    },
+    {
+      "id": "reg-xc6206-vout",
+      "entry": "reg-xc6206-3v3",
+      "quantity": "Vout at Vin=5 V, Iout=20 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 5","x1 vin 0 out {{model}}","il out 0 dc 0.02"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)"},
+      "expect": {"min":3.23,"max":3.37},
+      "source": "XC6206P332 datasheet: output voltage 3.3 V +/-2 percent"
+    },
+    {
+      "id": "reg-xc6206-dropout",
+      "entry": "reg-xc6206-3v3",
+      "quantity": "dropout at Iout=100 mA, Vin=3.5 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 3.5","x1 vin 0 out {{model}}","il out 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(out)"},
+      "expect": {"min":0.1,"max":0.45},
+      "source": "XC6206P332 datasheet: dropout about 250 mV at 100 mA"
+    },
+    {
+      "id": "reg-xc6206-iq",
+      "entry": "reg-xc6206-3v3",
+      "quantity": "quiescent current, no load",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 5","x1 vin 0 out {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vin)"},
+      "expect": {"min":5e-7,"max":0.000003},
+      "source": "XC6206P332 datasheet: supply current 1 uA typ"
+    },
+    {
+      "id": "charger-tp4056-ibat-1k2",
+      "entry": "charger-tp4056",
+      "quantity": "charge current with Rprog=1.2 kohm, battery at 3.7 V",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vb bat 0 dc 3.7","rprog prog 0 1.2k","rchrg vcc chrg 10k","rstby vcc stdby 10k","x1 vcc bat prog 0 vcc chrg stdby 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"i(vb)"},
+      "expect": {"min":0.9,"max":1.1},
+      "source": "TP4056 datasheet: IBAT = (VPROG / RPROG) x 1200, Rprog=1.2 k gives 1000 mA (900 to 1100 mA)"
+    },
+    {
+      "id": "charger-tp4056-ibat-2k",
+      "entry": "charger-tp4056",
+      "quantity": "charge current with Rprog=2 kohm, battery at 3.7 V (600 mA)",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vb bat 0 dc 3.7","rprog prog 0 2k","x1 vcc bat prog 0 vcc chrg stdby 0 {{model}}","rchrg vcc chrg 10k","rstby vcc stdby 10k"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"i(vb)"},
+      "expect": {"min":0.54,"max":0.66},
+      "source": "TP4056 datasheet: Rprog=2 kohm programs 600 mA (IBAT = 1.0 V / Rprog x 1200)"
+    },
+    {
+      "id": "charger-tp4056-vprog",
+      "entry": "charger-tp4056",
+      "quantity": "PROG pin voltage in constant-current mode",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vb bat 0 dc 3.7","rprog prog 0 1.2k","rchrg vcc chrg 10k","rstby vcc stdby 10k","x1 vcc bat prog 0 vcc chrg stdby 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(prog)"},
+      "expect": {"min":0.93,"max":1.07},
+      "source": "TP4056 datasheet: PROG pin voltage 1.0 V in constant-current mode"
+    },
+    {
+      "id": "charger-tp4056-vfloat",
+      "entry": "charger-tp4056",
+      "quantity": "battery-pin voltage when the pack (4.1 V behind 0.5 ohm) is charged from 5 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vcell cell 0 dc 4.1","rbat bat cell 0.5","rprog prog 0 1.2k","rchrg vcc chrg 10k","rstby vcc stdby 10k","x1 vcc bat prog 0 vcc chrg stdby 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(bat)"},
+      "expect": {"min":4.137,"max":4.263},
+      "source": "TP4056 datasheet: float voltage 4.2 V (4.137 to 4.263 V) in constant-voltage mode"
+    },
+    {
+      "id": "charger-tp4056-trickle",
+      "entry": "charger-tp4056",
+      "quantity": "charge current with the battery at 2.5 V (precharge)",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vb bat 0 dc 2.5","rprog prog 0 1.2k","rchrg vcc chrg 10k","rstby vcc stdby 10k","x1 vcc bat prog 0 vcc chrg stdby 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"i(vb)"},
+      "expect": {"min":0.09,"max":0.13},
+      "source": "TP4056 datasheet: trickle charge at one tenth of the programmed current (100 mA at 1.2 kohm) below 2.9 V"
+    },
+    {
+      "id": "charger-tp4056-chrg-low",
+      "entry": "charger-tp4056",
+      "quantity": "CHRG pin level while charging (10 kohm pull-up to 5 V)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vb bat 0 dc 3.7","rprog prog 0 1.2k","rchrg vcc chrg 10k","rstby vcc stdby 10k","x1 vcc bat prog 0 vcc chrg stdby 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(chrg)"},
+      "expect": {"min":0,"max":0.5},
+      "source": "TP4056 datasheet: CHRG is an open-drain output pulled low while a charge cycle is in progress"
+    },
+    {
+      "id": "charger-tp4056-off-no-vcc",
+      "entry": "charger-tp4056",
+      "quantity": "battery current with VCC unplugged (0 V)",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 0","vb bat 0 dc 3.7","rprog prog 0 1.2k","rchrg vcc chrg 10k","rstby vcc stdby 10k","x1 vcc bat prog 0 vcc chrg stdby 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"abs(i(vb))"},
+      "expect": {"min":0,"max":0.001},
+      "source": "TP4056 datasheet: automatic shutdown when VCC falls below the undervoltage threshold or within 30 mV of BAT"
+    },
+    {
+      "id": "opamp-mcp6001-vos",
+      "entry": "opamp-mcp6001",
+      "quantity": "follower error (out minus in), V+=5 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vin in 0 dc 2.5","x1 in out out vcc 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)-v(in)"},
+      "expect": {"min":-0.0045,"max":0.0045},
+      "source": "MCP6001 datasheet: input offset voltage +/-4.5 mV max (0.5 mV typ) at VDD=5.5 V"
+    },
+    {
+      "id": "opamp-mcp6001-iq",
+      "entry": "opamp-mcp6001",
+      "quantity": "supply current, no load",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vin in 0 dc 2.5","x1 in out out vcc 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vcc)"},
+      "expect": {"min":0.00005,"max":0.00017},
+      "source": "MCP6001 datasheet: quiescent current 100 uA typ per amplifier, 170 uA max"
+    },
+    {
+      "id": "opamp-mcp6001-voh",
+      "entry": "opamp-mcp6001",
+      "quantity": "output high level, V+=5 V, RL=10k to ground",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vin in 0 dc 4.9","x1 in 0 out vcc 0 {{model}}","rl out 0 10k"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)"},
+      "expect": {"min":4.95,"max":5},
+      "source": "MCP6001 datasheet: output swing within 25 mV of the rails (VOH >= VDD - 25 mV at RL=10 kohm)"
+    },
+    {
+      "id": "opamp-mcp6001-vol",
+      "entry": "opamp-mcp6001",
+      "quantity": "output low level, V+=5 V, RL=10k to V+",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vin in 0 dc 0.1","x1 0 in out vcc 0 {{model}}","rl vcc out 10k"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)"},
+      "expect": {"min":0,"max":0.05},
+      "source": "MCP6001 datasheet: output swing within 25 mV of the rails (VOL <= VSS + 25 mV at RL=10 kohm)"
+    },
+    {
+      "id": "opamp-mcp6002-vos-a",
+      "entry": "opamp-mcp6002",
+      "quantity": "channel A follower error, V+=5 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vin in 0 dc 2.5","x1 in out out 0 nb nb vcc 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)-v(in)"},
+      "expect": {"min":-0.0045,"max":0.0045},
+      "source": "MCP6002 datasheet: input offset voltage +/-4.5 mV max (0.5 mV typ)"
+    },
+    {
+      "id": "opamp-mcp6002-vos-b",
+      "entry": "opamp-mcp6002",
+      "quantity": "channel B follower error, V+=5 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vin in 0 dc 2.5","x1 0 na na in outb outb vcc 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(outb)-v(in)"},
+      "expect": {"min":-0.0045,"max":0.0045},
+      "source": "MCP6002 datasheet: input offset voltage +/-4.5 mV max (0.5 mV typ)"
+    },
+    {
+      "id": "opamp-mcp6002-iq",
+      "entry": "opamp-mcp6002",
+      "quantity": "supply current, both channels, no load",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vin in 0 dc 2.5","x1 in out out in outb outb vcc 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vcc)"},
+      "expect": {"min":0.0001,"max":0.00034},
+      "source": "MCP6002 datasheet: quiescent current 100 uA typ per amplifier, 170 uA max"
+    },
+    {
+      "id": "opamp-ne5532-vos",
+      "entry": "opamp-ne5532",
+      "quantity": "channel A follower error, +/-15 V split as 0 to 30 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 30","vin in 0 dc 15","x1 in out out 0 nb nb vcc 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)-v(in)"},
+      "expect": {"min":-0.004,"max":0.004},
+      "source": "NE5532 datasheet: input offset voltage 0.5 mV typ, 4 mV max"
+    },
+    {
+      "id": "opamp-ne5532-icc",
+      "entry": "opamp-ne5532",
+      "quantity": "supply current, both channels, no load",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 30","vin in 0 dc 15","x1 in out out in outb outb vcc 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vcc)"},
+      "expect": {"min":0.004,"max":0.016},
+      "source": "NE5532 datasheet: supply current 8 mA typ, 16 mA max for the package, no load"
+    },
+    {
+      "id": "opamp-ne5532-slew",
+      "entry": "opamp-ne5532",
+      "quantity": "slew rate, follower, 10 V step",
+      "unit": "V/s",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 30","vin in 0 dc 0 pulse(10 20 100n 5n 5n 5u 10u)","x1 in out out 0 nb nb vcc 0 {{model}}"]},
+      "analysis": {"type":"tran","step":"5n","stop":"2u","uic":false},
+      "measure": {"stat":"maxSlope","node":"out","from":9e-8,"to":0.0000019},
+      "expect": {"typ":9000000,"rel":0.4},
+      "source": "NE5532 datasheet: slew rate 9 V/us typ"
+    },
+    {
+      "id": "opamp-lm741-vos",
+      "entry": "opamp-lm741",
+      "quantity": "follower error (out minus in), 0 to 30 V supply",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 30","vin in 0 dc 15","x1 in out out vcc 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)-v(in)"},
+      "expect": {"min":-0.006,"max":0.006},
+      "source": "LM741 datasheet: input offset voltage 1 mV typ, 6 mV max"
+    },
+    {
+      "id": "opamp-lm741-icc",
+      "entry": "opamp-lm741",
+      "quantity": "supply current, no load",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 30","vin in 0 dc 15","x1 in out out vcc 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vcc)"},
+      "expect": {"min":0.0008,"max":0.0028},
+      "source": "LM741 datasheet: supply current 1.7 mA typ, 2.8 mA max"
+    },
+    {
+      "id": "opamp-lm741-voh",
+      "entry": "opamp-lm741",
+      "quantity": "output high level, supply 0 to 30 V, RL=10k to ground",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 30","vin in 0 dc 29","x1 in 0 out vcc 0 {{model}}","rl out 0 10k"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)"},
+      "expect": {"min":26,"max":29.5},
+      "source": "LM741 datasheet: output voltage swing +/-14 V typ (+/-12 V min) on +/-15 V supplies at RL=10 kohm"
+    },
+    {
+      "id": "mosfet-irlz44n-rdson-10v",
+      "entry": "mosfet-irlz44n",
+      "quantity": "Rds(on) at Vgs=10 V, Id=25 A",
+      "unit": "ohm",
+      "setup": {"kind":"deck","deck":["vg g 0 dc 10","i1 0 d dc 25","m1 d g 0 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(d)/25"},
+      "expect": {"min":0.014,"max":0.022},
+      "source": "IRLZ44N datasheet: RDS(on) 22 mohm max at VGS=10 V, ID=25 A"
+    },
+    {
+      "id": "mosfet-irlz44n-rdson-5v",
+      "entry": "mosfet-irlz44n",
+      "quantity": "Rds(on) at Vgs=5 V, Id=25 A",
+      "unit": "ohm",
+      "setup": {"kind":"deck","deck":["vg g 0 dc 5","i1 0 d dc 25","m1 d g 0 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(d)/25"},
+      "expect": {"min":0.018,"max":0.025},
+      "source": "IRLZ44N datasheet: RDS(on) 25 mohm max at VGS=5 V, ID=25 A"
+    },
+    {
+      "id": "mosfet-irlz44n-vth",
+      "entry": "mosfet-irlz44n",
+      "quantity": "|Vgs(th)| at |Id|=250 uA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 d dc 250u","m1 d d 0 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(d)"},
+      "expect": {"min":1,"max":2},
+      "source": "IRLZ44N datasheet: VGS(th) 1.0 to 2.0 V at VDS=VGS, ID=250 uA"
+    },
+    {
+      "id": "mosfet-irf540n-rdson",
+      "entry": "mosfet-irf540n",
+      "quantity": "Rds(on) at Vgs=10 V, Id=16 A",
+      "unit": "ohm",
+      "setup": {"kind":"deck","deck":["vg g 0 dc 10","i1 0 d dc 16","m1 d g 0 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(d)/16"},
+      "expect": {"min":0.03,"max":0.044},
+      "source": "IRF540N datasheet: RDS(on) 44 mohm max at VGS=10 V, ID=16 A"
+    },
+    {
+      "id": "mosfet-irf540n-vth",
+      "entry": "mosfet-irf540n",
+      "quantity": "|Vgs(th)| at |Id|=250 uA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 d dc 250u","m1 d d 0 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(d)"},
+      "expect": {"min":2,"max":4},
+      "source": "IRF540N datasheet: VGS(th) 2.0 to 4.0 V at VDS=VGS, ID=250 uA"
+    },
+    {
+      "id": "mosfet-irf3205-rdson",
+      "entry": "mosfet-irf3205",
+      "quantity": "Rds(on) at Vgs=10 V, Id=62 A",
+      "unit": "ohm",
+      "setup": {"kind":"deck","deck":["vg g 0 dc 10","i1 0 d dc 62","m1 d g 0 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(d)/62"},
+      "expect": {"min":0.005,"max":0.008},
+      "source": "IRF3205 datasheet: RDS(on) 8 mohm max at VGS=10 V, ID=62 A"
+    },
+    {
+      "id": "mosfet-irf3205-vth",
+      "entry": "mosfet-irf3205",
+      "quantity": "|Vgs(th)| at |Id|=250 uA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 d dc 250u","m1 d d 0 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(d)"},
+      "expect": {"min":2,"max":4},
+      "source": "IRF3205 datasheet: VGS(th) 2.0 to 4.0 V at VDS=VGS, ID=250 uA"
+    },
+    {
+      "id": "mosfet-irf9540n-rdson",
+      "entry": "mosfet-irf9540n",
+      "quantity": "Rds(on) at Vgs=-10 V, Id=-11 A",
+      "unit": "ohm",
+      "setup": {"kind":"deck","deck":["vg g 0 dc -10","i1 d 0 dc 11","m1 d g 0 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-v(d)/11"},
+      "expect": {"min":0.08,"max":0.117},
+      "source": "IRF9540N datasheet: RDS(on) 117 mohm max at VGS=-10 V, ID=-11 A"
+    },
+    {
+      "id": "mosfet-irf9540n-vth",
+      "entry": "mosfet-irf9540n",
+      "quantity": "|Vgs(th)| at |Id|=250 uA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 d 0 dc 250u","m1 d d 0 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-v(d)"},
+      "expect": {"min":2,"max":4},
+      "source": "IRF9540N datasheet: VGS(th) -2.0 to -4.0 V at VDS=VGS, ID=-250 uA"
+    },
+    {
+      "id": "mosfet-irlml6402-rdson-4v5",
+      "entry": "mosfet-irlml6402",
+      "quantity": "Rds(on) at Vgs=-4.5 V, Id=-3.7 A",
+      "unit": "ohm",
+      "setup": {"kind":"deck","deck":["vg g 0 dc -4.5","i1 d 0 dc 3.7","m1 d g 0 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-v(d)/3.7"},
+      "expect": {"min":0.04,"max":0.065},
+      "source": "IRLML6402 datasheet: RDS(on) 65 mohm max at VGS=-4.5 V, ID=-3.7 A"
+    },
+    {
+      "id": "mosfet-irlml6402-rdson-2v5",
+      "entry": "mosfet-irlml6402",
+      "quantity": "Rds(on) at Vgs=-2.5 V, Id=-3.1 A",
+      "unit": "ohm",
+      "setup": {"kind":"deck","deck":["vg g 0 dc -2.5","i1 d 0 dc 3.1","m1 d g 0 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-v(d)/3.1"},
+      "expect": {"min":0.08,"max":0.135},
+      "source": "IRLML6402 datasheet: RDS(on) 135 mohm max at VGS=-2.5 V, ID=-3.1 A"
+    },
+    {
+      "id": "mosfet-irlml6402-vth",
+      "entry": "mosfet-irlml6402",
+      "quantity": "|Vgs(th)| at |Id|=250 uA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 d 0 dc 250u","m1 d d 0 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-v(d)"},
+      "expect": {"min":0.4,"max":0.7},
+      "source": "IRLML6402 datasheet: VGS(th) -0.4 to -0.7 V at VDS=VGS, ID=-250 uA"
+    },
+    {
+      "id": "schottky-ss34-vf-3a",
+      "entry": "schottky-ss34",
+      "quantity": "Vf at IF=3 A",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 3","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":0.35,"max":0.5},
+      "source": "SS34 datasheet: VF 0.50 V max at 3 A (Diodes Inc., Vishay)"
+    },
+    {
+      "id": "schottky-ss34-vf-100ma",
+      "entry": "schottky-ss34",
+      "quantity": "Vf at IF=100 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 100m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":0.2,"max":0.4},
+      "source": "SS34 datasheet: forward characteristic, about 0.3 V at 100 mA (curve reading)"
+    },
+    {
+      "id": "schottky-ss34-vbr",
+      "entry": "schottky-ss34",
+      "quantity": "reverse breakdown at IR=1 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 a 0 dc 1m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-v(a)"},
+      "expect": {"min":40,"max":60},
+      "source": "SS34 datasheet: VRRM 40 V, breakdown at least 40 V"
+    },
+    {
+      "id": "schottky-1n5822-vf-3a",
+      "entry": "schottky-1n5822",
+      "quantity": "Vf at IF=3 A",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 3","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":0.4,"max":0.525},
+      "source": "1N5822 datasheet (onsemi): VF 0.525 V max at 3 A, 25 C"
+    },
+    {
+      "id": "schottky-1n5822-vf-1a",
+      "entry": "schottky-1n5822",
+      "quantity": "Vf at IF=1 A",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 1","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":0.3,"max":0.45},
+      "source": "1N5822 datasheet (onsemi): forward characteristic, about 0.38 V at 1 A (curve reading)"
+    },
+    {
+      "id": "schottky-1n5822-vbr",
+      "entry": "schottky-1n5822",
+      "quantity": "reverse breakdown at IR=1 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 a 0 dc 1m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-v(a)"},
+      "expect": {"min":40,"max":60},
+      "source": "1N5822 datasheet: VRRM 40 V, breakdown at least 40 V"
+    },
+    {
+      "id": "zener-3v3-vz-5ma",
+      "entry": "zener-3v3",
+      "quantity": "Vz at Izt=5 mA (reverse)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 a 0 dc 5m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-v(a)"},
+      "expect": {"min":3.1,"max":3.5},
+      "source": "BZX84C3V3 datasheet: Vz 3.1 to 3.5 V at Izt=5 mA"
+    },
+    {
+      "id": "zener-3v3-vf-10ma",
+      "entry": "zener-3v3",
+      "quantity": "Vf at IF=10 mA (forward)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":0.6,"max":0.95},
+      "source": "BZX55/BZX84 datasheets: VF 0.9 V maximum at IF=10 mA"
+    },
+    {
+      "id": "zener-12v-vz-5ma",
+      "entry": "zener-12v",
+      "quantity": "Vz at Izt=5 mA (reverse)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 a 0 dc 5m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-v(a)"},
+      "expect": {"min":11.4,"max":12.7},
+      "source": "BZX84C12 datasheet: Vz 11.4 to 12.7 V at Izt=5 mA"
+    },
+    {
+      "id": "zener-12v-vf-10ma",
+      "entry": "zener-12v",
+      "quantity": "Vf at IF=10 mA (forward)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":0.6,"max":0.95},
+      "source": "BZX55/BZX84 datasheets: VF 0.9 V maximum at IF=10 mA"
+    },
+    {
+      "id": "led-yellow-vf-20ma",
+      "entry": "led-yellow",
+      "quantity": "Vf at IF=20 mA (yellow)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 20m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":2,"max":2.2},
+      "source": "typical yellow indicator LED datasheets, Vf at 20 mA; target as documented in resources/models/discrete-extra.lib"
+    },
+    {
+      "id": "led-yellow-vr",
+      "entry": "led-yellow",
+      "quantity": "reverse breakdown at IR=100 uA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 a 0 dc 100u","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-v(a)"},
+      "expect": {"min":4.5,"max":6.5},
+      "source": "indicator LED datasheets: VR 5 V rated reverse voltage"
+    },
+    {
+      "id": "led-orange-vf-20ma",
+      "entry": "led-orange",
+      "quantity": "Vf at IF=20 mA (orange)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 20m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":1.9,"max":2.1},
+      "source": "typical orange indicator LED datasheets, Vf at 20 mA; target as documented in resources/models/discrete-extra.lib"
+    },
+    {
+      "id": "led-orange-vr",
+      "entry": "led-orange",
+      "quantity": "reverse breakdown at IR=100 uA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 a 0 dc 100u","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-v(a)"},
+      "expect": {"min":4.5,"max":6.5},
+      "source": "indicator LED datasheets: VR 5 V rated reverse voltage"
+    },
+    {
+      "id": "opto-pc817-vf",
+      "entry": "opto-pc817",
+      "quantity": "LED forward voltage at IF=20 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 20m","x1 a 0 c e {{model}}","rc c 0 1k","re e 0 1k"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":1.1,"max":1.4},
+      "source": "PC817 datasheet: forward voltage 1.2 V typ, 1.4 V max at IF=20 mA"
+    },
+    {
+      "id": "opto-pc817-ctr",
+      "entry": "opto-pc817",
+      "quantity": "current transfer ratio at IF=5 mA, VCE=5 V",
+      "unit": "ratio",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 5m","vce c 0 dc 5","x1 a 0 c 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vce)/0.005"},
+      "expect": {"min":0.5,"max":6},
+      "source": "PC817 datasheet: CTR 50 to 600 percent at IF=5 mA, VCE=5 V"
+    },
+    {
+      "id": "opto-pc817-vcesat",
+      "entry": "opto-pc817",
+      "quantity": "VCE(sat) at IF=20 mA, IC=1 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 20m","vcc vcc 0 dc 5","rl vcc c 4.9k","x1 a 0 c 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(c)"},
+      "expect": {"min":0.01,"max":0.2},
+      "source": "PC817 datasheet: collector-emitter saturation voltage 0.1 V typ, 0.2 V max at IF=20 mA, IC=1 mA"
+    },
+    {
+      "id": "opto-pc817-off",
+      "entry": "opto-pc817",
+      "quantity": "output current with the LED off (VCE=20 V)",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vce c 0 dc 20","x1 0 0 c 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"abs(i(vce))"},
+      "expect": {"min":0,"max":1e-7},
+      "source": "PC817 datasheet: collector dark current ICEO 100 nA max at VCE=20 V"
+    },
+    {
+      "id": "opto-4n35-vf",
+      "entry": "opto-4n35",
+      "quantity": "LED forward voltage at IF=10 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","x1 a 0 c e {{model}}","rc c 0 1k","re e 0 1k"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":1,"max":1.5},
+      "source": "4N35 datasheet: forward voltage 1.15 V typ, 1.5 V max at IF=10 mA"
+    },
+    {
+      "id": "opto-4n35-ctr",
+      "entry": "opto-4n35",
+      "quantity": "current transfer ratio at IF=10 mA, VCE=10 V",
+      "unit": "ratio",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","vce c 0 dc 10","x1 a 0 c 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vce)/0.01"},
+      "expect": {"min":0.95,"max":3},
+      "source": "4N35 datasheet: CTR 100 percent minimum at IF=10 mA, VCE=10 V"
+    },
+    {
+      "id": "opto-4n35-vcesat",
+      "entry": "opto-4n35",
+      "quantity": "VCE(sat) at IF=10 mA, IC=0.5 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","vcc vcc 0 dc 5","rl vcc c 9.9k","x1 a 0 c 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(c)"},
+      "expect": {"min":0.005,"max":0.3},
+      "source": "4N35 datasheet: collector-emitter saturation voltage 0.3 V max at IF=10 mA, IC=0.5 mA"
+    },
+    {
+      "id": "logic-74hc02-voh",
+      "entry": "logic-74hc02",
+      "quantity": "output high level, unloaded (VOH at least Vcc - 0.1 V)",
+      "unit": "V",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"1A":0,"1B":0}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"v(1y)","at":0.0000018},
+      "expect": {"min":4.4,"max":4.5},
+      "source": "74HC02 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.4 V minimum at IO=20 uA"
+    },
+    {
+      "id": "logic-74hc02-vol",
+      "entry": "logic-74hc02",
+      "quantity": "output low level, unloaded (VOL at most 0.1 V)",
+      "unit": "V",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"1A":1,"1B":0}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"v(1y)","at":0.0000018},
+      "expect": {"min":0,"max":0.1},
+      "source": "74HC02 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOL 0.1 V maximum at IO=20 uA"
+    },
+    {
+      "id": "logic-74hc10-voh",
+      "entry": "logic-74hc10",
+      "quantity": "output high level, unloaded (VOH at least Vcc - 0.1 V)",
+      "unit": "V",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"1A":1,"1B":1,"1C":0}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"v(1y)","at":0.0000018},
+      "expect": {"min":4.4,"max":4.5},
+      "source": "74HC10 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.4 V minimum at IO=20 uA"
+    },
+    {
+      "id": "logic-74hc10-vol",
+      "entry": "logic-74hc10",
+      "quantity": "output low level, unloaded (VOL at most 0.1 V)",
+      "unit": "V",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"1A":1,"1B":1,"1C":1}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"v(1y)","at":0.0000018},
+      "expect": {"min":0,"max":0.1},
+      "source": "74HC10 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOL 0.1 V maximum at IO=20 uA"
+    },
+    {
+      "id": "logic-74hc20-voh",
+      "entry": "logic-74hc20",
+      "quantity": "output high level, unloaded (VOH at least Vcc - 0.1 V)",
+      "unit": "V",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"1A":1,"1B":1,"1C":1,"1D":0}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"v(1y)","at":0.0000018},
+      "expect": {"min":4.4,"max":4.5},
+      "source": "74HC20 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.4 V minimum at IO=20 uA"
+    },
+    {
+      "id": "logic-74hc20-vol",
+      "entry": "logic-74hc20",
+      "quantity": "output low level, unloaded (VOL at most 0.1 V)",
+      "unit": "V",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"1A":1,"1B":1,"1C":1,"1D":1}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"v(1y)","at":0.0000018},
+      "expect": {"min":0,"max":0.1},
+      "source": "74HC20 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOL 0.1 V maximum at IO=20 uA"
     }
   ]
 }

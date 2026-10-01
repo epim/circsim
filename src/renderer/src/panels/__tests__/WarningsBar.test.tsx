@@ -12,7 +12,8 @@
 import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import WarningsBar, { _applyRailOverride, FidelityBadge } from '../WarningsBar'
+import WarningsBar, { _applyRailOverride, _revealCulprit, FidelityBadge } from '../WarningsBar'
+import type { Circuit } from '../../../../core/netlist/extract'
 import { AppStoreProvider } from '../../store/storeContext'
 import { createAppStore, type AppState } from '../../store/appStore'
 import { createMockSimClient } from '../../ipc/simClient'
@@ -289,5 +290,212 @@ describe('schematic pin-map notes — informational row per corrected ref', () =
     const html = renderBar([schematicCorrected('D7')])
     expect(html).not.toContain('Results approximate')
     expect(html).not.toContain('approximate')
+  })
+})
+
+// ─── #71: clickable convergence culprit + fatal crash toast guidance ─────────
+
+function culpritStore(
+  culprit: { kind: 'part' | 'net'; label: string; detail?: string } | null,
+): ReturnType<typeof createAppStore> {
+  const store = createAppStore({ simClient: createMockSimClient() })
+  const circuit: Circuit = {
+    nets: [
+      { id: 3, kicadName: 'VDRAIN', spiceNode: 'vdrain', padRefs: [{ ref: 'Q7', pad: '1' }] },
+    ],
+    parts: [
+      {
+        ref: 'Q7',
+        value: 'NCE4012S',
+        libId: 'test:lib',
+        layer: 'F',
+        padNet: new Map([['1', 3]]),
+        properties: {},
+      },
+    ],
+    warnings: [],
+  }
+  store.setState({
+    circuit,
+    convergenceCard: {
+      plainLanguage: 'x',
+      retryLadderNote: 'y',
+      rawDetail: 'z',
+      culprit,
+      at: 0,
+    },
+  })
+  ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+    store.getState()
+  return store
+}
+
+function renderStore(store: ReturnType<typeof createAppStore>): string {
+  return renderToStaticMarkup(
+    <AppStoreProvider store={store}>
+      <WarningsBar />
+    </AppStoreProvider>,
+  )
+}
+
+// ─── Undriven nets bled to 0 V (issue #43) ─────────────────────────────────────
+
+describe('WarningsBar: undriven nets (issue #43)', () => {
+  function renderWithUndriven(names: string[]): string {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    store.setState({
+      undrivenNets: names.map((kicadName, i) => ({
+        netId: i + 1,
+        kicadName,
+        spiceNode: kicadName.toLowerCase(),
+      })),
+    })
+    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+      store.getState()
+    return renderToStaticMarkup(
+      <AppStoreProvider store={store}>
+        <WarningsBar />
+      </AppStoreProvider>,
+    )
+  }
+
+  it('lists every bled net by KiCad name and says the 0 V is not a measurement', () => {
+    const html = renderWithUndriven(['/EN', '/MODE', 'Net-(U1-2A)'])
+    expect(html).toContain('data-testid="undriven-nets"')
+    expect(html).toContain('Undriven nets held at 0 V')
+    for (const name of ['/EN', '/MODE', 'Net-(U1-2A)']) expect(html).toContain(name)
+    expect(html).toMatch(/1 GOhm/)
+    expect(html).toMatch(/floats?/)
+  })
+
+  it('uses the singular form for one net', () => {
+    const html = renderWithUndriven(['/EN'])
+    expect(html).toContain('Nothing on the board drives this net')
+  })
+
+  it('no undriven nets: no surface', () => {
+    const html = renderWithUndriven([])
+    expect(html).not.toContain('undriven-nets')
+  })
+})
+
+// ─── op fallback caveat: plain language up front, solver vocabulary behind a disclosure ──
+
+function renderWithCaveat(method: 'gmin' | 'source' | 'tran-fallback' | 'failed' | null): string {
+  const store = createAppStore({ simClient: createMockSimClient() })
+  store.setState({ opCaveat: method ? { method, at: 0 } : null })
+  ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+    store.getState()
+  return renderToStaticMarkup(
+    <AppStoreProvider store={store}>
+      <WarningsBar />
+    </AppStoreProvider>,
+  )
+}
+
+describe('#71 convergence culprit is actionable', () => {
+  it('a part culprit renders as a button, not inert text', () => {
+    const html = renderStore(culpritStore({ kind: 'part', label: 'Q7', detail: 'NCE4012S' }))
+    expect(html).toContain('data-testid="convergence-culprit-link"')
+    expect(html).toMatch(/<button[^>]*data-testid="convergence-culprit-link"/)
+    expect(html).toContain('Q7')
+  })
+
+  it('a net culprit that maps to a board net renders as a button', () => {
+    const html = renderStore(culpritStore({ kind: 'net', label: 'VDRAIN' }))
+    expect(html).toContain('data-testid="convergence-culprit-link"')
+  })
+
+  it('a net culprit that maps to no board net stays plain text (nothing to select)', () => {
+    const html = renderStore(culpritStore({ kind: 'net', label: 'n_0042' }))
+    expect(html).toContain('data-testid="convergence-culprit"')
+    expect(html).not.toContain('data-testid="convergence-culprit-link"')
+    expect(html).toContain('n_0042')
+  })
+
+  it('_revealCulprit on a part selects it and requests its Doctor card', () => {
+    const store = culpritStore({ kind: 'part', label: 'Q7' })
+    expect(_revealCulprit(store, { kind: 'part', label: 'Q7' })).toBe(true)
+    expect(store.getState().selectedRef).toBe('Q7')
+    expect(store.getState().revealDoctorRequest?.ref).toBe('Q7')
+  })
+
+  it('_revealCulprit on a net selects the net by its KiCad name', () => {
+    const store = culpritStore({ kind: 'net', label: 'VDRAIN' })
+    expect(_revealCulprit(store, { kind: 'net', label: 'VDRAIN' })).toBe(true)
+    expect(store.getState().selectedNetId).toBe(3)
+  })
+
+  it('_revealCulprit on an unmapped net changes nothing and reports false', () => {
+    const store = culpritStore({ kind: 'net', label: 'n_0042' })
+    expect(_revealCulprit(store, { kind: 'net', label: 'n_0042' })).toBe(false)
+    expect(store.getState().selectedNetId).toBeNull()
+  })
+})
+
+describe('#71 fatal crash toast tells the user how to recover', () => {
+  function renderCrash(willRespawn: boolean): string {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    store.setState({ crashNotice: { willRespawn, at: 0 } })
+    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+      store.getState()
+    return renderStore(store)
+  }
+
+  it('fatal: says the simulator stopped and to quit and reopen circsim', () => {
+    const html = renderCrash(false)
+    expect(html).toContain('Simulator stopped.')
+    expect(html).toContain('could not be restarted')
+    expect(html).toContain('Quit and reopen circsim')
+    expect(html).not.toContain('Simulator restarted.')
+  })
+
+  it('recoverable: keeps the automatic-recovery wording and no restart instruction', () => {
+    const html = renderCrash(true)
+    expect(html).toContain('Simulator restarted.')
+    expect(html).toContain('recovering automatically')
+    expect(html).not.toContain('Quit and reopen')
+  })
+
+  it('a lost paused run is reported alongside the restart guidance', () => {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    store.setState({ crashNotice: { willRespawn: true, at: 0, pausedRunLost: true } })
+    ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+      store.getState()
+    const html = renderStore(store)
+    expect(html).toContain('Simulator restarted.')
+    expect(html).toContain('Your paused run was lost; press Run to start it again.')
+  })
+})
+
+describe('op fallback caveat (issue #19): details control for the solver vocabulary', () => {
+  it('a fallback solve shows plain language and keeps the rung name inside <details>', () => {
+    const html = renderWithCaveat('tran-fallback')
+    expect(html).toContain('data-testid="op-caveat"')
+    expect(html).toContain('Check these voltages.')
+    expect(html).toContain('These voltages needed a workaround to solve; treat 0.000 V readings as unknown.')
+    expect(html).toContain('data-testid="op-caveat-details"')
+    // Solver vocabulary appears only after the disclosure opens.
+    const beforeDetails = html.slice(0, html.indexOf('<details'))
+    expect(beforeDetails).not.toMatch(/transient-op|gmin|source stepping/)
+    const details = html.slice(html.indexOf('<details'))
+    expect(details).toContain('transient-op')
+  })
+
+  it.each(['gmin', 'source'] as const)('%s fallback names its rung only in the details', (method) => {
+    const html = renderWithCaveat(method)
+    const beforeDetails = html.slice(0, html.indexOf('<details'))
+    expect(beforeDetails).not.toMatch(/stepping/)
+    expect(html.slice(html.indexOf('<details'))).toMatch(/stepping/)
+  })
+
+  it('a solve that did not converge at all keeps its plain message and has no disclosure', () => {
+    const html = renderWithCaveat('failed')
+    expect(html).toContain('did not converge at all')
+    expect(html).not.toContain('op-caveat-details')
+  })
+
+  it('a direct solve (no caveat) renders nothing', () => {
+    expect(renderWithCaveat(null)).toBe('')
   })
 })

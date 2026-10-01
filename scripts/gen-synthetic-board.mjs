@@ -416,10 +416,79 @@ export function lanternShape(kicad = 10) {
   return { kicad, nets: [...nets, '/OSC_OUT_UNUSED'], outline: { x0: 95, y0: 85, x1: 180, y1: 145 }, footprints: fps, tracks: [], vias: [], zones: [] }
 }
 
+/**
+ * pour-only-rail (issue #10, remediation plan review focus 2): a board whose VCC
+ * rail is delivered by ONE F.Cu copper pour and nothing else. There is not a
+ * single VCC track. The pour is a dumbbell: a lobe at the connector, a 4 mm wide
+ * neck 16 mm long, and a lobe at the far load. U2 sits in the middle of the
+ * neck, U1 and C1 in the far lobe, J1 in the near lobe. GND is a B.Cu pour
+ * reached through four vias (one per GND pad); no pad of the other net
+ * sits inside the VCC pour outline.
+ *
+ * A check that only reads tracks sees no VCC copper at all here: the IR-drop
+ * graph has to come from the pour, and the verdict has to be a number, not a
+ * silence and not a false error.
+ */
+export function pourOnlyRail(kicad = 10) {
+  const nets = ['VCC', 'GND']
+  const j1 = {
+    ref: 'J1', value: 'Conn_01x02', lib: 'Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical',
+    at: { x: 106, y: 114, rot: 0 }, side: 'F',
+    pads: [
+      { num: '1', x: 0, y: 0, w: 1.7, h: 1.7, net: 'VCC' },
+      { num: '2', x: 0, y: -9, w: 1.7, h: 1.7, net: 'GND' }
+    ]
+  }
+  const load = (ref, value, x, y) => ({
+    ref, value, lib: 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm', at: { x, y, rot: 0 }, side: 'F',
+    pads: [
+      { num: '8', x: 0, y: -2.5, w: 1.5, h: 0.6, net: 'VCC' },
+      { num: '4', x: 0, y: 2.5, w: 1.5, h: 0.6, net: 'GND' }
+    ]
+  })
+  const u2 = load('U2', 'LM358', 126, 117.5)
+  const u1 = load('U1', 'LM358', 148, 118.5)
+  const c1 = {
+    ref: 'C1', value: '100n', lib: 'Capacitor_SMD:C_0805_2012Metric', at: { x: 140, y: 110, rot: 0 }, side: 'F',
+    pads: [
+      { num: '1', x: 0, y: 0, w: 1.0, h: 1.3, net: 'VCC' },
+      { num: '2', x: 0, y: -5, w: 1.0, h: 1.3, net: 'GND' }
+    ]
+  }
+  const gndStub = (fp, padIdx, dy) => {
+    const w = padWorld(fp, fp.pads[padIdx])
+    return {
+      track: { net: 'GND', layer: 'F.Cu', width: 2.0, pts: [[w.x, w.y], [w.x, w.y + dy]] },
+      via: { net: 'GND', x: w.x, y: w.y + dy }
+    }
+  }
+  const stubs = [gndStub(j1, 1, -2), gndStub(u2, 1, 3), gndStub(u1, 1, 3), gndStub(c1, 1, -2)]
+  return {
+    kicad,
+    nets,
+    outline: { x0: 100, y0: 100, x1: 160, y1: 130 },
+    footprints: [j1, u2, u1, c1],
+    tracks: stubs.map((s) => s.track),
+    vias: stubs.map((s) => s.via),
+    zones: [
+      { net: 'GND', layer: 'B.Cu', outline: [[101, 101], [159, 101], [159, 129], [101, 129]] },
+      {
+        net: 'VCC',
+        layer: 'F.Cu',
+        outline: [
+          [102, 108], [118, 108], [118, 113], [134, 113], [134, 108], [156, 108],
+          [156, 120], [134, 120], [134, 117], [118, 117], [118, 122], [102, 122]
+        ]
+      }
+    ]
+  }
+}
+
 export const PRESETS = {
   'dialect-probe': (kicad) => dialectProbe(kicad),
   'routed-rotated': (kicad) => routedRotated(kicad),
-  'lantern-shape': (kicad) => lanternShape(kicad)
+  'lantern-shape': (kicad) => lanternShape(kicad),
+  'pour-only-rail': (kicad) => pourOnlyRail(kicad)
 }
 
 /** Committed fixtures: [relative path under fixtures/synthetic, preset, kicad major]. */
@@ -429,7 +498,8 @@ export const FIXTURES = [
   ['dialect-probe-kicad8.kicad_pcb', 'dialect-probe', 8],
   ['dialect-probe-kicad9.kicad_pcb', 'dialect-probe', 9],
   ['dialect-probe-kicad10.kicad_pcb', 'dialect-probe', 10],
-  ['routed-rotated-kicad10.kicad_pcb', 'routed-rotated', 10]
+  ['routed-rotated-kicad10.kicad_pcb', 'routed-rotated', 10],
+  ['pour-only-rail-kicad10.kicad_pcb', 'pour-only-rail', 10]
 ]
 
 export function generatePreset(preset, kicad) {

@@ -35,11 +35,16 @@ KiCad's intentional `unconnected-(...)` nets are deliberately ignored. Reporting
 
 ## Copper clearance
 
-Flags different-net tracks on the same layer that come too close, and tracks too near the board edge. Minimum clearance **0.2 mm**: a generic default, **not** read from your project's net-class or design rules. Capped at 50 findings (with an overflow note if there are more).
+Flags different-net tracks on the same layer whose copper comes too close, and tracks whose copper runs too near the board edge. Gaps are measured between copper edges, not centerlines: the gap between two tracks is the centerline distance minus half of each track's width, and the gap to the board edge is the centerline distance minus half the track's width. Two 1.0 mm tracks with centerlines 0.6 mm apart overlap by 0.4 mm and are reported as a short. Minimum clearance **0.2 mm**: a generic default, **not** read from your project's net-class or design rules. Capped at 50 findings (with an overflow note if there are more).
 
-- **Tracks touch or overlap** *(error)*. Different-net tracks with essentially zero gap: a short or an etch risk.
-- **Tracks too close** *(warn)*: closer than the minimum clearance. *Suggestion: increase spacing or reroute one track.*
+- **Tracks touch or overlap** *(error)*. The copper of different-net tracks touches or overlaps (copper gap of zero or less): a short.
+- **Tracks too close** *(warn)*: copper gap positive but under the minimum clearance. *Suggestion: increase spacing or reroute one track.*
+- **Track touches or crosses the board edge** *(error)*: the copper reaches or crosses the board outline.
 - **Track near board edge** *(warn)*: copper closer than the minimum to the edge risks exposure/shorting after the board is cut. *Suggestion: pull the track in from the edge.*
+
+**Not assessed.** Only track-to-track and track-to-edge clearance are checked. Clearance to pads, pad to pad, vias (annulus against tracks) and zone (pour) edges is **not** assessed; a clean clearance result does not cover them. Arc tracks are approximated by their chord. Use your CAD tool's DRC for those cases.
+
+The check uses a spatial index, so it stays fast on dense boards (tens of thousands of track segments). Clearance, like the other static checks, is computed once per opened board: a new operating point re-runs only the simulation-informed checks.
 
 ## Decoupling proximity
 
@@ -65,19 +70,35 @@ The loop-area check measures distance *to ground copper*. If your board has **no
 
 ## Ampacity *(needs operating point)*
 
-For each power/ground rail, estimates the rail current from the operating-point currents (roughly half the sum of the connected parts' current magnitudes), then checks the rail's narrowest track against IPC-2221 external-layer capacity at a 10 °C rise.
+Rates **each track against the current it actually carries**. The check shares the IR-drop solve (see below): the rail's copper is solved with the operating-point load currents injected at the load pads, every segment gets the current the solve puts through it, and a track is flagged when that current exceeds its IPC-2221 external-layer capacity at a 10 °C rise. A bypass-capacitor stub sees the milliamps it really carries, a thin track under a pour sees only its share of the pour's current, and a one-amp LED feed on a 0.15 mm track is rated against one amp (earlier versions estimated a lumped half of the rail's summed currents, which under-called exactly that case).
 
 - **Undersized trace** *(warn, or error if current exceeds ~1.5× the rated capacity)*: narrow copper carrying more than it's rated for runs hot and can fuse. *Suggestion: widen the trace or add copper.*
 
-**Assumes:** 1 oz external copper, ΔT 10 °C, using the IPC-2221 charts method (the classic derating standard, coarser than the newer IPC-2152, and it doesn't distinguish inner from outer layers, so an inner-layer "pass" is optimistic). Rail current is estimated as **Σ|part currents| / 2**: the factor of ½ is because that sum counts each rail current twice, once leaving the source and once entering the load; this is a lumped estimate that won't hold for heavily branched or star topologies, and it compares that single current against the rail's *narrowest* track without distinguishing a series bottleneck from a parallel branch.
+**Assumes:** 1 oz external copper, ΔT 10 °C, using the IPC-2221 charts method (the classic derating standard, coarser than the newer IPC-2152, and it doesn't distinguish inner from outer layers, so an inner-layer "pass" is optimistic). The supply entry is taken from your bench lead where one is attached, else guessed (see IR-drop). Copper pours are not rated: a pour is a sheet, and its current density is an IR-drop question.
+
+**Where the currents come from.** Branch currents come from the solve, not only from LEDs. LEDs are read from their sense ammeters, resistors from Ohm's law on the solved node voltages, capacitors carry nothing at DC, and bench sources are read at their series resistor. Every other part (ICs, regulators, transistors, digital chips) gets the current Kirchhoff's current law leaves on its pads: at each net the currents into all parts sum to zero, so when one unmeasured part is the only one left on a net its pad current is fixed, and that can fix the next. The currents are those of the simulation's ideal nets, that is, what each net would carry if its copper were perfect.
+
+**Not assessed.** If the operating point carries no branch currents at all, the check is listed as *not assessed* instead of passing. If two unmeasured parts share every net they touch (two ICs on one rail with nothing measured between them), their currents cannot be separated: the check names them in its not-assessed line and does not count them as zero. The same line names any pad that carries current but that no modelled copper connects to the supply entry. A rail whose pads carry current but that could not be solved at all (no copper on the net, no pad touching any copper, or a solve that did not converge) is named there too, so it is never listed as assessed and clean.
 
 ## IR-drop / rail sag *(needs operating point)*
 
-Builds a resistive model of each power rail's copper (tracks as resistors, vias ≈ 0.5 mΩ), injects the operating-point load currents, solves it, and reports the worst supply→load voltage sag as a percentage of the nominal rail. The supply entry is inferred (a connector-like reference, else the widest incident track). Thresholds: warn > 2 %, error > 5 %.
+Builds a resistive model of each rail's copper, injects the operating-point load currents, solves it, and reports the worst supply→load voltage sag as a percentage of the nominal rail. The model contains:
 
-- **Rail sags** *(warn / error)*: copper resistance drops voltage between the supply entry and the load; sagging rails brown-out ICs and shift analog references. *Suggestion: widen or shorten the supply trace, add a copper pour or second feed, or move the load closer to the supply entry.*
+- **Tracks** as resistors.
+- **Vias** as barrel resistors derived from the drill, 20 µm plating and the board thickness (about 1.4 mΩ for a 0.3 mm drill on a 1.6 mm board), joining every copper layer they span that the rail has copper on.
+- **Copper pours** as a mesh of sheet-resistance cells (about 2 mm, coarser on very large pours) clipped to the zone outline and its holes. A track lying in a same-net pour is in parallel with the pour cells it crosses (it is joined to one cell per cell it passes through), so a thin stub under a pour no longer reads as if it carried the whole load and does not short the pour out either. Multi-layer zones are one fill per layer. A pour with no track to a load is still a path: loads that sit on it are real sinks, and a neck or a slot in the pour shows up as resistance or as a split.
+- **Pads**, snapped onto the track endpoints, via barrels and pour cells they sit on.
 
-**Assumes:** 1 oz copper (a fixed default, not read from your stackup, see the callout above); vias ≈ 0.5 mΩ each; the inferred supply entry; sink currents from the operating-point sim (parts without a solved current aren't counted).
+**The ground return is solved too.** Each load's return current enters the ground copper at its ground pad, and the shift from the return entry is the ground shift. A load's drop is its supply sag plus the ground shift toward its rail (a *round trip*); the rail finding reports both parts, and a ground net is reported on its own when its shift alone crosses the thresholds (judged against the highest rail on the board). The supply entry is the pad nearest where you clipped the bench supply's lead (the position circsim records when you drop the clip, and saves in the board's setup file); the ground clip sets the return entry the same way. If a rail has no supply lead, or the lead has no recorded position (a setup file saved by an older circsim, say), the check guesses instead: a connector-like reference, else the widest incident track, else the first pad that touches copper. A finding always says which one it used, in its assumption line: either "entry taken from the bench lead clipped at (x, y) mm" with the pad it snapped to, or "entry is a guess" with the reason. A guess can pick a pad you did not clip to, so treat a guessed sag as approximate and clip the supply where your board is really fed. Thresholds: warn > 2 %, error > 5 %.
+
+**Negative rails.** Sag is measured toward 0 V, so a negative rail (one the operating point solves below 0 V, such as a -5 V VEE) is checked the same way as a positive one. Its load current flows from ground through the part and back into the rail, so the rail *rises* toward 0 V at the load and the ground under that load *falls*; the round trip adds the two. With only per-part current magnitudes (no pad signs), a part's current is taken as returned into a negative rail's pads. If every pad carrying current on a rail feeds it the way a supply does (pushes current into a positive rail, or pulls it out of a negative one), nothing draws from the supply entry, so there is no sag to measure: the rail is named in the not-assessed line rather than passed.
+
+- **Rail sags** *(warn / error)*: copper resistance drops voltage between the supply entry and the load; sagging rails brown-out ICs and shift analog references. *Suggestion: for a path through a pour, widen its narrowest section, stitch it to a second layer or move the load closer to the entry; for a track path, widen or shorten the trace, add a copper pour or a second feed, or move the load.*
+- **Ground return rises or falls** *(warn / error)*: the same, for the ground net: it rises under a positive rail's loads and falls under a negative rail's.
+
+**Assumes:** 1 oz copper (a fixed default, not read from your stackup, see the callout above); the zone *outline* stands in for the fill, so thermal-relief spokes, clearance islands around other nets' pads and keepouts are not modelled and a pour reads slightly better here than KiCad's fill will be; a neck narrower than the mesh pitch can be lost (the loads behind it are then reported as not reached); a track that ends on the middle of another track's body is not treated as joined; the supply entry (your lead, or a guess when none is recorded); currents as described under Ampacity.
+
+**Not assessed.** With no branch currents in the operating point the check is listed as *not assessed*. Parts whose current the solve could not resolve, and pads the modelled copper does not connect to the supply entry, are named in the check's not-assessed line, and so is a rail that carries current but could not be solved at all, or whose only current feeds it; none of them is silently counted as zero or dropped.
 
 ## Thermal *(needs operating point)*
 
@@ -89,7 +110,7 @@ A **first-order, relative** heat-spread proxy, not absolute temperature. It rela
 **Assumes:** a first-order 2D heat-spread proxy; relative units, not absolute °C.
 
 ::: warning Thermal is not active today
-The thermal check needs per-part power dissipation, which this version doesn't compute yet, so it does not run: the Critic panel and the copied report list it as "thermal: not assessed (no per-part power data from the simulation yet)", and "No risks flagged" does not cover heat concentration. Ampacity and IR-drop run on real operating-point currents and are the working simulation-informed checks. Read any thermal finding strictly as a *relative* placement concern, never a temperature prediction.
+The thermal check needs per-part power dissipation, which this version doesn't compute yet, so it does not run: the Critic panel and the copied report list it as "thermal: not assessed (no per-part power data from the simulation yet)", and "No risks flagged" does not cover heat concentration. Ampacity and IR-drop run on branch currents from the operating-point solve (every part, not only LEDs) and are the working simulation-informed checks; the thermal check does not yet draw on those currents. Read any thermal finding strictly as a *relative* placement concern, never a temperature prediction.
 :::
 
 ## Severity summary
