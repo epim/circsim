@@ -20,6 +20,14 @@ export interface OpResult {
   values: Record<string, number>
 }
 
+/** A window of a real vector, see SpiceEngine.readVector. */
+export interface VectorRead {
+  /** Total number of points the vector holds right now. */
+  length: number
+  /** The requested elements, oldest first. */
+  data: Float64Array
+}
+
 /** Events the engine emits up to the SimHost orchestration layer. */
 export type EngineEvent =
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string }
@@ -31,16 +39,13 @@ export type EngineEvent =
   | { type: 'controlledExit'; status: number; immediate: boolean; quitOnExit: boolean }
   /**
    * SendInitData: the full vector list for a starting run (includes the scale
-   * vector, e.g. "time"). Decoded from `vecinfoall`.
+   * vector, e.g. "time"). Decoded from `vecinfoall`. Fires once per run, after
+   * the plot's vectors exist, so it is the signal that live reads are safe.
+   * (There is deliberately no per-timepoint SendData event: an FFI callback per
+   * accepted timepoint caps the bench well below real time, issue #25. Samples
+   * are read from the plot vectors instead, see readVector.)
    */
   | { type: 'initData'; plot: string; analysisType: string; names: string[] }
-  /**
-   * SendData: one accepted timepoint. `row` maps every vector name (incl. the
-   * scale vector, e.g. "time") to its real value. Decoded from `vecvaluesall`.
-   * Emitted from the FFI callback frame — listeners MUST be cheap and MUST NOT
-   * call back into ngspice (Spec §7.4 gotcha 2).
-   */
-  | { type: 'data'; row: Record<string, number>; scaleName: string }
   /** Background thread running state changed (true = NOT running). */
   | { type: 'bgRunning'; running: boolean }
 
@@ -85,6 +90,25 @@ export interface SpiceEngine {
    * data array, or undefined if the vector is missing / has no real data.
    */
   vectorData(name: string): Float64Array | undefined
+
+  /**
+   * Read part of a real vector of the current plot while a run may be in
+   * progress: elements `[from, min(length, from + maxCount))` as a typed array,
+   * plus the vector's current `length`. A negative `from` counts from the end
+   * (-1 is the newest element). Returns undefined when the vector is missing or
+   * has no real data. Call only for names that exist (ngspice reports a missing
+   * vector on stderr) and only between lockVectors() and unlockVectors() while
+   * the background thread runs.
+   */
+  readVector(name: string, from: number, maxCount: number): VectorRead | undefined
+
+  /**
+   * Block the background thread's vector reallocation (ngSpice_LockRealloc).
+   * Hold it only for the duration of a batch of readVector calls; the
+   * background thread stalls if it needs to grow a vector meanwhile.
+   */
+  lockVectors(): void
+  unlockVectors(): void
 
   /** ngSpice_running() — true while a (bg) analysis is active. */
   isRunning(): boolean

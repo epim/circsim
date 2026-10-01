@@ -4,8 +4,9 @@
  * The clearance check is spatially indexed (issue #56). Two guarantees:
  *   1. The index returns exactly the pairs a brute-force O(n squared) scan finds,
  *      including mixed widths, many layers and long diagonal tracks.
- *   2. A generated board with 10k tracks stays well inside a generous time bound
- *      (the old pair enumeration needed seconds at this size on a slow machine).
+ *   2. Check time grows about linearly with track count (a 10k-track board costs
+ *      about 8x a 1250-track board of the same density, not 64x), asserted as a
+ *      same-machine ratio, never an absolute millisecond bound.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -169,14 +170,45 @@ describe('clearance spatial index', () => {
     expect(trackIds(board)).toEqual(expected)
   })
 
-  it('checks a 10k-track board inside a generous time bound', () => {
-    const { tracks, nets } = randomTracks(10000, 1000, 7, 500)
-    const board = buildBoard(tracks, nets, 1000)
-    const ctx = buildContext(board, extract(board), undefined, DEFAULT_CRITIC_OPTIONS)
-    const t0 = performance.now()
-    checkClearance(ctx)
-    const ms = performance.now() - t0
-    // Indexed cost is a few tens of ms; the old quadratic scan was 500+ ms here.
-    expect(ms).toBeLessThan(400)
+  it('scales roughly linearly in track count (no quadratic pair enumeration)', () => {
+    // Same track density at both sizes (side grows with sqrt of the count), so
+    // a spatial index does work proportional to the track count while the old
+    // all-pairs scan does work proportional to its square.
+    const prepare = (n: number, side: number) => {
+      const { tracks, nets } = randomTracks(n, side, 7, 500)
+      const board = buildBoard(tracks, nets, side)
+      return buildContext(board, extract(board), undefined, DEFAULT_CRITIC_OPTIONS)
+    }
+    // Each timed sample is a batch of INNER checks so the small board costs
+    // roughly ten milliseconds per sample, well above timer and scheduler noise
+    // (one check of it is about a millisecond). Both sizes use the same batch.
+    const INNER = 15
+    const timeCheck = (ctx: ReturnType<typeof prepare>, reps: number) => {
+      let best = Infinity
+      for (let r = 0; r < reps; r++) {
+        const t0 = performance.now()
+        let findings: ReturnType<typeof checkClearance> = []
+        for (let k = 0; k < INNER; k++) findings = checkClearance(ctx)
+        best = Math.min(best, performance.now() - t0)
+        expect(Array.isArray(findings)).toBe(true)
+      }
+      return best
+    }
+    const smallCtx = prepare(1250, 1000 / Math.sqrt(8))
+    const bigCtx = prepare(40000, 2000) // 32x the tracks at the same density
+    timeCheck(smallCtx, 1) // warm the JIT so the small run is not the cold one
+    const small = timeCheck(smallCtx, 5)
+    const big = timeCheck(bigCtx, 4)
+
+    // Intent: the indexed check stayed far from the old O(n squared) scan, which
+    // was 500+ ms at 10k tracks. No absolute millisecond bound: CI runners are
+    // up to 5x slower than a dev machine, so compare two sizes on the same
+    // machine. 32x the tracks costs about 32x the time when indexed, plus cache
+    // effects at the larger size (measured 74 to 78 locally), and about 1000x
+    // when quadratic. The bound of 400 is over 5x the highest measured ratio, so
+    // a loaded runner does not trip it, and it still fails on the quadratic scan
+    // with a wide margin (the step is large precisely so that it does).
+    const ratio = big / small
+    expect(ratio).toBeLessThan(400)
   }, 60000)
 })

@@ -189,3 +189,50 @@ x2 in2p in2n out2 vcc vee LM393 params: iq=0.2m
 x3 in3p in3n out3 vcc vee LM393 params: iq=0.2m
 x4 in4p in4n out4 vcc vee LM393 params: iq=0.2m
 .ends LM339_QUAD
+
+* ---------------------------------------------------------------------------
+* MCP6001 (Microchip) single rail-to-rail op-amp (SOT-23-5 / SC-70-5).
+* Datasheet typ: Aol = 112 dB (about 400k V/V), GBW = 1 MHz, SR = 0.6 V/us,
+* Vos = 0.5 mV, output within about 25 mV of either rail (rail-to-rail),
+* IQ = 100 uA per amplifier, supply 1.8 to 6 V, input range includes both
+* rails (the core's inputs are differential and unrestricted).
+.subckt MCP6001 inp inn out vcc vee
+xa inp inn out vcc vee opamp_core
++ params: aol=400k gbw=1e6 slew=0.6e6 vos=0.5e-3 rout=100 dsat=90 vsathi=0.025 vsatlo=0.025 iq=100u
+.ends MCP6001
+
+* ---------------------------------------------------------------------------
+* MCP6002 (Microchip) dual rail-to-rail op-amp (SOIC-8 / DIP-8 / MSOP-8), both
+* channels modeled. Same per-channel figures as the MCP6001 (IQ 100 uA each).
+* Nodes: inap inan outa inbp inbn outb vcc vee
+.subckt MCP6002 inap inan outa inbp inbn outb vcc vee
+xa inap inan outa vcc vee opamp_core
++ params: aol=400k gbw=1e6 slew=0.6e6 vos=0.5e-3 rout=100 dsat=90 vsathi=0.025 vsatlo=0.025 iq=100u
+xb inbp inbn outb vcc vee opamp_core
++ params: aol=400k gbw=1e6 slew=0.6e6 vos=0.5e-3 rout=100 dsat=90 vsathi=0.025 vsatlo=0.025 iq=100u
+.ends MCP6002
+
+* ---------------------------------------------------------------------------
+* NE5532 (TI / onsemi) dual low-noise audio op-amp (SOIC-8 / DIP-8), both
+* channels modeled.
+* Datasheet typ: Aol = 100 V/mV (100k), GBW = 10 MHz, SR = 9 V/us, Vos = 0.5 mV
+* (4 mV max), ICC = 8 mA for the package (4 mA per channel), output swing about
+* +/-13 V on +/-15 V supplies (within 2 V of either rail).
+* Nodes: inap inan outa inbp inbn outb vcc vee
+.subckt NE5532 inap inan outa inbp inbn outb vcc vee
+xa inap inan outa vcc vee opamp_core
++ params: aol=100k gbw=10e6 slew=9e6 vos=0.5e-3 rout=50 vsathi=2 vsatlo=2 iq=4m
+xb inbp inbn outb vcc vee opamp_core
++ params: aol=100k gbw=10e6 slew=9e6 vos=0.5e-3 rout=50 vsathi=2 vsatlo=2 iq=4m
+.ends NE5532
+
+* ---------------------------------------------------------------------------
+* LM741 single general-purpose op-amp (DIP-8 / SOIC-8; offset-null pins 1 and 5
+* and the no-connect pin 8 are not modeled).
+* Datasheet typ: Aol = 200 V/mV (200k), GBW = 1 MHz, SR = 0.5 V/us, Vos = 1 mV
+* (6 mV max), ICC = 1.7 mA, output resistance 75 ohm, output swing about +/-14 V
+* on +/-15 V supplies (within about 1 V of either rail at 10 k load).
+.subckt LM741 inp inn out vcc vee
+xa inp inn out vcc vee opamp_core
++ params: aol=200k gbw=1e6 slew=0.5e6 vos=1e-3 rout=75 vsathi=1 vsatlo=1 iq=1.7m
+.ends LM741

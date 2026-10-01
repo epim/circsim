@@ -70,6 +70,11 @@ class OpLadderEngine implements SpiceEngine {
     // Failed rungs read back NaN (no converged solution in the plot).
     return this.opAttempts >= this.succeedOnAttempt ? Float64Array.of(2.5) : Float64Array.of(NaN)
   }
+  readVector(): undefined {
+    return undefined
+  }
+  lockVectors(): void {}
+  unlockVectors(): void {}
   isRunning(): boolean {
     return false
   }

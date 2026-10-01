@@ -101,7 +101,7 @@ export function checkAmpacity(ctx: CriticContext): CheckOutput {
         `Undersized copper runs hot and can fuse.`,
       assumption:
         'external copper, ΔT 10°C (IPC-2221); each segment is rated against the current the ' +
-        'copper solve puts through it (supply entry inferred, currents from the operating-point solve, ' +
+        'copper solve puts through it (supply entry from the bench lead where one is attached, else guessed; currents from the operating-point solve, ' +
         'pours carry their share); pours are not rated',
       netId,
       location: mid(track.start, track.end),

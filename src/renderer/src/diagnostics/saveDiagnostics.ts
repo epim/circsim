@@ -30,7 +30,9 @@ export async function gatherDiagnosticsInput(
     board: {
       fileName: state.project.boardFileName,
       schematicFileName: state.project.schematicFileName,
-      sha256: boardText === null ? null : await sha256Hex(boardText),
+      // The store's hash is set only while it matches this boardText, so it is
+      // the same value; hash here when it has not landed yet, never report null.
+      sha256: boardText === null ? null : (state.project.boardSha256 ?? await sha256Hex(boardText)),
       kicadFileVersion: kicadFileVersion(boardText),
     },
     versions: { app: appVersion, ngspice: state.ngspiceVersion },

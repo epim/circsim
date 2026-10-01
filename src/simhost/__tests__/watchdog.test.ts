@@ -49,6 +49,11 @@ class HangingEngine implements SpiceEngine {
   vectorData(): Float64Array | undefined {
     return undefined
   }
+  readVector(): undefined {
+    return undefined
+  }
+  lockVectors(): void {}
+  unlockVectors(): void {}
   isRunning(): boolean {
     return false
   }

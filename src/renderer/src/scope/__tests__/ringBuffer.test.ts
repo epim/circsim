@@ -231,20 +231,45 @@ describe('RingBuffer.readWindow (issue #59)', () => {
     expect(createRingBuffer(4).newestTime).toBeNaN()
   })
 
-  it('does not scan the whole ring: a small window on a full 1M ring is cheap', () => {
-    const rb = createRingBuffer(1_000_000)
-    const n = 1_200_000 // wrap once
-    for (let i = 0; i < n; i++) rb.append(i, i * 1e-6)
-    const tEnd = (n - 1) * 1e-6
-    const frames = 60
-    const t0 = performance.now()
-    let points = 0
-    for (let f = 0; f < frames; f++) points += rb.readWindow(tEnd - 10e-3, tEnd).times.length
-    const elapsed = performance.now() - t0
-    expect(points).toBeGreaterThan(0)
-    // The linear scan cost about 1.5 ms per frame here (about 90 ms for 60).
-    // A binary search plus a 10k-point copy is well under 1 ms per frame.
-    expect(elapsed).toBeLessThan(25)
+  it('does not scan the whole ring: a small window costs the same on a 50x larger ring', () => {
+    /**
+     * Best-of-7 wall time (ms) for 300 frames of the same 10 ms window on a
+     * wrapped ring. 300 frames of a 10k-point copy is several milliseconds even
+     * on the small ring, so the measurement sits well above timer and scheduler
+     * noise instead of at a sub-millisecond value.
+     */
+    const timeFrames = (capacity: number) => {
+      const rb = createRingBuffer(capacity)
+      const n = Math.floor(capacity * 1.2) // wrap once
+      for (let i = 0; i < n; i++) rb.append(i, i * 1e-6)
+      const tEnd = (n - 1) * 1e-6
+      let best = Infinity
+      let points = 0
+      for (let rep = 0; rep < 7; rep++) {
+        points = 0
+        const t0 = performance.now()
+        for (let f = 0; f < 300; f++) points += rb.readWindow(tEnd - 10e-3, tEnd).times.length
+        best = Math.min(best, performance.now() - t0)
+      }
+      return { best, points }
+    }
+    timeFrames(40_000) // warm the JIT so the small run is not the cold one
+    const small = timeFrames(40_000)
+    const big = timeFrames(2_000_000)
+    expect(small.points).toBeGreaterThan(0)
+    expect(big.points).toBe(small.points) // same window, same points
+
+    // Intent: the read is a binary search plus a copy of the window, so its cost
+    // depends on the window, not the ring size. No absolute millisecond bound: CI
+    // runners are up to 5x slower than a dev machine, so compare two ring sizes
+    // on the same machine. The window is identical, so the expected ratio is
+    // about 1 (measured 0.93 to 1.05 locally). A whole-ring scan grows with
+    // capacity: on a 50x larger ring it would touch 2M points per frame against
+    // a 10k-point window copy (ratio in the tens or more). The bound of 8 is
+    // over 5x the highest measured ratio, leaving room for cache effects and
+    // runner noise, and still fails on the scan.
+    const ratio = big.best / small.best
+    expect(ratio).toBeLessThan(8)
   })
 })
 
