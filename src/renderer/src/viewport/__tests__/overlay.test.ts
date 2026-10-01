@@ -31,8 +31,10 @@ function makeNetMaterials(count: number): Map<number, THREE.MeshStandardMaterial
 }
 
 /**
- * Best-of-5 wall time (ms) for a batch of 20 applyNetVoltages calls over `count`
- * nets. The range end changes every call so no per-call result can be reused.
+ * Best-of-5 wall time (ms) for a batch of 500 applyNetVoltages calls over `count`
+ * nets. The batch is large so even the 500-net case costs several milliseconds
+ * per sample, well above timer noise. The range end changes every call so no
+ * per-call result can be reused.
  * Wall time is only ever compared between two sizes on the same machine, never
  * against an absolute millisecond bound: CI runners are up to 5x slower than a
  * dev machine.
@@ -44,7 +46,7 @@ function timeApply(overlay: OverlayController, count: number): number {
   let best = Infinity
   for (let rep = 0; rep < 5; rep++) {
     const t0 = performance.now()
-    for (let k = 0; k < 20; k++) overlay.applyNetVoltages(voltages, 0, 5 + k * 0.01)
+    for (let k = 0; k < 500; k++) overlay.applyNetVoltages(voltages, 0, 5 + (k % 20) * 0.01)
     best = Math.min(best, performance.now() - t0)
   }
   return best
@@ -199,10 +201,12 @@ describe('OverlayController: performance', () => {
 
     // Intent: the color-write loop stays a single pass over the nets, so a
     // frame update on a big board fits the 16 ms spec budget. 10x the nets
-    // costs about 10x the time; a quadratic loop would cost about 100x. A ratio
-    // under 50 passes with headroom for noise and still fails on quadratic work.
-    const ratio = big / Math.max(small, 0.05)
-    expect(ratio).toBeLessThan(50)
+    // costs about 10x the time (measured 7 to 17 locally, cache effects at the
+    // larger size); a quadratic loop would cost about 100x. The bound of 70 is
+    // 7x the expected ratio, so a loaded runner does not trip it, and it still
+    // fails on quadratic work.
+    const ratio = big / small
+    expect(ratio).toBeLessThan(70)
   })
 })
 
@@ -256,9 +260,11 @@ describe('OverlayController: NetTintTable target (#57)', () => {
     // Intent: tinting through the table is one uniform write per net (no
     // per-net material, no version bump), so the 16 ms spec budget holds at
     // 1500 nets. Same-machine ratio: 10x the nets costs about 10x the time; a
-    // quadratic update would cost about 100x. A ratio under 50 fails only on that.
-    const ratio = big / Math.max(small, 0.05)
-    expect(ratio).toBeLessThan(50)
+    // quadratic update would cost about 100x. The bound of 70 is 7x the expected
+    // ratio (measured 7 to 17 locally), so a loaded runner does not trip it, and
+    // it still fails on quadratic work.
+    const ratio = big / small
+    expect(ratio).toBeLessThan(70)
   })
 
   it('does not tint outside voltage mode', () => {

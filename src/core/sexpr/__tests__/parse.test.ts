@@ -276,11 +276,14 @@ describe('parseSexpr – performance', () => {
 
   /** Best-of-N wall time (ms) to parse `text`, plus the last result. */
   function timeParse(text: string, reps: number): { best: number; result: SExpr } {
+    // Each sample parses the text INNER times so the small input costs about ten
+    // milliseconds per sample, well above timer noise (one parse is about 1 ms).
+    const INNER = 10
     let best = Infinity
     let result: SExpr = []
     for (let r = 0; r < reps; r++) {
       const t0 = performance.now()
-      result = parseSexpr(text)
+      for (let k = 0; k < INNER; k++) result = parseSexpr(text)
       best = Math.min(best, performance.now() - t0)
     }
     return { best, result }
@@ -292,7 +295,7 @@ describe('parseSexpr – performance', () => {
     // Guard the premise: the big input is large and about 8x the small one.
     expect(Buffer.byteLength(bigText, 'utf8') / 1024).toBeGreaterThan(100)
     const growth = bigText.length / smallText.length
-    expect(growth).toBeGreaterThan(4)
+    expect(growth).toBeGreaterThan(6)
 
     parseSexpr(smallText) // warm the JIT so the small run is not the cold one
     const small = timeParse(smallText, 5)
@@ -303,10 +306,11 @@ describe('parseSexpr – performance', () => {
     // Intent: guard against a parser that goes super-linear (string slicing per
     // token, repeated array copies). No absolute millisecond bound: CI runners
     // are up to 5x slower than a dev machine, so compare two sizes on the same
-    // machine. A linear parser scales time by about `growth` (about 7x); a
-    // quadratic one by growth^2 (about 50x). Allowing 3x the size growth passes
-    // with wide headroom for noise and still fails on quadratic behavior.
-    const ratio = big.best / Math.max(small.best, 0.05)
-    expect(ratio).toBeLessThan(growth * 3)
+    // machine. A linear parser scales time by about `growth` (about 7x, measured
+    // 5 to 6 locally); a quadratic one by growth^2 (about 50x). The bound is 5x
+    // the growth (about 35), so a loaded runner does not trip it, and it still
+    // fails on quadratic behavior because growth > 6 keeps growth^2 above it.
+    const ratio = big.best / small.best
+    expect(ratio).toBeLessThan(growth * 5)
   })
 })
