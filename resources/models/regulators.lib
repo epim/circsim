@@ -3,7 +3,8 @@
 * text is copied: this is a generic behavioral pass element whose regulated
 * output, dropout voltage, and current limit are passed as DATASHEET parameters
 * by the per-part .subckt wrappers below. Datasheet electrical characteristics
-* (Vout, dropout @ Iload, current-limit / short-circuit current) are facts.
+* (Vout, dropout vs load, current-limit / short-circuit current, quiescent
+* current) are facts.
 *
 * ---------------------------------------------------------------------------
 * GENERIC PARAMETERIZED LINEAR REGULATOR CORE
@@ -11,68 +12,91 @@
 * Nodes:  vin gnd vout
 * Params:
 *   vreg    regulated output voltage (V)
-*   drop    dropout voltage at the rated load (V) — output cannot exceed vin-drop
-*   ilim    current limit (A) — output current is folded back above this
-*   rout    closed-loop output resistance (ohm) — small, sets load regulation
+*   drop    dropout voltage at the rated load, irated (V)
+*   dropl   dropout voltage at light load, 0.1*irated and below (V)
+*   irated  rated output current the dropout curve is anchored to (A)
+*   ilim    current limit (A), just above irated; output current is folded back above it
+*   rout    closed-loop output resistance (ohm); small, sets load regulation
 *   iq      quiescent ground current (A)
 *
 * Behavior:
-*   The pass element sources current into vout to hold v(vout) at the regulated
-*   target, but the target is clamped so it can never exceed (vin - drop)
-*   (dropout behavior) and never go below 0. The output is driven by a
-*   voltage source through rout; a series behavioral resistor enforces the
-*   current limit by raising its resistance sharply once |I(vout)| > ilim.
+*   The pass element holds v(vout) at the regulated target, but the target is
+*   clamped so it can never exceed (vin - dropout) and never go below 0. The
+*   dropout itself depends on the load: it is dropl at light load and rises
+*   linearly with output current to drop at irated, which matches the shape of
+*   the dropout-vs-load curves on LDO and 78xx datasheets. Every clamp is a
+*   smooth form (a few mV wide) so the solver always has a slope to follow.
+*
+*   Supply-pin current conservation: the pass element is a source referenced to
+*   the gnd pin, so everything it delivers is drawn from the gnd node. A
+*   controlled source on vin returns the same current (the current actually
+*   delivered to the load, after foldback) plus iq, so the input pin carries
+*   the load and the input rail sees it.
 .subckt reg_lin vin gnd vout
-+ params: vreg=5 drop=2 ilim=1 rout=0.05 iq=5m
-* Regulated target = min(vreg, vin-drop), floored at 0 (dropout behavior).
-* The pass element is a behavioral voltage source on internal node 'reg', then a
-* current-sense ammeter 'vsense' feeds the external output through rout.
-breg reg gnd v = ( (v(vin)-drop) < vreg ) ?
-+ ( ((v(vin)-drop) > 0) ? (v(vin)-drop) : 0 ) : vreg
++ params: vreg=5 drop=2 dropl=1.5 irated=1 ilim=1.2 rout=0.05 iq=5m
+* Load position: 0 at 0.1*irated, 1 at irated, from the pass current sensed by
+* vsense below; smooth-clamped to [0,1] (0.02 wide) to give the load fraction.
+blf lf gnd v = (i(vsense)/irated - 0.1)/0.9
+bfrc frc gnd v = 0.5*( 1 + sqrt( v(lf,gnd)*v(lf,gnd) + 4e-4 ) - sqrt( (v(lf,gnd)-1)*(v(lf,gnd)-1) + 4e-4 ) )
+* Load-dependent dropout voltage and the headroom-limited target.
+bdrp dp gnd v = dropl + (drop - dropl)*v(frc,gnd)
+btgt tgt gnd v = v(vin,gnd) - v(dp,gnd)
+* Regulated target = smooth min(vreg, vin-dropout), smooth-floored at 0 (both
+* smoothing widths 10 mV).
+bmn mn gnd v = 0.5*( v(tgt,gnd) + vreg - sqrt( (v(tgt,gnd)-vreg)*(v(tgt,gnd)-vreg) + 1e-4 ) )
+breg reg gnd v = 0.5*( v(mn,gnd) + sqrt( v(mn,gnd)*v(mn,gnd) + 1e-4 ) )
 * output resistance for load regulation, then a 0 V ammeter to sense Iout.
 rpass reg rsen {rout}
 vsense rsen vout 0
-* Current-limit foldback: once the sensed output current exceeds ilim, sink the
-* excess back to gnd so the net delivered current is held at the limit. i(vsense)
-* is the current flowing out of the regulator into the load.
-bilim vout gnd i = ( i(vsense) > ilim ) ? ( (i(vsense)-ilim) ) : 0
-* quiescent ground current drawn from the input rail.
-biq vin gnd i = iq
+* Current-limit foldback: once the sensed pass current exceeds ilim, sink the
+* excess back to gnd so the net delivered current is held at the limit. The
+* excess is a smooth positive part of (i(vsense) - ilim), 2 mA*ilim wide;
+* i(vsense) is the current flowing out of the regulator into the load.
+bexc exc gnd v = 0.5*( (i(vsense) - ilim) + sqrt( (i(vsense) - ilim)*(i(vsense) - ilim) + 4e-6*ilim*ilim ) )
+bilim vout gnd i = v(exc,gnd)
+* Input current: the current delivered through the output pin plus the
+* quiescent ground current, drawn from the vin pin and returned to gnd. The
+* quiescent part fades out below about 2 V so an unpowered input draws nothing.
+biq vin gnd i = i(vsense) - v(exc,gnd) + iq*0.5*(1 + tanh((v(vin,gnd) - 1)/0.25))
 .ends reg_lin
 
 * ---------------------------------------------------------------------------
 * 7805 +5V fixed regulator (TO-220 / SOT-223 / DPAK).
-* Datasheet typ: Vout=5.0V, dropout ~2 V @ 1 A, Iout up to 1 A, Iq ~ 5 mA,
-* short-circuit current ~ 750 mA - 1.5 A.
+* Datasheet typ: Vout=5.0V, dropout ~2 V @ 1 A and about 1.5 V at light load,
+* Iout up to 1 A, Iq ~ 5 mA, short-circuit current ~ 750 mA - 1.5 A.
 .subckt 7805 vin gnd vout
-xr vin gnd vout reg_lin params: vreg=5.0 drop=2.0 ilim=1.0 rout=0.02 iq=5m
+xr vin gnd vout reg_lin params: vreg=5.0 drop=2.0 dropl=1.5 irated=1.0 ilim=1.2 rout=0.02 iq=5m
 .ends 7805
 
 * ---------------------------------------------------------------------------
 * 7812 +12V fixed regulator.
-* Datasheet typ: Vout=12.0V, dropout ~2 V, Iout up to 1 A, Iq ~ 5 mA.
+* Datasheet typ: Vout=12.0V, dropout ~2 V @ 1 A and about 1.5 V at light load,
+* Iout up to 1 A, Iq ~ 5 mA.
 .subckt 7812 vin gnd vout
-xr vin gnd vout reg_lin params: vreg=12.0 drop=2.0 ilim=1.0 rout=0.02 iq=5m
+xr vin gnd vout reg_lin params: vreg=12.0 drop=2.0 dropl=1.5 irated=1.0 ilim=1.2 rout=0.02 iq=5m
 .ends 7812
 
 * ---------------------------------------------------------------------------
 * 7833 / 78M33 +3.3V fixed regulator (78xx-style).
-* Datasheet typ: Vout=3.3V, dropout ~1.7 V, Iout up to 0.5-1 A.
+* Datasheet typ: Vout=3.3V, dropout ~1.7 V @ rated load (about 1.3 V at light
+* load, the same light-to-rated ratio as the 7805), Iout up to 0.5-1 A.
 .subckt 7833 vin gnd vout
-xr vin gnd vout reg_lin params: vreg=3.3 drop=1.7 ilim=1.0 rout=0.02 iq=5m
+xr vin gnd vout reg_lin params: vreg=3.3 drop=1.7 dropl=1.3 irated=1.0 ilim=1.2 rout=0.02 iq=5m
 .ends 7833
 
 * ---------------------------------------------------------------------------
-* AMS1117-3.3 LDO (SOT-223). Datasheet typ: Vout=3.3V, dropout ~1.1-1.3 V @ 1 A,
-* Iout up to 1 A, Iq (ground current) ~ 5-11 mA.
+* AMS1117-3.3 LDO (SOT-223). Datasheet typ: Vout=3.3V, dropout ~1.0 V at
+* 100 mA rising to ~1.2 V @ 1 A (1.3 V max), Iout up to 1 A, Iq (ground
+* current) ~ 5-11 mA.
 .subckt AMS1117-3.3 vin gnd vout
-xr vin gnd vout reg_lin params: vreg=3.3 drop=1.3 ilim=1.0 rout=0.03 iq=6m
+xr vin gnd vout reg_lin params: vreg=3.3 drop=1.2 dropl=1.0 irated=1.0 ilim=1.2 rout=0.03 iq=6m
 .ends AMS1117-3.3
 
 * ---------------------------------------------------------------------------
-* AMS1117-5.0 LDO (SOT-223). Datasheet typ: Vout=5.0V, dropout ~1.3 V @ 1 A.
+* AMS1117-5.0 LDO (SOT-223). Datasheet typ: Vout=5V, dropout ~1.0 V at 100 mA
+* rising to ~1.2 V @ 1 A (1.3 V max).
 .subckt AMS1117-5.0 vin gnd vout
-xr vin gnd vout reg_lin params: vreg=5.0 drop=1.3 ilim=1.0 rout=0.03 iq=6m
+xr vin gnd vout reg_lin params: vreg=5.0 drop=1.2 dropl=1.0 irated=1.0 ilim=1.2 rout=0.03 iq=6m
 .ends AMS1117-5.0
 
 * ---------------------------------------------------------------------------
