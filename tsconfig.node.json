@@ -3,6 +3,8 @@
   "include": [
     "electron.vite.config.*",
     "vite.simhost.config.*",
+    "vite.cli.config.*",
+    "src/cli/**/*",
     "src/main/**/*",
     "src/preload/**/*",
     "src/simhost/**/*",

@@ -11,7 +11,7 @@ The one you'll see most. It appears whenever the simulation is running with inco
 - **"Results approximate: …"** *(amber)*: one or more parts are **unresolved** or **stubbed**. The voltages and waveforms are correct for the *modeled* part of the circuit, but the real board may differ wherever an unmodeled part matters.
 - **"Open by design: …"** *(grey-blue)*: the only affected parts are documented opens (a part with no meaningful SPICE model). Lower-key, because this is expected, not a problem.
 
-The banner lists the affected parts and links to **open Model Doctor** (jumps to the first one) and **What can circsim tell you?** ([the fidelity page](../concepts/fidelity)). If many parts are affected it collapses to a count.
+The banner lists the affected parts and links to **open Model Doctor** (jumps to the first one) and **What can circsim tell you?** ([the fidelity page](../concepts/fidelity)). The link opens the published page in your browser when you are online and the copy bundled with circsim when you are not. If neither can be opened, the banner says so and gives the page address instead of failing silently. If many parts are affected it collapses to a count.
 
 You can **minimize** it (the **»** button) to a compact header badge (**⚠ N approximate** or **ⓘ N open by design**) and click the badge to bring it back. You can't fully dismiss it, and it re-expands on its own if the set of affected parts changes: hiding it entirely would misrepresent the simulation. To make it go away for real, [resolve or stub the parts](./model-doctor).
 
@@ -25,7 +25,7 @@ The bundled op-amp, comparator, 555, and regulator models are written so that or
 
 ## "The simulator couldn't find a stable solution"
 
-*(dismissable card)* The solve failed outright. This is usually a **numerical** problem, not a broken circuit. circsim names the likely culprit in plain language and often points at the specific net or part. Common fixes: designate the [correct ground](./ground-and-supply), stub an [unresolved part](./model-doctor), or check for a floating node. Expand **Show raw ngspice log** if you want the engine's own output.
+*(dismissable card)* The solve failed outright. This is usually a **numerical** problem, not a broken circuit. circsim names the likely culprit in plain language and often points at the specific net or part. When it does, the name is a button: click a part to select it on the board and reveal its card in the [Model Doctor](./model-doctor), or click a net to select it on the board. (A culprit that maps to no net on your board is shown as plain text.) Common fixes: designate the [correct ground](./ground-and-supply), stub an [unresolved part](./model-doctor), or check for a floating node. Expand **Show raw ngspice log** if you want the engine's own output.
 
 ## "Check this rail": a gated-off rail
 
@@ -65,7 +65,7 @@ When a [BOM](../reference/file-formats#bom-csv-the-bill-of-materials-optional) i
 
 *(dismissable toasts)*
 
-- **Simulator restarted**: the isolated SPICE engine crashed and recovered automatically. Your work is intact. If the bench was running, it restarts on its own from time zero. If the bench was paused, the paused run cannot be recovered: the notice says so, the bench goes back to idle, and pressing **Run** starts it again. (If it says it *couldn't* restart, restart circsim.)
+- **Simulator restarted**: the isolated SPICE engine crashed and recovered automatically. Your work is intact. If the bench was running, it restarts on its own from time zero. If the bench was paused, the paused run cannot be recovered: the notice says so, the bench goes back to idle, and pressing **Run** starts it again. If the engine crashes five times in quick succession, circsim stops trying: the toast changes to **Simulator stopped** and tells you to quit and reopen circsim. Your board file is never modified, so nothing is lost on disk.
 - **Bench restarted**: a long continuous transient hit its memory/time window and restarted to stay bounded. Scope history is kept. Note that sequential-logic state (flip-flops, counters) resets on a bench restart.
 
 ## The Sim Log

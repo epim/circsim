@@ -93,8 +93,8 @@ Once the board is energized (an operating point is showing), editing any instrum
 
 Under the hood, a value change becomes a SPICE `alter` (an in-place tweak to a value, no rebuild); a *wiring* change (moving a lead to a different net) reloads the circuit, because the topology actually changed. circsim picks the right one for you.
 
-::: info The bench is per-session
-Instruments and the leads you draw live for the current session. They're never written into your board file (circsim doesn't touch your design files) and don't yet persist across restarts: reopen a board and you'll rebuild the bench. It's quick, and it keeps your `.kicad_pcb` untouched.
+::: info Saving the bench
+The bench is never written into your board file (circsim doesn't touch your design files). Instead, circsim can save it, with the ground, your Model Doctor overrides and your models, in a small `my-board.circsim.json` beside the board. Click **Save setup** in the bar under the toolbar once, and a reopen or restart restores the instruments and leads (each lead remembers where on the board you clipped it). Until you do, the bench lives for the current session only. See [Save your setup & export a report](./save-and-report).
 :::
 
 ## Next
