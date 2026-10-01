@@ -265,6 +265,30 @@ describe('model text from a sidecar is untrusted', () => {
   })
 })
 
+describe('a saved model must define the subckt it is bound to (#17)', () => {
+  it('a comment stub saved by an older build is dropped with a note, not restored as an unloadable binding', () => {
+    const doc = JSON.parse(serializeSidecar(buildSidecar(snapshot())))
+    doc.userModels.U1.subcktText = '* user-import from C:/models/x.lib'
+    const out = loadSidecar(JSON.stringify(doc), ctx)
+    expect(out.plan!.userModels.size).toBe(0)
+    expect(out.notes.join(' ')).toMatch(/does not define \.subckt X/)
+    // The rest of the file still loads.
+    expect(out.plan!.ground).toEqual({ netId: 2 })
+  })
+
+  it('a text that defines the subckt under another case still restores', () => {
+    const doc = JSON.parse(serializeSidecar(buildSidecar(snapshot())))
+    doc.userModels.U1.subcktText = '.SUBCKT x 1 2\nR1 1 2 1k\n.ENDS x\n'
+    expect(loadSidecar(JSON.stringify(doc), ctx).plan!.userModels.get('U1')?.subcktName).toBe('X')
+  })
+
+  it('a text that defines a different subckt is dropped', () => {
+    const doc = JSON.parse(serializeSidecar(buildSidecar(snapshot())))
+    doc.userModels.U1.subcktText = '.subckt OTHER 1 2\nR1 1 2 1k\n.ends\n'
+    expect(loadSidecar(JSON.stringify(doc), ctx).plan!.userModels.size).toBe(0)
+  })
+})
+
 describe('planRestore and parseSidecar direct', () => {
   it('parseSidecar needs no board', () => {
     const p = parseSidecar(serializeSidecar(buildSidecar(snapshot())))
