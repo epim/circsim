@@ -1,8 +1,28 @@
-* Provenance: written for circsim from manufacturer datasheet parameters, MIT.
+* Provenance: derived for circsim from manufacturer datasheet operating points by scripts/fit-model-cards.mjs (1N4148, 1N4001, 1N5819, SMAJ24A); other cards written by hand from datasheet figures, MIT.
 * These are in-house .model cards derived from published datasheet electrical
-* characteristics (Vf @ If, Cj, trr, Vbr, Ir). No vendor model text is copied;
-* only the numeric datasheet parameters (which are facts, not copyrightable
-* expression) inform the standard ngspice level-1 diode parameter set.
+* characteristics (Vf @ If, Cj, trr, Vbr, Ir). The numeric datasheet parameters
+* (facts, not copyrightable expression) inform the standard ngspice level-1
+* diode parameter set.
+*
+* The 1N4148, 1N4001, 1N5819 and SMAJ24A cards are the output of
+* scripts/fit-model-cards.mjs: a two-point Vf fit (is, rs) at a stated emission
+* coefficient n, junction capacitance from the stated Cj at its stated bias,
+* tt from trr, bv/ibv from the stated breakdown point. Nothing is read from any
+* third-party library card, and
+* src/core/models/__tests__/library-fingerprint.test.ts fails CI if a bundled
+* card's parameter tuple matches a known PSpice or LTspice library card.
+*
+* Values that are NOT datasheet figures (device-class assumptions): the
+* emission coefficient n (1.8 small-signal, 1.9 rectifier, 1.05 Schottky, 1.5
+* TVS forward path), junction grading m=0.5 and potential vj=0.7 V (0.5 V
+* Schottky) because no C-V curve is sampled, typical Cj taken as 0.75 x the
+* stated maximum where only a maximum is given, typical Vf taken as 0.9 x the
+* stated maximum where only a maximum is given, tt equal to trr, and the
+* 1N4001/1N5819 breakdown set 10 percent above the rated VRRM (the datasheet
+* only guarantees blocking up to VRRM). The figures themselves are transcribed
+* from the datasheet families and are not yet re-verified against vendor PDFs
+* row by row. They are checked against resources/models/characterization.json
+* (npm run test:characterization).
 *
 * Diode parameter glossary (ngspice D model):
 *   is  - saturation current      n   - emission coefficient
@@ -10,28 +30,29 @@
 *   tt  - transit time             bv  - reverse breakdown voltage
 *   ibv - current at bv            vj  - junction potential
 *   m   - grading coefficient      eg  - bandgap (eV)
-*
-* Forward drop is tuned via (is, n, rs) so that the simulated Vf at the
-* datasheet test current matches the datasheet typical.
+*   nbv - breakdown emission coefficient (breakdown slope)
 
 * ---------------------------------------------------------------------------
 * 1N4148 / 1N914 small-signal fast switching silicon diode.
-* Datasheet typ: Vf=0.72V @ 5mA, ~1.0V @ 100mA; trr=4ns; Cj=4pF; Vbr=100V.
-.model D1N4148 D(is=2.52n rs=0.568 n=1.752 tt=20n cjo=4p vj=0.75 m=0.333
-+ bv=100 ibv=100n eg=1.11)
+* Inputs: Vf 0.67V @ 5mA (window 0.62-0.72V midpoint) and 0.9V @ 100mA (1.0V
+* max x 0.9), n=1.8; Cj 4pF max @ 0V (x 0.75); trr 4ns; V(BR) 100V @ 100uA.
+.model D1N4148 D(is=3.12n rs=0.953 n=1.8 cjo=3p vj=0.7 m=0.5 bv=100 ibv=100u
++ eg=1.11 xti=3 tt=4n)
 
 * ---------------------------------------------------------------------------
 * 1N4001 general-purpose silicon rectifier (1A, 50V).
-* Datasheet typ: Vf=0.93V @ 1A; trr slow (~3us-class); Cj~15pF; Vbr=50V.
-.model D1N4001 D(is=14.1n rs=0.0337 n=1.984 tt=5u cjo=25.9p vj=0.325 m=0.44
-+ bv=50 ibv=10u eg=1.11)
+* Inputs: Vf 0.93V typ @ 1A and ~0.62V @ 10mA (typical curve, approximate),
+* n=1.9; Cj 15pF typ @ 4V; trr ~2us; VRRM 50V (card breakdown 55V, 10uA).
+.model D1N4001 D(is=33.8n rs=84.5m n=1.9 cjo=38.9p vj=0.7 m=0.5 bv=55 ibv=10u
++ eg=1.11 xti=3 tt=2u)
 
 * ---------------------------------------------------------------------------
 * 1N5819 Schottky barrier rectifier (1A, 40V).
-* Datasheet typ: Vf=0.6V @ 1A (low drop); Vbr=40V; higher Ir; eg lowered for
-* the Schottky metal-semiconductor junction (~0.69 eV), n near 1.
-.model D1N5819 D(is=31.7u rs=0.051 n=1.373 tt=4.32n cjo=140p vj=0.4 m=0.38
-+ bv=40 ibv=1m eg=0.69 xti=2)
+* Inputs: Vf 0.54V @ 1A and 0.81V @ 3A (0.6V and 0.9V max x 0.9), n=1.05;
+* Cj ~110pF typ @ 4V; VRRM 40V (card breakdown 44V at 1mA, IR 1mA max at
+* rated VR); Schottky eg=0.69 and xti=2; no minority storage (tt omitted).
+.model D1N5819 D(is=193n rs=0.12 n=1.05 cjo=330p vj=0.5 m=0.5 bv=44 ibv=1m
++ eg=0.69 xti=2)
 
 * ---------------------------------------------------------------------------
 * SS54 / SB540 Schottky barrier rectifier (5A, 40V, DO-214AB/SMC).
@@ -42,12 +63,24 @@
 
 * ---------------------------------------------------------------------------
 * SMAJ24A unidirectional 24V TVS (SMA, 400W): standoff 24V, breakdown
-* 26.7-29.5V @ 1mA (bv/ibv), clamping 38.9V @ 10.3A. The exponential breakdown
-* only adds ~n*Vt*ln(Ipp/ibv) ~ 0.24V from 1mA to 10.3A, so rs=1.16 supplies
-* the remaining (38.9-26.7-0.24)/10.3 ~ 1.16 ohm of clamp slope. Forward path
-* is an ordinary Si diode; Cj~280pF.
-.model DSMAJ24A D(is=1e-12 rs=1.16 n=1 cjo=280p vj=0.75 m=0.333
-+ bv=26.7 ibv=1m eg=1.11)
+* 26.7-29.5V @ 1mA, clamping 38.9V @ 10.3A, Cj~280pF. Terminals: a (anode,
+* position 1), k (cathode, position 2), the same positions as the model-card
+* diodes, so the index.json pinMaps are unchanged.
+* Inputs: forward Vf ~1.0V @ 1A and 3.15V @ 25A (3.5V max x 0.9), n=1.5;
+* VBR 28.1V @ 1mA (window midpoint); VC 38.9V @ 10.3A.
+* Two separate paths, so the forward drop does not inherit the clamp slope:
+*   forward:  DF a->k, rs (84 mohm) fitted to the forward points only.
+*   reverse:  k -> DB (blocking diode) -> m -> DZ (breakdown diode, rs carries
+*             the clamp slope) -> a. DB blocks when the TVS is forward biased.
+* bv and rs of DZ solve V(1mA) = VBR and V(10.3A) = VC including DB's drop.
+.subckt DSMAJ24A a k
+df a k DSMAJ24A_F
+db k m DSMAJ24A_B
+dz a m DSMAJ24A_Z
+.model DSMAJ24A_F D(is=56.3p rs=84.4m n=1.5 cjo=280p vj=0.7 m=0.5 eg=1.11)
+.model DSMAJ24A_B D(is=1p rs=10m n=1 bv=100)
+.model DSMAJ24A_Z D(is=1p rs=0.992 n=1 bv=27.6 ibv=1m)
+.ends DSMAJ24A
 
 * ---------------------------------------------------------------------------
 * BZX55C5V1 / 5V1 zener diode (Vz=5.1V @ 5mA).
