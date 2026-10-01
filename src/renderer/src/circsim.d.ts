@@ -28,6 +28,21 @@ interface CircsimPlatformPaths {
 
 interface CircsimCrashedPayload {
   willRespawn: boolean
+  /** The SimHost child's exit code; null when Electron did not report one. */
+  exitCode: number | null
+  /** 'watchdog' for exit code 86 (a stuck solve), 'crashed' for anything else. */
+  reason: 'watchdog' | 'crashed'
+}
+
+interface CircsimDiagnosticsBundleRequest {
+  suggestedName: string
+  files: { name: string; text: string }[]
+}
+
+interface CircsimDiagnosticsBundleResult {
+  saved: boolean
+  path?: string
+  error?: string
 }
 
 type CircsimOpenDocsResult =
@@ -76,6 +91,13 @@ declare global {
       getSimPort(): Promise<MessagePort>
       onSimhostCrashed(cb: (payload: CircsimCrashedPayload) => void): () => void
       platformPaths(): Promise<CircsimPlatformPaths>
+      /**
+       * Save the diagnostics bundle (issue #26) as a zip via a native save
+       * dialog. main adds the environment, SimHost output and crash history.
+       */
+      saveDiagnosticsBundle(
+        req: CircsimDiagnosticsBundleRequest,
+      ): Promise<CircsimDiagnosticsBundleResult>
       getSampleProjectPath(): Promise<string>
       /**
        * Absolute path to the bundled "First Light" demo .kicad_pcb (minimal DC

@@ -65,8 +65,12 @@ When a [BOM](../reference/file-formats#bom-csv-the-bill-of-materials-optional) i
 
 *(dismissable toasts)*
 
-- **Simulator restarted**: the isolated SPICE engine crashed and recovered automatically. Your work is intact. If the bench was running, it restarts on its own from time zero. If the bench was paused, the paused run cannot be recovered: the notice says so, the bench goes back to idle, and pressing **Run** starts it again. If the engine crashes five times in quick succession, circsim stops trying: the toast changes to **Simulator stopped** and tells you to quit and reopen circsim. Your board file is never modified, so nothing is lost on disk.
+- **Simulator restarted**: the isolated SPICE engine stopped and recovered automatically. The toast says why: a **watchdog timeout** (exit code 86, a solve stopped making progress) or a **crash** (any other exit code). Your work is intact. If the bench was running, it restarts on its own from time zero. If the bench was paused, the paused run cannot be recovered: the notice says so, the bench goes back to idle, and pressing **Run** starts it again. If the engine fails five times in quick succession, circsim stops trying: the toast changes to **Simulator stopped** and tells you to quit and reopen circsim. Your board file is never modified, so nothing is lost on disk. Click **Save diagnostics** in either toast to export a [diagnostic bundle](./diagnostics) for a bug report.
 - **Bench restarted**: a long continuous transient hit its memory/time window and restarted to stay bounded. Scope history is kept. Note that sequential-logic state (flip-flops, counters) resets on a bench restart.
+
+## Save diagnostics
+
+A **Save diagnostics** link sits under any warning (and inside the crash toast). It writes a zip of the decks, the Sim Log, the board hash, and version numbers; see [Save a diagnostic bundle](./diagnostics).
 
 ## The Sim Log
 

@@ -16,7 +16,8 @@
  *     get/add/remove/clearRecentBoards → recent-boards list (userData)
  *     exportReport(req)               → save dialog + write a markdown or PDF report
  *     getSimPort()                    → Promise<MessagePort>  (the SimHost port2)
- *     onSimhostCrashed(cb)            → register crash callback ({ willRespawn })
+ *     onSimhostCrashed(cb)            → register crash callback ({ willRespawn, exitCode, reason })
+ *     saveDiagnosticsBundle(req)      → save dialog + zip of decks, log, board hash, versions
  *     platformPaths()                 → { platform, resourcesPath, appPath, userData }
  *   }
  *
@@ -59,6 +60,22 @@ export interface PlatformPaths {
 
 export interface SimhostCrashedPayload {
   willRespawn: boolean
+  /** The SimHost child's exit code; null when Electron did not report one. */
+  exitCode: number | null
+  /** 'watchdog' for exit code 86 (a stuck solve), 'crashed' for anything else. */
+  reason: 'watchdog' | 'crashed'
+}
+
+export interface DiagnosticsBundleRequest {
+  /** Default file name offered in the save dialog. */
+  suggestedName: string
+  files: { name: string; text: string }[]
+}
+
+export interface DiagnosticsBundleResult {
+  saved: boolean
+  path?: string
+  error?: string
 }
 
 /** Outcome of `openDocs` (mirrors OpenDocsResult in src/main/openDocs.ts). */
@@ -267,6 +284,15 @@ contextBridge.exposeInMainWorld('circsim', {
    */
   platformPaths: (): Promise<PlatformPaths> => {
     return ipcRenderer.invoke('circsim:platformPaths') as Promise<PlatformPaths>
+  },
+
+  /**
+   * Save the diagnostics bundle as a zip (issue #26). The renderer passes the
+   * files it gathered; main adds the environment and SimHost output, shows a
+   * save dialog and writes the archive. `saved` is false when cancelled.
+   */
+  saveDiagnosticsBundle: (req: DiagnosticsBundleRequest): Promise<DiagnosticsBundleResult> => {
+    return ipcRenderer.invoke('circsim:saveDiagnosticsBundle', req) as Promise<DiagnosticsBundleResult>
   },
 
   /**

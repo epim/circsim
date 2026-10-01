@@ -642,7 +642,33 @@ export interface AppState {
   // ── log stream ────────────────────────────────────────────────────────────────
   logLines: { level: 'info' | 'warn' | 'error'; text: string }[]
   lastBenchRestart: { reason: 'window-elapsed' | 'memory'; at: number } | null
-  crashNotice: { willRespawn: boolean; at: number; pausedRunLost?: boolean } | null
+  crashNotice: {
+    willRespawn: boolean
+    at: number
+    /** The SimHost child's exit code, when main reported one (issue #26). */
+    exitCode?: number | null
+    /** 'watchdog' (exit 86, a stuck solve) or 'crashed'; absent when unknown. */
+    reason?: 'watchdog' | 'crashed'
+    /** A paused run could not be recovered by the respawn (master #16). */
+    pausedRunLost?: boolean
+  } | null
+  /**
+   * The last operating-point solve, kept for the diagnostics bundle (issue #26):
+   * both decks, whether pass 2 ran, and the committed op. Cleared on board open.
+   * A failed pass 1 (timeout, convergence failure) is recorded too, with
+   * status 'pass1-failed': the deck that was sent, no pass 2, no op.
+   */
+  lastSolve: {
+    status: 'solved' | 'pass1-failed'
+    pass1Deck: string[]
+    pass2Deck: string[] | null
+    pass2: SolveResult['pass2'] | null
+    opValues: Record<string, number>
+    opMethod: OpSolveMethod | null
+    at: number
+  } | null
+  /** The deck the last transient run or crash replay loaded (diagnostics). */
+  lastRunDeck: string[] | null
 
   // ── transient run honesty surfaces (Spec §7.5, §12) ───────────────────────────
   /**
@@ -890,7 +916,10 @@ export interface AppState {
   /** Replay deck + instrument state onto a fresh client (after respawn). */
   replayAfterCrash(): void
   /** Record a crash notice (from window.circsim.onSimhostCrashed). */
-  noteCrash(willRespawn: boolean): void
+  noteCrash(
+    willRespawn: boolean,
+    detail?: { exitCode: number | null; reason: 'watchdog' | 'crashed' },
+  ): void
 
   // internal: ingest a SimEvent (wired to the client's onEvent in setup)
   ingestEvent(event: SimEvent): void
@@ -1195,6 +1224,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       criticReport: null,
       selectedFindingId: null,
       logLines: [],
+      lastSolve: null,
+      lastRunDeck: null,
       benchRestartToast: null,
       convergenceCard: null,
       opCaveat: null,
@@ -1427,6 +1458,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     logLines: [],
     lastBenchRestart: null,
     crashNotice: null,
+    lastSolve: null,
+    lastRunDeck: null,
     benchRestartToast: null,
     convergenceCard: null,
     opCaveat: null,
@@ -1952,12 +1985,39 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           // A pass-1 timeout drops us back to idle; a convergenceFailure event
           // (ingested separately) already surfaces the plain-language card.
           if (get().simState === 'op') set({ simState: 'idle' })
-          if (err instanceof SolveFailedError) return null
+          if (err instanceof SolveFailedError) {
+            // The bundle's whole point on a convergence card is the deck that
+            // failed, so record it (the same pass-1 deck runSolvePlan sent)
+            // instead of leaving the previous solve's deck in place.
+            set({
+              lastSolve: {
+                status: 'pass1-failed',
+                pass1Deck: buildDeck({ ...inputs, measuredRails: undefined }),
+                pass2Deck: null,
+                pass2: null,
+                opValues: {},
+                opMethod: null,
+                at: Date.now(),
+              },
+            })
+            return null
+          }
           throw err
         }
         const { op, netVoltages: opVoltages } = solved
 
-        set({ measuredRails: solved.measuredRails })
+        set({
+          measuredRails: solved.measuredRails,
+          lastSolve: {
+            status: 'solved',
+            pass1Deck: solved.pass1Deck,
+            pass2Deck: solved.pass2Deck ?? null,
+            pass2: solved.pass2,
+            opValues: op.values,
+            opMethod: op.method ?? null,
+            at: Date.now(),
+          },
+        })
         const railNotes: RailNote[] = solved.gatedOff.map(g => ({ ref: g.ref, kicadName: g.kicadName }))
 
         const voltageRange = computeVoltageRange(opVoltages)
@@ -2090,6 +2150,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       const tstopSeconds = BENCH_WINDOW_SECONDS
 
       simClient.send({ type: 'loadCircuit', deckLines })
+      set({ lastRunDeck: deckLines })
       sendWatch()
       simClient.send({ type: 'setPace', realtimeFactor: get().paceFactor })
       simClient.send({ type: 'runTransient', tstepSeconds, tstopSeconds })
@@ -2178,8 +2239,14 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     },
 
     // ── crash recovery (Spec §6.1) ─────────────────────────────────────────────
-    noteCrash(willRespawn) {
-      set({ crashNotice: { willRespawn, at: Date.now() } })
+    noteCrash(willRespawn, detail) {
+      set({
+        crashNotice: {
+          willRespawn,
+          at: Date.now(),
+          ...(detail ? { exitCode: detail.exitCode, reason: detail.reason } : {}),
+        },
+      })
     },
 
     replayAfterCrash() {
@@ -2190,7 +2257,9 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Re-send the full deck. All instrument state (including live-altered supply
       // voltages) lives in the store, so the regenerated deck already reflects it
       // — nothing extra to re-apply (Spec §6.1).
-      simClient.send({ type: 'loadCircuit', deckLines: buildDeck(inputs) })
+      const replayDeck = buildDeck(inputs)
+      simClient.send({ type: 'loadCircuit', deckLines: replayDeck })
+      set({ lastRunDeck: replayDeck })
 
       // Re-establish the run state on the fresh process.
       if (simState === 'running') {
@@ -2221,6 +2290,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         set(s => ({
           simState: 'idle',
           crashNotice: {
+            // Keep the exit code and reason noteCrash recorded (diagnostics, #26).
+            ...s.crashNotice,
             willRespawn: s.crashNotice?.willRespawn ?? true,
             at: s.crashNotice?.at ?? Date.now(),
             pausedRunLost: true,
