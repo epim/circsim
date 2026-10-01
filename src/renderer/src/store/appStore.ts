@@ -1690,7 +1690,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Build a minimal probe deck: the pasted subckt + one dummy instance +
       // enough dummy bleeds/ground so ngspice can parse it without error.
       // We don't care about simulation convergence, only that ngspice PARSES
-      // the subckt definition without emitting an error. The dummy nodes
+      // the subckt definition without emitting an error: only errors raised
+      // while the deck loads count, never the ones from the op behind it (a
+      // subckt with its own source can fail the dummy op and still be valid).
+      // The dummy nodes
       // (_tst1, _tst2, ...) are tied to ground via 1G resistors so the deck has
       // a DC path and won't hit the "no DC path to ground" trap.
       //
@@ -1713,9 +1716,16 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
       // Collect log lines during the load to detect errors.
       const errorLines: string[] = []
+      // ngspice prints "Doing analysis at TEMP = ..." when the op starts, after
+      // the deck has been parsed. Everything past that line belongs to the
+      // dummy harness's op, not to the pasted model, so stop collecting there.
+      let loadPhase = true
 
       const unsub = simClient.onEvent(event => {
-        if (event.type === 'log' && event.level === 'error') {
+        if (event.type !== 'log' || !loadPhase) return
+        if (/Doing analysis at TEMP/i.test(event.text)) {
+          loadPhase = false
+        } else if (event.level === 'error') {
           errorLines.push(event.text)
         }
       })
@@ -1730,6 +1740,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         // even when the load failed (load errors arrive as log events before
         // it). Waiting on it, not a fixed timer, keeps a valid paste from
         // costing the whole timeout. The timeout only backstops a dead host.
+        // The op's own log lines are ignored (see loadPhase above).
         const done = simClient.waitFor('opResult', 8000).catch(() => undefined)
         simClient.send({ type: 'loadCircuit', deckLines: testDeck })
         simClient.send({ type: 'runOp' })

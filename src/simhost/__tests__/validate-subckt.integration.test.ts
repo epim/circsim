@@ -69,6 +69,11 @@ const VALID_SUBCKT = [
   '',
 ].join('\n')
 
+// Parses cleanly, but its own 5 V source fights the probe's v_test (which pins
+// _tst1 to 0 V), so the dummy op fails ("Transient op failed, timestep too
+// small"). The paste is valid; the harness op is not part of the verdict.
+const OP_FAILS_SUBCKT = ['.subckt tv a b', 'v1 a 0 5', 'r1 a b 1k', '.ends', ''].join('\n')
+
 // Missing .ends: a genuinely broken paste that must still be rejected.
 const BROKEN_SUBCKT = ['.subckt tbad a b', 'r1 a b 1000', ''].join('\n')
 
@@ -191,6 +196,22 @@ describe.skipIf(!haveNgspice)('issue #18: multi-line subckt through real ngspice
       expect(res.ok === false && res.error).toMatch(/subckt/i)
       expect(Date.now() - t0).toBeLessThan(5000)
       expect(store.getState().deckDirty).toBe(true)
+    })
+
+    it('accepts a subckt that parses but whose dummy-harness op fails to converge', async () => {
+      const { client, host, events, start } = createHostClient()
+      disposeHost = () => host.dispose()
+      await start()
+      const store = await createAppStore({ simClient: client })
+
+      const res = await store.getState().validateSubckt(OP_FAILS_SUBCKT, 'tv', 2)
+
+      // Real ngspice does emit op-phase errors for this probe (the premise)...
+      expect(
+        events.some((e) => e.type === 'log' && e.level === 'error' && /operating point|Transient op failed/i.test(e.text))
+      ).toBe(true)
+      // ...but they are not a verdict on the paste.
+      expect(res).toEqual({ ok: true })
     })
 
     it('a valid paste validates again after a rejected one (engine not wedged)', async () => {
