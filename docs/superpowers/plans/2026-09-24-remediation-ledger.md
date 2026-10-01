@@ -94,7 +94,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #87 LM358 output low level is 69 mV against a 20 mV maximum (rout=100 ohm in the output stage) | M | merged | fix/2-supply-current-and-opamp | #118 | 4 | e503bc8 | escalated to opus (4 rounds), both reviewers APPROVE; merged 2026-09-30 22:10 PDT; canary green; note: macos-14 CI flaked once with ngspice memory required in the fine-step 555 test, green on rerun |
 | #131 Floating negative supply pin joins VCC through the supply-current source and is never reported as undriven | M | merged | fix/131-floating-supply-pin-undriven | #132 | 2 | 9ad8890 | sonnet rung (2 rounds), reviewer APPROVE; merged 2026-10-01 01:55 PDT; canary green |
 | #136 74HC flip-flop and shift-register clock-to-output delay is twice the library delaysNs | M | todo | | | 0 | | filed by D2 (#138) 2026-10-01: 74HC74 and 74HC164 clk-to-Q 2.1x datasheet |
-| #144 openBoard parity test races the background board hash: boardSha256 null on a slow runner | U | in-review | fix/144-board-hash-race | #146 | 1 | | sonnet rung, reviewer APPROVE (open path awaits the board hash; parity at 0 to 150 ms digest delay); merge chain running |
+| #144 openBoard parity test races the background board hash: boardSha256 null on a slow runner | U | merged | fix/144-board-hash-race | #146 | 1 | 9136ec0 | sonnet rung, reviewer APPROVE; merged 2026-10-01 04:30 PDT; canary green |
 
 ## Wave log
 
@@ -137,3 +137,4 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 - 2026-10-01 04:18 PDT: merge queue serialized behind two master flakes: the #144 boardSha256 race (fix in progress) and the sidecar-spec Linux drop (fix #143, itself blocked by #144 on reruns). Waiting on #143 and #144: #137 #138 #140 #114, then #120. #142 (ratio headroom) rerunning one Ubuntu leg. Corpus baseline refresh launched (wf_e7fa6df4-b7e). #110 #112 R3+R4 on the token scope.
 - 2026-10-01 04:19 PDT: ratio-headroom hotfix #142 merged (488a438): #134 ratio tests measure above timer noise with 5x headroom; canary green. Corpus baseline refresh #145 (all 35 drifted figures attributed to #118, #100, #132, #141) in CI.
 - 2026-10-01 04:23 PDT: #146 (fix #144) MERGE_READY; one chained job merges #146, then #143, then re-prepares #137 #138 #140 #114. #145 in CI.
+- 2026-10-01 04:49 PDT: #146 (fix #144) and #143 (Linux sidecar spec) merged, canaries green. #137 and #140 green and merging; #145 re-preparing; #138 (characterization.json) and #114 (appStore) conflict again, agents resolving; #120 after #114.
