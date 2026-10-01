@@ -39,8 +39,12 @@ You can **minimize** it (the **»** button) to a compact header badge (**⚠ N a
 
 *(dismissable toasts)*
 
-- **Simulator restarted**: the isolated SPICE engine crashed and recovered automatically. Your work is intact; just re-run. (If it says it *couldn't* restart, restart circsim.)
+- **Simulator restarted**: the isolated SPICE engine stopped and recovered automatically. The toast says why: a **watchdog timeout** (exit code 86, a solve stopped making progress) or a **crash** (any other exit code). Your work is intact; just re-run. (If it says it *couldn't* restart, restart circsim.) Click **Save diagnostics** to export a [diagnostic bundle](./diagnostics) for a bug report.
 - **Bench restarted**: a long continuous transient hit its memory/time window and restarted to stay bounded. Scope history is kept. Note that sequential-logic state (flip-flops, counters) resets on a bench restart.
+
+## Save diagnostics
+
+A **Save diagnostics** link sits under any warning (and inside the crash toast). It writes a zip of the decks, the Sim Log, the board hash, and version numbers; see [Save a diagnostic bundle](./diagnostics).
 
 ## The Sim Log
 

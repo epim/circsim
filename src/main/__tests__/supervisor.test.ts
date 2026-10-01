@@ -17,6 +17,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   SimhostSupervisor,
+  classifyExit,
+  WATCHDOG_EXIT_CODE,
   type ChildHandle,
   type ForkFn,
   type PortPair,
@@ -138,7 +140,27 @@ describe('SimhostSupervisor', () => {
     supervisor.start()
     stub.triggerExit(1)
 
-    expect(crashed).toHaveBeenCalledWith({ willRespawn: true })
+    expect(crashed).toHaveBeenCalledWith({ willRespawn: true, exitCode: 1, reason: 'crashed' })
+  })
+
+  it('passes the exit code through and names a watchdog exit (issue #26)', () => {
+    const stub = makeStubChild()
+    const fork: ForkFn = () => stub.child
+    const portPairFactory: PortPairFactory = () => makeStubPortPair()
+    const crashed = vi.fn()
+
+    const supervisor = new SimhostSupervisor({ fork, portPairFactory, onSimhostCrashed: crashed })
+    supervisor.start()
+    stub.triggerExit(86)
+
+    expect(crashed).toHaveBeenCalledWith({ willRespawn: true, exitCode: 86, reason: 'watchdog' })
+  })
+
+  it('classifyExit: 86 is the watchdog, everything else is a crash (issue #26)', () => {
+    expect(classifyExit(WATCHDOG_EXIT_CODE)).toBe('watchdog')
+    expect(classifyExit(0)).toBe('crashed')
+    expect(classifyExit(3221225477)).toBe('crashed')
+    expect(classifyExit(null)).toBe('crashed')
   })
 
   // ── Respawn backoff ────────────────────────────────────────────────────────
@@ -259,7 +281,7 @@ describe('SimhostSupervisor', () => {
 
     // The last call to crashed should have willRespawn: false
     const lastCall = crashed.mock.calls[crashed.mock.calls.length - 1]
-    expect(lastCall?.[0]).toEqual({ willRespawn: false })
+    expect(lastCall?.[0]).toEqual({ willRespawn: false, exitCode: 1, reason: 'crashed' })
     expect(supervisor.isFatal()).toBe(true)
   })
 

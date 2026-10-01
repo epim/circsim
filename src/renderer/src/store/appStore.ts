@@ -489,7 +489,28 @@ export interface AppState {
   // ── log stream ────────────────────────────────────────────────────────────────
   logLines: { level: 'info' | 'warn' | 'error'; text: string }[]
   lastBenchRestart: { reason: 'window-elapsed' | 'memory'; at: number } | null
-  crashNotice: { willRespawn: boolean; at: number } | null
+  crashNotice: {
+    willRespawn: boolean
+    at: number
+    /** The SimHost child's exit code, when main reported one (issue #26). */
+    exitCode?: number | null
+    /** 'watchdog' (exit 86, a stuck solve) or 'crashed'; absent when unknown. */
+    reason?: 'watchdog' | 'crashed'
+  } | null
+  /**
+   * The last operating-point solve, kept for the diagnostics bundle (issue #26):
+   * both decks, whether pass 2 ran, and the committed op. Cleared on board open.
+   */
+  lastSolve: {
+    pass1Deck: string[]
+    pass2Deck: string[] | null
+    pass2: SolveResult['pass2']
+    opValues: Record<string, number>
+    opMethod: OpSolveMethod | null
+    at: number
+  } | null
+  /** The deck the last transient run or crash replay loaded (diagnostics). */
+  lastRunDeck: string[] | null
 
   // ── transient run honesty surfaces (Spec §7.5, §12) ───────────────────────────
   /**
@@ -696,7 +717,10 @@ export interface AppState {
   /** Replay deck + instrument state onto a fresh client (after respawn). */
   replayAfterCrash(): void
   /** Record a crash notice (from window.circsim.onSimhostCrashed). */
-  noteCrash(willRespawn: boolean): void
+  noteCrash(
+    willRespawn: boolean,
+    detail?: { exitCode: number | null; reason: 'watchdog' | 'crashed' },
+  ): void
 
   // internal: ingest a SimEvent (wired to the client's onEvent in setup)
   ingestEvent(event: SimEvent): void
@@ -912,6 +936,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     logLines: [],
     lastBenchRestart: null,
     crashNotice: null,
+    lastSolve: null,
+    lastRunDeck: null,
     benchRestartToast: null,
     convergenceCard: null,
     opCaveat: null,
@@ -945,6 +971,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         criticReport: null,
         selectedFindingId: null,
         logLines: [],
+        lastSolve: null,
+        lastRunDeck: null,
         benchRestartToast: null,
         convergenceCard: null,
         opCaveat: null,
@@ -1481,7 +1509,17 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         }
         const { op, netVoltages: opVoltages } = solved
 
-        set({ measuredRails: solved.measuredRails })
+        set({
+          measuredRails: solved.measuredRails,
+          lastSolve: {
+            pass1Deck: solved.pass1Deck,
+            pass2Deck: solved.pass2Deck ?? null,
+            pass2: solved.pass2,
+            opValues: op.values,
+            opMethod: op.method ?? null,
+            at: Date.now(),
+          },
+        })
         const railNotes: RailNote[] = solved.gatedOff.map(g => ({ ref: g.ref, kicadName: g.kicadName }))
 
         const voltageRange = computeVoltageRange(opVoltages)
@@ -1600,6 +1638,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       const tstopSeconds = BENCH_WINDOW_SECONDS
 
       simClient.send({ type: 'loadCircuit', deckLines })
+      set({ lastRunDeck: deckLines })
       simClient.send({ type: 'setPace', realtimeFactor: get().paceFactor })
       simClient.send({ type: 'runTransient', tstepSeconds, tstopSeconds })
       set({
@@ -1646,8 +1685,14 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     },
 
     // ── crash recovery (Spec §6.1) ─────────────────────────────────────────────
-    noteCrash(willRespawn) {
-      set({ crashNotice: { willRespawn, at: Date.now() } })
+    noteCrash(willRespawn, detail) {
+      set({
+        crashNotice: {
+          willRespawn,
+          at: Date.now(),
+          ...(detail ? { exitCode: detail.exitCode, reason: detail.reason } : {}),
+        },
+      })
     },
 
     replayAfterCrash() {
@@ -1658,7 +1703,9 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Re-send the full deck. All instrument state (including live-altered supply
       // voltages) lives in the store, so the regenerated deck already reflects it
       // — nothing extra to re-apply (Spec §6.1).
-      simClient.send({ type: 'loadCircuit', deckLines: buildDeck(inputs) })
+      const replayDeck = buildDeck(inputs)
+      simClient.send({ type: 'loadCircuit', deckLines: replayDeck })
+      set({ lastRunDeck: replayDeck })
 
       // Re-establish the run state on the fresh process.
       if (simState === 'running') {

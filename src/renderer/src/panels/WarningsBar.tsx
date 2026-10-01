@@ -13,7 +13,11 @@
  *     its voltages, especially 0.000 V readings, may be unreliable (F1).
  *   - Bench-restart toast: brief "bench restarted" notice (window/memory), with
  *     the sequential-logic caveat when digital parts are present. Dismissable.
- *   - Crash toast: SimHost crashed — auto-recovering. Dismissable.
+ *   - Crash toast: SimHost crashed, auto-recovering. Dismissable. Names the
+ *     cause (watchdog timeout vs engine crash, with the exit code) and offers
+ *     "Save diagnostics" (issue #26).
+ *   - "Save diagnostics" link: shown under any other warning so a board that
+ *     reads wrong can be exported as a zip (decks, log, board hash, versions).
  *
  * UI-only; the derived banner list + toast/card STATE are unit-tested in the
  * store (fidelityBannerItems, ingestEvent → benchRestartToast/convergenceCard).
@@ -26,10 +30,38 @@ import {
   collapsedFidelitySummary,
   opCaveatMessage,
   isFidelityMinimized,
+  type AppState,
   type AppStore,
   type RailNote,
 } from '../store/appStore'
 import { SCHEMATIC_PINMAP_PREFIX } from '../../../core/models/libraryMatch'
+import { saveDiagnostics, type SaveDiagnosticsResult } from '../diagnostics/saveDiagnostics'
+
+/**
+ * The crash toast's sentence: what happened and whether the engine is coming
+ * back. A watchdog exit (code 86) means a solve stopped making progress; any
+ * other exit is a crash. An unknown reason (older main) keeps the old wording.
+ */
+export function crashNoticeMessage(notice: NonNullable<AppState['crashNotice']>): string {
+  const code = notice.exitCode !== undefined && notice.exitCode !== null ? `exit code ${notice.exitCode}` : null
+  const what =
+    notice.reason === 'watchdog'
+      ? `The simulation engine stopped responding (watchdog timeout${code ? `, ${code}` : ''})`
+      : notice.reason === 'crashed'
+        ? `The simulation engine crashed${code ? ` (${code})` : ''}`
+        : 'The simulation engine crashed'
+  return notice.willRespawn
+    ? `${what} and is recovering automatically.`
+    : `${what} and could not be restarted.`
+}
+
+/** One line for the outcome of a save attempt, or null while there is nothing to say. */
+export function diagnosticsStatusMessage(result: SaveDiagnosticsResult | null): string | null {
+  if (!result) return null
+  if (result.error) return `Could not save diagnostics: ${result.error}`
+  if (result.saved) return `Saved diagnostics${result.path ? ` to ${result.path}` : ''}.`
+  return null
+}
 
 /**
  * Apply a manual rail-voltage override (from the gated-off note's inline entry)
@@ -77,6 +109,17 @@ export default function WarningsBar(): React.ReactElement | null {
   )
 
   const [rawOpen, setRawOpen] = useState(false)
+  const [diagResult, setDiagResult] = useState<SaveDiagnosticsResult | null>(null)
+  const [diagBusy, setDiagBusy] = useState(false)
+  const diagMessage = diagnosticsStatusMessage(diagResult)
+  const onSaveDiagnostics = (): void => {
+    if (diagBusy) return
+    setDiagBusy(true)
+    void saveDiagnostics(store).then(result => {
+      setDiagResult(result)
+      setDiagBusy(false)
+    })
+  }
 
   // "open Model Doctor": the Doctor drawer (left dock) is already visible
   // whenever problems exist; revealInDoctor selects the first problem part and
@@ -101,10 +144,22 @@ export default function WarningsBar(): React.ReactElement | null {
       {/* ── Crash toast ───────────────────────────────────────────────────── */}
       {crashNotice && (
         <div style={crashStyle}>
-          <strong>Simulator restarted.</strong>{' '}
-          {crashNotice.willRespawn
-            ? 'The simulation engine crashed and is recovering automatically.'
-            : 'The simulation engine crashed and could not be restarted.'}
+          <strong>Simulator restarted.</strong> {crashNoticeMessage(crashNotice)}{' '}
+          <span
+            style={linkStyle}
+            title="Save a zip with the deck, ngspice log, board hash, crash reason and versions"
+            role="button"
+            tabIndex={0}
+            aria-disabled={diagBusy}
+            data-testid="crash-save-diagnostics"
+            onClick={onSaveDiagnostics}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') onSaveDiagnostics()
+            }}
+          >
+            Save diagnostics
+          </span>
+          {diagMessage && <span data-testid="diagnostics-status"> {diagMessage}</span>}
           <button style={dismissBtn} onClick={() => store.setState({ crashNotice: null })}>
             ×
           </button>
@@ -256,6 +311,27 @@ export default function WarningsBar(): React.ReactElement | null {
           schematic is stale.
         </div>
       ))}
+
+      {/* ── Save diagnostics (issue #26): the crash toast carries its own ──── */}
+      {!crashNotice && (
+        <div style={diagRowStyle} data-testid="diagnostics-row">
+          <span
+            style={linkStyle}
+            title="Save a zip with the deck, ngspice log, board hash and versions to attach to a bug report"
+            role="button"
+            tabIndex={0}
+            aria-disabled={diagBusy}
+            data-testid="save-diagnostics"
+            onClick={onSaveDiagnostics}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') onSaveDiagnostics()
+            }}
+          >
+            Save diagnostics
+          </span>
+          {diagMessage && <span data-testid="diagnostics-status"> {diagMessage}</span>}
+        </div>
+      )}
     </div>
   )
 }
@@ -434,7 +510,15 @@ const refStyle: React.CSSProperties = {
   fontFamily: 'monospace',
   fontWeight: 600,
 }
+const diagRowStyle: React.CSSProperties = {
+  ...baseRow,
+  background: '#20242c',
+  color: '#9aa',
+  fontSize: 11,
+  borderTop: '1px solid #2c323c',
+}
 const linkStyle: React.CSSProperties = {
+  cursor: 'pointer',
   color: '#ffd27a',
   textDecoration: 'underline',
 }

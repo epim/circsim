@@ -74,6 +74,7 @@ export default defineConfig({
             { text: 'Fix an unresolved part', link: '/guides/model-doctor' },
             { text: 'Run the Board Critic audit', link: '/guides/run-critic' },
             { text: 'Read the warnings & fidelity banner', link: '/guides/warnings' },
+            { text: 'Save a diagnostic bundle', link: '/guides/diagnostics' },
           ],
         },
       ],

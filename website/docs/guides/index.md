@@ -20,6 +20,7 @@ Task-oriented walkthroughs for specific jobs. If you're new, do the [First Light
 - **[Fix an unresolved part](./model-doctor)**: the Model Doctor: import, stub, or pin-map a part.
 - **[Run the Board Critic audit](./run-critic)**: the read-only pre-fab check.
 - **[Read the warnings & fidelity banner](./warnings)**: what every honesty surface is telling you.
+- **[Save a diagnostic bundle](./diagnostics)**: one zip of decks, log, board hash, and versions to attach to a bug report.
 
 ## See also
 

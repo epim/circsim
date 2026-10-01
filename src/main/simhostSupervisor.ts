@@ -70,8 +70,33 @@ export type ForkFn = (modulePath: string) => ChildHandle
 /** Factory that creates a fresh MessageChannel per spawn. */
 export type PortPairFactory = () => PortPair
 
+/**
+ * Why SimHost exited, derived from the child's exit code (issue #26).
+ *  - 'watchdog': the SimHost watchdog killed it (exit code 86, src/simhost/index.ts):
+ *    a solve or command stopped making progress.
+ *  - 'crashed': any other exit (a native crash in ngspice or koffi, an uncaught
+ *    exception, or the OS killing the process).
+ */
+export type CrashReason = 'watchdog' | 'crashed'
+
+/** The SimHost watchdog's exit code (src/simhost/index.ts). */
+export const WATCHDOG_EXIT_CODE = 86
+
+/** Classify a SimHost exit code. */
+export function classifyExit(exitCode: number | null): CrashReason {
+  return exitCode === WATCHDOG_EXIT_CODE ? 'watchdog' : 'crashed'
+}
+
+/** What the renderer is told when SimHost dies (contextBridge path, Spec §6.1). */
+export interface CrashedPayload {
+  willRespawn: boolean
+  /** The child's exit code; null when Electron did not report one. */
+  exitCode: number | null
+  reason: CrashReason
+}
+
 /** Callback fired when SimHost crashes (contextBridge path, Spec §6.1). */
-export type CrashedCallback = (payload: { willRespawn: boolean }) => void
+export type CrashedCallback = (payload: CrashedPayload) => void
 
 // ─── Backoff schedule ─────────────────────────────────────────────────────────
 
@@ -214,7 +239,7 @@ export class SimhostSupervisor {
 
   // ── Crash handling + backoff ───────────────────────────────────────────────
 
-  private onChildExit(_code: number): void {
+  private onChildExit(code: number): void {
     if (this.disposed) return
 
     // Detach the exit listener from the now-dead child.
@@ -243,7 +268,8 @@ export class SimhostSupervisor {
     const willRespawn = !this.isFatalThreshold()
 
     // Notify renderer via contextBridge (the MessagePort died with the process).
-    this.onSimhostCrashedCb?.({ willRespawn })
+    const exitCode = typeof code === 'number' ? code : null
+    this.onSimhostCrashedCb?.({ willRespawn, exitCode, reason: classifyExit(exitCode) })
 
     if (!willRespawn) {
       this.fatal = true
@@ -304,6 +330,11 @@ export class SimhostSupervisor {
 export async function createProductionSupervisor(opts: {
   simhostPath: string
   onSimhostCrashed: CrashedCallback
+  /**
+   * Called with every chunk the child writes, tagged by stream. Packaged apps
+   * show no console, so main keeps these in a ring for the diagnostics bundle.
+   */
+  onChildOutput?: (stream: 'stdout' | 'stderr', text: string) => void
 }): Promise<SimhostSupervisor> {
   // Dynamic import keeps Electron out of the import graph for tests.
   const { utilityProcess, MessageChannelMain } = await import('electron')
@@ -313,8 +344,14 @@ export async function createProductionSupervisor(opts: {
     // console with a prefix — invaluable for diagnosing a child that fails to
     // start or crashes (otherwise its output is invisible).
     const child = utilityProcess.fork(modulePath, [], { stdio: 'pipe' })
-    child.stdout?.on('data', (d: Buffer) => process.stdout.write('[simhost] ' + d.toString()))
-    child.stderr?.on('data', (d: Buffer) => process.stderr.write('[simhost] ' + d.toString()))
+    child.stdout?.on('data', (d: Buffer) => {
+      process.stdout.write('[simhost] ' + d.toString())
+      opts.onChildOutput?.('stdout', d.toString())
+    })
+    child.stderr?.on('data', (d: Buffer) => {
+      process.stderr.write('[simhost] ' + d.toString())
+      opts.onChildOutput?.('stderr', d.toString())
+    })
     return {
       // Transfer the RAW MessagePortMain, not the PortHandle wrapper — Electron's
       // transfer list rejects/ignores wrapper objects (this was the handshake bug).
