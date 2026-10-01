@@ -16,10 +16,38 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { inflateSync } from 'zlib'
 import { pipeAppOutput } from './util'
 
 const APP_MAIN = join(__dirname, '..', 'out', 'main', 'index.js')
 const FIXTURE = join(__dirname, '..', 'fixtures', 'fixture-555.kicad_pcb')
+
+/**
+ * Every distinct "r g b" non-stroking fill colour in a PDF's page content,
+ * rounded to two decimals. Inflates the Flate streams; fonts and images that do
+ * not inflate as text are skipped.
+ */
+function pdfFillColors(pdf: Buffer): string[] {
+  const colors = new Set<string>()
+  const raw = pdf.toString('latin1')
+  const re = /stream\r?\n/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(raw)) !== null) {
+    const start = m.index + m[0].length
+    const end = raw.indexOf('endstream', start)
+    if (end < 0) break
+    let text: string
+    try {
+      text = inflateSync(pdf.subarray(start, end)).toString('latin1')
+    } catch {
+      continue
+    }
+    for (const c of text.matchAll(/(\d*\.?\d+) (\d*\.?\d+) (\d*\.?\d+) rg\b/g)) {
+      colors.add([c[1], c[2], c[3]].map(v => Number(v).toFixed(2)).join(' '))
+    }
+  }
+  return [...colors]
+}
 
 async function launch(): Promise<{ app: ElectronApplication; page: Page }> {
   const userData = mkdtempSync(join(tmpdir(), 'circsim-e2e-userdata-'))
@@ -179,6 +207,10 @@ test.describe('setup file and report (issue #27)', () => {
     await page.getByTestId('export-report-pdf').click()
     await expect.poll(() => existsSync(pdf), { timeout: 20_000 }).toBe(true)
     expect(readFileSync(pdf).subarray(0, 5).toString('latin1')).toBe('%PDF-')
+    // The report's inline <style> must survive the session's CSP: the table header
+    // fill (th { background: #eee }) is a "0.93 0.93 0.93 rg" fill in the page
+    // content. Without the stylesheet the PDF has no such fill.
+    expect(pdfFillColors(readFileSync(pdf))).toContain('0.93 0.93 0.93')
 
     // Recent boards: after a restart the board is on the start screen list.
     const recent = await page.evaluate(() => window.circsim.getRecentBoards())

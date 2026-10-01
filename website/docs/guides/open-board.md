@@ -22,7 +22,7 @@ The **Open…** button in the top bar opens a file picker at any time. Opening a
 
 ## By drag and drop
 
-Drag a `.kicad_pcb` from your file manager straight onto the circsim window. (You can also drop a `.kicad_sch` this way to [attach a schematic](./attach-schematic) to an already-open board.)
+Drag a `.kicad_pcb` from your file manager straight onto the circsim window. circsim reads only files you open this way, with the Open button, from the recent list, or beside an opened board (the schematic and BOM), never other paths on your disk. (You can also drop a `.kicad_sch` this way to [attach a schematic](./attach-schematic) to an already-open board.)
 
 ## What happens next
 

@@ -79,6 +79,19 @@ Hover and click picking does not ray-cast the copper triangles. Copper is flat, 
 
 circsim is **MIT-licensed** and fully offline. It bundles ngspice (BSD-style) and an in-house SPICE model library written from datasheet parameters. It never bundles vendor SPICE models or KiCad's share-alike 3D assets. Every bundled model file carries a provenance header, and CI enforces the licensing rules (including excluding the GPL-encumbered `table.cm` code model) so a violation fails a build rather than shipping. The "Ask your LLM" model helper is copy-and-paste; it makes no API calls. The **About** dialog in the app shows the full license and provenance details.
 
+## How the offline promise is enforced
+
+"No network calls" is a property of the app, not a habit of its authors. The main process locks the window's session down:
+
+- **Every request that is not a local resource is cancelled.** Only `data:`, `blob:` and developer-tools URLs, and `file:` URLs for the app's own files, are allowed (in a development run, also the local dev server). A page request for any other file on your disk, such as `file:///C:/Windows/win.ini`, is cancelled too. A cancelled request is written to the diagnostics log as `[offline] blocked ...`.
+- **The spellchecker is off**, because its dictionary download is a network request on Windows and Linux. Host-name lookups are also switched off for everything except loopback.
+- **Every browser permission is refused** (camera, microphone, location, notifications, device access), apart from the clipboard write the Copy buttons use.
+- **One Content-Security-Policy**, identical in the response header and in the page, with no inline scripts or styles and no remote origin. (The hidden window that renders a report to PDF has its own session, offline and limited to its one temporary file, whose policy allows only the report's own inline stylesheet.)
+- **The window cannot open another window or navigate away** from the app page.
+- **File reads are scoped.** Beyond the app's own files, the renderer can read only a file you opened (Open button, drag and drop, the recent list, a bundled sample) and the board-adjacent files beside it: the `.kicad_sch`, a BOM `.csv`, and SPICE `.lib` files. Any other path is refused.
+
+A test opens the First Light sample, energizes it and runs the Board Critic while the main process records every request the session sees, and fails if any is not local. The 3D view's silkscreen text is drawn from a glyph atlas built on a canvas, so it needs no font download and no worker script.
+
 ## Where the code lives
 
 circsim is open source at [github.com/epim/circsim](https://github.com/epim/circsim). The high-level layout:

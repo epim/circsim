@@ -1,6 +1,6 @@
 # Install circsim
 
-circsim is a desktop app for **Windows, macOS, and Linux**. It is fully offline: nothing you open is ever uploaded, and the app makes no network calls. Download one file, run it, and you're on the bench.
+circsim is a desktop app for **Windows, macOS, and Linux**. It is fully offline: nothing you open is ever uploaded, and the app makes no network calls, and blocks any attempt to make one. Download one file, run it, and you're on the bench.
 
 ## Download
 
@@ -103,4 +103,4 @@ Don't have a board handy? That's fine: circsim ships with two sample projects yo
   Without a usable GPU (some virtual machines, remote desktops), circsim falls back to a software renderer. If WebGL cannot start at all, the 3D view shows a notice and the parts list, bench, and simulation results keep working.
 - A display of at least 1280 x 800. The window opens at that size and has no smaller layout, so a smaller screen will clip it.
 - ~250 MB of disk for the installed app.
-- No internet connection required, ever.
+- No internet connection required, ever. The app refuses network requests rather than relying on never making them ([how](../reference/architecture#how-the-offline-promise-is-enforced)).

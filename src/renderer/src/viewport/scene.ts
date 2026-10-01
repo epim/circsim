@@ -74,6 +74,30 @@ function publishLedGlow(currentsByRef: Map<string, number>): void {
   }
 }
 
+// ─── E2E silkscreen hook (issue #39) ────────────────────────────────────────────
+
+/**
+ * Shape published on `window.__circsimSilkscreen` after each board load so an
+ * E2E can assert silkscreen text actually reached the scene (before #39 the
+ * text failed silently). `meshes` is the number of silkscreen meshes in the scene
+ * and `glyphs` the number of character quads they hold; both are 0 for a board
+ * with no silkscreen text or when the glyph atlas could not be built.
+ */
+export interface SilkscreenSnapshot {
+  meshes: number
+  glyphs: number
+}
+
+function publishSilkscreen(mesh: THREE.Mesh | null): void {
+  if (typeof window === 'undefined') return
+  const index = mesh?.geometry.getIndex() ?? null
+  const snapshot: SilkscreenSnapshot = { meshes: mesh ? 1 : 0, glyphs: index ? index.count / 6 : 0 }
+  ;(window as unknown as { __circsimSilkscreen?: SilkscreenSnapshot }).__circsimSilkscreen = snapshot
+  if (typeof document !== 'undefined' && document.documentElement) {
+    document.documentElement.setAttribute('data-silkscreen-glyphs', String(snapshot.glyphs))
+  }
+}
+
 // ─── types ────────────────────────────────────────────────────────────────────
 
 export interface SceneCallbacks {
@@ -527,19 +551,25 @@ export function createSceneManager(): SceneManager {
       // Needs a canvas for the glyph atlas; best-effort, so a board still loads
       // where none is available.
       const silkEntries = buildSilkscreenEntries(board.silkscreen, board.boardThicknessMm)
+      let silkMesh: THREE.Mesh | null = null
       if (silkEntries.length > 0) {
         try {
-          const silkMesh = createSilkscreenMesh(silkEntries)
+          silkMesh = createSilkscreenMesh(silkEntries)
           if (silkMesh) {
             silkscreenGroup = new THREE.Group()
             silkscreenGroup.position.set(-cx, -cy, 0)
             silkscreenGroup.add(silkMesh)
             scene.add(silkscreenGroup)
           }
-        } catch {
-          // Silkscreen text is best-effort; the board is usable without it.
+        } catch (err) {
+          // Silkscreen text is best-effort; the board is usable without it, but
+          // say so instead of dropping the labels silently (issue #39).
+          // eslint-disable-next-line no-console
+          console.warn('[circsim] silkscreen text unavailable:', err)
+          silkMesh = null
         }
       }
+      publishSilkscreen(silkMesh)
 
       // Build the copper picking index now so the first hover does not pay for it.
       picker.warm()

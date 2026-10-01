@@ -17,3 +17,10 @@ body {
   overflow: auto;
   background: #0c0c14;
 }
+
+/* Board-open progress strip (OpenProgressBar). Lives here, not in an inline
+   <style> element, so the Content-Security-Policy can forbid inline styles. */
+@keyframes circsim-open-slide {
+  0% { left: -30%; }
+  100% { left: 100%; }
+}

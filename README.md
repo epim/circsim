@@ -21,7 +21,7 @@ More screenshots, and what circsim reads out of sixteen KiCad-written boards fro
 - **A read-only Board Critic on the layout.** It audits the board circsim did *not* design for floating nets, clearance, decoupling distance, loop area, IR-drop, ampacity, and thermal risk, and never edits your files. The simulation itself treats each net as one ideal node, so copper resistance appears in the Critic's estimates and not in the simulated voltages.
 - **Honest about what it knows.** Behavioral vs. primitive models, stubbed ICs, MCUs as interactive-pin panels (firmware doesn't run), convergence fallbacks, and fidelity limits are always visible. See [what circsim can and can't tell you](https://epim.github.io/circsim/concepts/fidelity). The same page ships inside the app.
 
-Powered by [ngspice](https://ngspice.sourceforge.io/) 46, bundled per platform and run crash-isolated in a separate process. Nothing to install; no network calls, ever.
+Powered by [ngspice](https://ngspice.sourceforge.io/) 46, bundled per platform and run crash-isolated in a separate process. Nothing to install; no network calls, ever, and the app enforces it by cancelling any request that is not a local file.
 
 ## Develop
 

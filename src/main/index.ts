@@ -9,10 +9,11 @@
  *    after the handshake (Spec §6).
  *  - Notifies the renderer via contextBridge when SimHost crashes (the dead
  *    MessagePort cannot carry this event — Spec §6.1).
- *  - CSP: allows worker-src blob: for troika-three-text (Spec §5).
+ *  - Hardening (hardening.ts, readPolicy.ts): one CSP, an offline-only session,
+ *    navigation guards, and a readFile scoped to files the user opened.
  */
 
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu, net } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, net, session as electronSession } from 'electron'
 import { join } from 'path'
 import { copyFile, readFile, rename, stat, unlink, writeFile } from 'fs/promises'
 import { release } from 'os'
@@ -26,6 +27,13 @@ import {
   validateRendererFiles
 } from './diagnosticsBundle'
 import { openFidelityDocs } from './openDocs'
+import {
+  NetAudit,
+  REPORT_CONTENT_SECURITY_POLICY,
+  installNavigationGuards,
+  installOfflineGuard,
+} from './hardening'
+import { MAX_READ_BYTES, ReadGrants, sanitizeOpenDialogOptions } from './readPolicy'
 import { sidecarPathFor } from '../core/persist/paths'
 import { MAX_SIDECAR_BYTES } from '../core/persist/sidecar'
 import { addRecent, normalizeRecent, removeRecent } from '../core/persist/recent'
@@ -74,6 +82,53 @@ function docPath(...parts: string[]): string {
 // the flag (untrusted web content) does not apply. Must run before app ready.
 app.commandLine.appendSwitch('enable-unsafe-swiftshader')
 
+// ─── Offline enforcement (issues #37, #38) ────────────────────────────────────
+
+// Belt and braces under the session's webRequest deny rule: even a request that
+// slips past it (a Chromium service, a dictionary download) cannot resolve a
+// host name. Only loopback stays resolvable, for the electron-vite dev server.
+// Must be set before app ready.
+app.commandLine.appendSwitch('host-resolver-rules', 'MAP * ~NOTFOUND , EXCLUDE localhost , EXCLUDE 127.0.0.1')
+
+/**
+ * Every request the app's sessions made, kept for tests (the E2E reads it from
+ * the main process through `globalThis.__circsimNetAudit`) and for the log.
+ */
+const netAudit = new NetAudit()
+;(globalThis as { __circsimNetAudit?: NetAudit }).__circsimNetAudit = netAudit
+
+/** The app's own page and assets; the only files the app window's requests may read. */
+const RENDERER_DIR = join(__dirname, '../renderer')
+
+function logDenied(url: string, resourceType: string): void {
+  const line = `[offline] blocked ${resourceType || 'request'}: ${url.slice(0, 200)}\n`
+  mainDiagnostics.recordOutput('stderr', line)
+  // eslint-disable-next-line no-console
+  console.warn(line.trim())
+}
+
+const guardedSessions = new WeakSet<object>()
+function guardSession(ses: Electron.Session): void {
+  if (guardedSessions.has(ses)) return
+  guardedSessions.add(ses)
+  installOfflineGuard(ses, {
+    devOrigin: process.env['ELECTRON_RENDERER_URL'] ?? null,
+    audit: netAudit,
+    onDenied: logDenied,
+    fileRoots: [RENDERER_DIR],
+  })
+}
+
+// Every WebContents gets the navigation guards, including ones created later.
+app.on('web-contents-created', (_event, contents) => {
+  installNavigationGuards(contents)
+})
+
+// ─── Readable files (issue #37) ───────────────────────────────────────────────
+
+/** Files the renderer may read: only what the user opened, dropped or picked. */
+const readGrants = new ReadGrants()
+
 // ─── Window creation ──────────────────────────────────────────────────────────
 
 function createWindow(): BrowserWindow {
@@ -85,28 +140,19 @@ function createWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      // CSP: worker-src blob: is required by troika-three-text (Spec §5).
-      // The Content-Security-Policy header is set below via session handler.
+      // The renderer is sandboxed (the Electron default, stated so it stays so);
+      // the preload only uses contextBridge, ipcRenderer and webUtils.
+      sandbox: true,
+      // No prose fields need it, and the Linux/Windows dictionary download is a
+      // network request (issue #38).
+      spellcheck: false,
     }
   })
 
-  // Set CSP via the will-navigate response, or use webContents session.
-  // For development and production: inject CSP via a handler on the session.
-  win.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [
-          "default-src 'self';" +
-          " script-src 'self' 'unsafe-inline';" +
-          " style-src 'self' 'unsafe-inline';" +
-          " worker-src blob:;" +
-          " connect-src 'self';" +
-          " img-src 'self' data: blob:;"
-        ]
-      }
-    })
-  })
+  // The offline policy and the one Content-Security-Policy header are installed
+  // on the window's session (hardening.ts). index.html carries the same CSP in a
+  // meta tag; a unit test keeps the two identical.
+  guardSession(win.webContents.session)
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     void win.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -127,9 +173,26 @@ function createWindow(): BrowserWindow {
 async function renderPdf(html: string): Promise<Buffer> {
   const tmp = join(app.getPath('temp'), `circsim-report-${process.pid}-${Date.now()}.html`)
   await writeFile(tmp, html, 'utf8')
+  // The report is one self-contained document with an inline <style>, which the
+  // app's strict CSP (style-src 'self') would strip, leaving the PDF unstyled. So
+  // it renders in its own in-memory session: offline, limited to its one temp
+  // file, with a CSP that allows only inline styles and data images.
+  const ses = electronSession.fromPartition('circsim-report')
+  installOfflineGuard(ses, {
+    audit: netAudit,
+    onDenied: logDenied,
+    fileRoots: [tmp],
+    csp: REPORT_CONTENT_SECURITY_POLICY,
+  })
   const win = new BrowserWindow({
     show: false,
-    webPreferences: { sandbox: true, javascript: false, contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      session: ses,
+      sandbox: true,
+      javascript: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
   })
   try {
     await win.loadFile(tmp)
@@ -144,15 +207,33 @@ async function renderPdf(html: string): Promise<Buffer> {
 
 function registerIpcHandlers(): void {
   /** Open a native file dialog (renderer calls via contextBridge). */
-  ipcMain.handle('circsim:openFileDialog', async (_event, opts: Electron.OpenDialogOptions) => {
+  ipcMain.handle('circsim:openFileDialog', async (_event, opts: unknown) => {
     if (!mainWindow) return null
-    const result = await dialog.showOpenDialog(mainWindow, opts)
+    // Only the title, filters and multi-select of the renderer's options are used;
+    // it is always a file picker. Whatever the user picks becomes readable.
+    const result = await dialog.showOpenDialog(mainWindow, sanitizeOpenDialogOptions(opts))
+    if (!result.canceled) for (const p of result.filePaths) readGrants.grantFile(p)
     return result
   })
 
-  /** Read a file from disk (renderer calls via contextBridge). */
-  ipcMain.handle('circsim:readFile', async (_event, filePath: string) => {
-    const buf = await readFile(filePath)
+  /**
+   * A file dropped on the window. Only the preload can send this, from the path
+   * webUtils.getPathForFile reports for a real File the user dropped.
+   */
+  ipcMain.on('circsim:grantDroppedPath', (_event, filePath: unknown) => {
+    readGrants.grantFile(filePath)
+  })
+
+  /**
+   * Read a file the user opened (dialog, drop, recent list, bundled sample) or a
+   * board-adjacent file beside one (readPolicy.ts). Anything else is refused, and
+   * a file over MAX_READ_BYTES is not read.
+   */
+  ipcMain.handle('circsim:readFile', async (_event, filePath: unknown) => {
+    const p = readGrants.assertReadable(filePath)
+    const st = await stat(p)
+    if (st.size > MAX_READ_BYTES) throw new Error('The file is too large to open (over 128 MB).')
+    const buf = await readFile(p)
     return buf.toString('utf8')
   })
 
@@ -164,9 +245,12 @@ function registerIpcHandlers(): void {
    * main-process log on every board open. Required files are still read
    * directly and error loudly.
    */
-  ipcMain.handle('circsim:fileExists', async (_event, filePath: string) => {
+  ipcMain.handle('circsim:fileExists', async (_event, filePath: unknown) => {
+    // A path the renderer could not read reports false, so this probe does not
+    // reveal what exists elsewhere on disk.
+    if (!readGrants.canRead(filePath)) return false
     try {
-      return (await stat(filePath)).isFile()
+      return (await stat(filePath as string)).isFile()
     } catch {
       return false
     }
@@ -227,7 +311,10 @@ function registerIpcHandlers(): void {
   const recentFile = (): string => join(app.getPath('userData'), 'recent-boards.json')
   const readRecent = async (): Promise<string[]> => {
     try {
-      return normalizeRecent(JSON.parse((await readFile(recentFile())).toString('utf8')))
+      const list = normalizeRecent(JSON.parse((await readFile(recentFile())).toString('utf8')))
+      // main wrote this list, so its boards are ones the user opened before.
+      for (const p of list) readGrants.grantFile(p)
+      return list
     } catch {
       return []
     }
@@ -241,9 +328,11 @@ function registerIpcHandlers(): void {
     return list
   }
   ipcMain.handle('circsim:getRecentBoards', () => readRecent())
-  ipcMain.handle('circsim:addRecentBoard', async (_event, boardPath: string) =>
-    writeRecent(addRecent(await readRecent(), boardPath)),
-  )
+  ipcMain.handle('circsim:addRecentBoard', async (_event, boardPath: string) => {
+    const list = await readRecent()
+    // Only boards the user opened this session go on the list.
+    return readGrants.canRead(boardPath) ? writeRecent(addRecent(list, boardPath)) : list
+  })
   ipcMain.handle('circsim:removeRecentBoard', async (_event, boardPath: string) =>
     writeRecent(removeRecent(await readRecent(), boardPath)),
   )
@@ -343,7 +432,9 @@ function registerIpcHandlers(): void {
    * Packaged: <resourcesPath>/sample/blinker-555.kicad_pcb (via extraResources).
    */
   ipcMain.handle('circsim:getSampleProjectPath', () => {
-    return resourcePath('sample', 'blinker-555.kicad_pcb')
+    const p = resourcePath('sample', 'blinker-555.kicad_pcb')
+    readGrants.grantFile(p)
+    return p
   })
 
   /**
@@ -352,7 +443,9 @@ function registerIpcHandlers(): void {
    * experience. Same dev/packaged resolution as getSampleProjectPath.
    */
   ipcMain.handle('circsim:getFirstLightDemoPath', () => {
-    return resourcePath('sample', 'first-light.kicad_pcb')
+    const p = resourcePath('sample', 'first-light.kicad_pcb')
+    readGrants.grantFile(p)
+    return p
   })
 
   /**
@@ -515,6 +608,9 @@ function installAppMenu(): void {
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
+  // Offline policy first, on the default session and any session made later.
+  guardSession(electronSession.defaultSession)
+  app.on('session-created', guardSession)
   registerIpcHandlers()
   installAppMenu()
 

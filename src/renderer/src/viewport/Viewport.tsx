@@ -177,7 +177,7 @@ export default function Viewport({
         </div>
       )}
       {/* DOM-accessible op-annotation data for E2E tests (Task 26).
-          The actual visual annotations are rendered by Three.js (troika-three-text);
+          The actual visual annotations are rendered by Three.js;
           this hidden div mirrors the same data for Playwright to query.
           `opacity:0.001` makes it visually invisible while still considered
           "visible" by Playwright's DOM checks (display:none fails toBeVisible). */}
