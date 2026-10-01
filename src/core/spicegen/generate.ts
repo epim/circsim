@@ -678,6 +678,23 @@ function primitiveCardNodeGroups(card: string): string[][] {
 // ─── M12: per-subckt terminal conductivity ────────────────────────────────────
 
 /**
+ * True for a behavioral current source (`b<name> n+ n- i = <expr>`) whose
+ * expression never reads the voltage across its own branch (no `v(...)`
+ * argument names n+ or n-). Such a source forces a current independent of its
+ * own terminals, so it carries no DC link between them (issue #131). Anything
+ * that might be a conductance, and every `v = ...` source, answers false.
+ */
+function isPureCurrentSource(toks: string[]): boolean {
+  const expr = toks.slice(3).join(' ')
+  if (!/^i\s*=/i.test(expr)) return false
+  const own = new Set([toks[1].toLowerCase(), toks[2].toLowerCase()])
+  for (const m of expr.matchAll(/\bv\(([^)]*)\)/gi)) {
+    if (m[1].split(',').some((arg) => own.has(arg.trim().toLowerCase()))) return false
+  }
+  return true
+}
+
+/**
  * Analog node groups of an element card INSIDE a .subckt body. Extends
  * primitiveCardNodeGroups with the shapes that appear in lib bodies but never
  * in resolve.ts primitive cards:
@@ -687,11 +704,15 @@ function primitiveCardNodeGroups(card: string): string[][] {
  *       references inside the expression (`v(inp)`, `i(vsense)`) are SENSE
  *       only and are never tokenized as nodes — the fixed slice(1,3) stops
  *       before the expression text, so `v = v(x) - v(y)` contributes nothing.
- *       KNOWN APPROXIMATION: a constant-current b-card (`i = 2u`, e.g.
- *       regulators.lib biq/bref) is an ideal current source, not true
- *       conductance, yet its branch pair unions like every other b-card.
- *       Safe direction only (merging can at most suppress a bleed the pre-M12
- *       blanket union also suppressed); pinned by the regulators.lib tests.
+ *       A PURE current source (`i = ...` whose expression never reads the
+ *       voltage across its own two nodes, e.g. the opamp.lib supply-pin sources
+ *       bsrc/biq between vcc and vee, or regulators.lib bref) forces a branch
+ *       current whatever the node voltages are, so it is NOT a DC path: each
+ *       node registers as a singleton instead of the pair unioning (issue
+ *       #131). A floating supply pin therefore stays its own island, is bled,
+ *       and is reported undriven. A current source that does read its own
+ *       node voltages (`i = v(disch,gnd)*g`) can be a conductance, so it keeps
+ *       unioning its pair, as does every voltage-source b-card.
  *
  *   unknown letters — conservative: treat the first two node tokens as a
  *       conductive pair. Merging too much can only suppress a bleed the same
@@ -706,7 +727,7 @@ function subcktBodyCardGroups(card: string, dc = false): string[][] {
   const letter = toks[0].charAt(0).toLowerCase()
   // DC view (issue #43): a capacitor passes no DC, so it joins nothing.
   if (dc && letter === 'c') return []
-  if (letter === 'b') return [toks.slice(1, 3)]
+  if (letter === 'b') return isPureCurrentSource(toks) ? [[toks[1]], [toks[2]]] : [toks.slice(1, 3)]
   if ('rclvidqjmegfh'.includes(letter)) return primitiveCardNodeGroups(card)
   // Unknown element letter inside a lib body: conservative two-node pair.
   return [toks.slice(1, 3)]

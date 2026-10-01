@@ -1838,30 +1838,52 @@ describe('generateDeck — LM339 quad comparator from the real bundled opamp.lib
 describe('M12 — subckt terminal-conductivity analysis (real bundled opamp.lib)', () => {
   const REAL_OPAMP_LIB = readFileSync(join(process.cwd(), 'resources', 'models', 'opamp.lib'), 'utf8')
 
-  test('opamp_core: inp/inn are sense-only; out, vcc and vee are one group through the supply-current sources', () => {
+  test('opamp_core: inp/inn are sense-only; out and vee conduct through the vee-referenced buffer, vcc is separate', () => {
     // Body truth: bin senses inp/inn only inside its b-source expression, so
     // neither is a branch node. The output buffer is referenced to vee (bout
-    // obuf vee, rout obuf osns, vsns osns out), and the supply-current sources
-    // (bsrc and biq) sit between vcc and vee, so out, vcc and vee conduct to one
-    // another. Both sources are scaled by the rails-present measure, so a
-    // floating rail carries no draw.
+    // obuf vee, rout obuf osns, vsns osns out), so out and vee conduct. The
+    // supply-current sources (bsrc and biq, between vcc and vee) are pure
+    // current sources, not DC paths, so vcc stays its own group (issue #131):
+    // a floating V- pin must not join the driven VCC island through them.
     expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'opamp_core')).toEqual([
-      ['inp'], ['inn'], ['out', 'vcc', 'vee'],
+      ['inp'], ['inn'], ['out', 'vee'], ['vcc'],
     ])
   })
 
-  test('LM393 (one nesting level): inp/inn sense-only; out, vcc and vee one conductive group', () => {
+  test('LM393 (one nesting level): inp/inn sense-only; out and vee conduct, vcc is separate', () => {
     expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'LM393')).toEqual([
-      ['inp'], ['inn'], ['out', 'vcc', 'vee'],
+      ['inp'], ['inn'], ['out', 'vee'], ['vcc'],
     ])
   })
 
-  test('LM339_QUAD (two nesting levels): out1-4, vcc and vee one group via the four LM393 cells; all 8 inputs sense-only', () => {
+  test('LM339_QUAD (two nesting levels): out1-4 and vee one group via the four LM393 cells, vcc separate; all 8 inputs sense-only', () => {
     expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'LM339_QUAD')).toEqual([
       ['in1p'], ['in1n'],
-      ['out1', 'out2', 'out3', 'out4', 'vcc', 'vee'],
+      ['out1', 'out2', 'out3', 'out4', 'vee'],
       ['in2p'], ['in2n'], ['in3p'], ['in3n'], ['in4p'], ['in4n'],
+      ['vcc'],
     ])
+  })
+
+  test('b-cards: a pure current source links nothing; a current source reading its own node voltage, or any voltage source, conducts (issue #131)', () => {
+    const lib = [
+      '.subckt pure a b c',
+      'bi a b i = 2m*v(c)',
+      '.ends pure',
+      '.subckt conductance a b c',
+      'bg a b i = v(a,b)*1m',
+      '.ends conductance',
+      '.subckt conductance_one a b c',
+      'bg a b I=v(a)*1m',
+      '.ends conductance_one',
+      '.subckt volt a b c',
+      'bv a b v = 2*v(c)',
+      '.ends volt',
+    ].join('\n')
+    expect(subcktTerminalConductivity(lib, 'pure')).toEqual([['a'], ['b'], ['c']])
+    expect(subcktTerminalConductivity(lib, 'conductance')).toEqual([['a', 'b'], ['c']])
+    expect(subcktTerminalConductivity(lib, 'conductance_one')).toEqual([['a', 'b'], ['c']])
+    expect(subcktTerminalConductivity(lib, 'volt')).toEqual([['a', 'b'], ['c']])
   })
 
   test('unknown subckt name → undefined (deck-gen falls back to the blanket union)', () => {
@@ -1953,10 +1975,12 @@ describe('M12 — terminal conductivity of every OTHER shipped lib (island-behav
     expect(subcktTerminalConductivity(lib('regulators.lib'), 'AMS1117-3.3')).toEqual([['vin', 'gnd', 'vout']])
   })
 
-  test('regulators.lib TL431: one full group {k,a,ref} — ref joins through the constant bref current source (pinned approximation)', () => {
-    // bshunt {k,a}; bref {ref,a} (`i = 2u`, same b-card approximation as biq).
+  test('regulators.lib TL431: {k,a} conduct; ref is a high-Z input (the constant bref current source is no DC path)', () => {
+    // bshunt {k,a} reads v(ref,a), which names its own node a, so it may be a
+    // conductance and keeps linking k-a. bref {ref,a} (`i = 2u`) is a pure
+    // current source and links nothing (issue #131).
     expect(subcktTerminalConductivity(lib('regulators.lib'), 'TL431')).toEqual([
-      ['k', 'a', 'ref'],
+      ['k', 'a'], ['ref'],
     ])
   })
 
@@ -2063,16 +2087,19 @@ describe('undriven nets: subckt-modeled chip outputs are driven (issue #43, real
    * on ground. BUF feeds nothing else. With `biasPlus` a 10k/10k divider
    * sets PLUS; without it PLUS touches only the sense-only IN+ terminal.
    */
-  function follower(subcktName: string, biasPlus: boolean) {
+  function follower(subcktName: string, biasPlus: boolean, floatVee = false) {
     const nets: CircuitNet[] = [
       { id: 1, kicadName: 'VCC', spiceNode: 'vcc', padRefs: [] },
       { id: 2, kicadName: 'PLUS', spiceNode: 'plus', padRefs: [] },
       { id: 3, kicadName: 'BUF', spiceNode: 'buf', padRefs: [] },
       { id: 4, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+      // KiCad gives an unconnected pad its own single-pad net.
+      ...(floatVee ? [{ id: 5, kicadName: 'unconnected-(U1-V-)', spiceNode: 'unconn_vee', padRefs: [] }] : []),
     ]
     const u1: Part = {
       ref: 'U1', value: subcktName, libId: 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm', layer: 'F',
-      padNet: new Map([['1', 3], ['2', 3], ['3', 2], ['4', 4], ['8', 1]]),
+      // floatVee puts pad 4 (V-) on its own unconnected net instead of ground.
+      padNet: new Map([['1', 3], ['2', 3], ['3', 2], ['4', floatVee ? 5 : 4], ['8', 1]]),
       properties: {},
     }
     const divider: Array<[string, string]> = biasPlus
@@ -2119,6 +2146,20 @@ describe('undriven nets: subckt-modeled chip outputs are driven (issue #43, real
       expect(result.lines.some(l => /^r_float_\d+ buf /.test(l))).toBe(false)
       // ... and the output stage drives BUF, so it is not an undriven net.
       expect(result.diagnostics.undrivenIslands).toEqual([])
+    },
+  )
+
+  test.each(['LM358', 'LM324', 'TL072'])(
+    '%s with V- unconnected: the floating supply pin is not hidden by the supply-current sources (issue #131)',
+    (name) => {
+      const { result } = follower(name, true, true)
+      // The model's behavioral supply-current sources (bsrc, biq) sit between vcc
+      // and vee. A current source is not a DC path, so they must not join the
+      // unconnected V- net to the driven VCC island.
+      expect(result.lines.some(l => /^x_u1 .* unconn_vee /.test(l))).toBe(true)
+      expect(result.diagnostics.undrivenIslands.flat()).toContain('unconn_vee')
+      // The bleed cards are unchanged: the island view still decides them.
+      expect(result.lines.some(l => /^r_float_\d+ unconn_vee 0 1e9$/.test(l))).toBe(true)
     },
   )
 
