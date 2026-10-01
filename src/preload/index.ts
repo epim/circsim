@@ -168,8 +168,13 @@ contextBridge.exposeInMainWorld('circsim', {
   },
 
   /**
-   * Read a file from disk by absolute path. Returns UTF-8 text. Throws if the
-   * file does not exist or the path is outside the user's home directory.
+   * Read a file by absolute path. Returns UTF-8 text. Main serves only files the
+   * user pointed at in this session: one chosen in the open dialog, dropped on
+   * the window, listed in the recent boards, or a bundled sample, plus the
+   * board-adjacent files (.kicad_sch, .csv, .lib, .sub, .cir) in the same
+   * directory. Any other path, a relative path, or a file over 128 MB rejects.
+   * A missing allowed file rejects with ENOENT. There is no home-directory rule:
+   * boards live on any drive.
    */
   readFile: async (filePath: string): Promise<string> => {
     return ipcRenderer.invoke('circsim:readFile', filePath) as Promise<string>
@@ -178,7 +183,8 @@ contextBridge.exposeInMainWorld('circsim', {
   /**
    * True when the path exists and is a regular file. Stat-based and non-throwing
    * — used to probe optional sidecar files (sibling .kicad_sch, BOM) before
-   * reading, so a missing sidecar never logs an ENOENT stack in main.
+   * reading, so a missing sidecar never logs an ENOENT stack in main. Reports
+   * false for any path readFile would refuse.
    */
   fileExists: async (filePath: string): Promise<boolean> => {
     return ipcRenderer.invoke('circsim:fileExists', filePath) as Promise<boolean>
@@ -192,7 +198,12 @@ contextBridge.exposeInMainWorld('circsim', {
    */
   getPathForFile: (file: File): string => {
     try {
-      return webUtils.getPathForFile(file)
+      const path = webUtils.getPathForFile(file)
+      // A file the user dropped is one they chose to open: tell main so readFile
+      // will serve it and its board-adjacent files. `send` is ordered before any
+      // later `invoke` from this renderer, so the grant lands before the read.
+      if (path) ipcRenderer.send('circsim:grantDroppedPath', path)
+      return path
     } catch {
       return ''
     }

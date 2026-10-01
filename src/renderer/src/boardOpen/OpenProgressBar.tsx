@@ -11,7 +11,8 @@ import React from 'react'
 import { useApp } from '../store/storeContext'
 import { OPEN_STAGE_LABEL } from './pipeline'
 
-const KEYFRAMES = `@keyframes circsim-open-slide { 0% { left: -30%; } 100% { left: 100%; } }`
+// The circsim-open-slide keyframes are in styles.css: an inline <style> element
+// would need 'unsafe-inline' in the Content-Security-Policy.
 
 export default function OpenProgressBar(): React.ReactElement | null {
   const progress = useApp(s => s.openProgress)
@@ -19,7 +20,6 @@ export default function OpenProgressBar(): React.ReactElement | null {
   const boardShown = progress.stage === 'auditing'
   return (
     <div style={stripStyle} data-testid="open-progress" data-stage={progress.stage} role="status" aria-live="polite">
-      <style>{KEYFRAMES}</style>
       <span style={{ whiteSpace: 'nowrap' }}>
         {boardShown ? 'Board loaded. ' : `Opening ${progress.fileName}: `}
         {OPEN_STAGE_LABEL[progress.stage]}

@@ -78,7 +78,7 @@ async function dumpDiagnostics(
  * failure print the renderer state before rethrowing. Always closes the app.
  */
 async function withPackagedApp(
-  body: (page: Page) => Promise<void>,
+  body: (page: Page, app: ElectronApplication) => Promise<void>,
 ): Promise<void> {
   if (process.env['CIRCSIM_REQUIRE_PACKAGED'] === '1') {
     expect(existsSync(PACKAGED_EXE), `packaged binary missing: ${PACKAGED_EXE}`).toBe(true)
@@ -95,7 +95,7 @@ async function withPackagedApp(
     await page.waitForLoadState('load')
     await page.waitForTimeout(3000)
     try {
-      await body(page)
+      await body(page, app)
     } catch (err) {
       await dumpDiagnostics(app, page, rendererLog)
       throw err
@@ -111,7 +111,7 @@ async function withPackagedApp(
 // path (the NE555 sample below always falls through to the transient-op rung,
 // issue #19).
 test('packaged app: open First Light → energize → op annotations (real ngspice from bundle)', async () => {
-  await withPackagedApp(async page => {
+  await withPackagedApp(async (page, app) => {
     await expect(page.locator('[data-testid="open-first-light-btn"]')).toBeVisible({
       timeout: 15_000,
     })
@@ -131,6 +131,30 @@ test('packaged app: open First Light → energize → op annotations (real ngspi
     await expect(page.locator('[data-testid="op-annotation"]').first()).toBeVisible({
       timeout: OP_TIMEOUT_MS,
     })
+
+    // Silkscreen text renders in the packaged build (issue #39): one mesh with
+    // glyph quads in it. Before the fix the labels never appeared.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () => (window as unknown as { __circsimSilkscreen?: { glyphs: number } }).__circsimSilkscreen?.glyphs ?? 0,
+          ),
+        { timeout: 15_000 },
+      )
+      .toBeGreaterThan(0)
+
+    // The offline promise holds in the packaged build (issue #38): the main
+    // process saw the whole open and energize and not one request left the machine.
+    await page.waitForTimeout(1500)
+    const audit = await app.evaluate(
+      () =>
+        (globalThis as unknown as { __circsimNetAudit?: { total: number; network: unknown[] } }).__circsimNetAudit ??
+        null,
+    )
+    expect(audit, 'main-process request audit is missing').not.toBeNull()
+    expect(audit!.total).toBeGreaterThan(0)
+    expect(audit!.network).toEqual([])
   })
 })
 

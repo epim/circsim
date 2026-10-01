@@ -127,7 +127,7 @@ export default function About({ open, onClose }: AboutProps): React.ReactElement
 
           <Section title="Other components">
             <ul style={ulStyle}>
-              <li>Electron, React, Three.js, zustand, troika-three-text, koffi — MIT.</li>
+              <li>Electron, React, Three.js, zustand, koffi — MIT.</li>
               <li>
                 KiCad <code>.wrl</code> 3D models are <strong>never bundled</strong>; they are
                 loaded only from the user&apos;s own KiCad install at runtime.

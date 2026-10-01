@@ -81,6 +81,12 @@ declare global {
   interface Window {
     circsim: {
       openFileDialog(opts?: CircsimOpenDialogOptions): Promise<CircsimOpenDialogResult>
+      /**
+       * Read a UTF-8 file by absolute path. Main serves only files the user opened
+       * this session (dialog, drop, recent list, bundled sample) and the
+       * board-adjacent .kicad_sch / .csv / .lib files beside them; anything else
+       * rejects.
+       */
       readFile(path: string): Promise<string>
       /**
        * True when the path exists and is a regular file (stat-based, never
