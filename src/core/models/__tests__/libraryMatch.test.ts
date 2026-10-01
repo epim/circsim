@@ -347,7 +347,7 @@ describe('resolveAll tier 3 — library matching wired into resolve pipeline', (
   })
 
   it('unknown IC with no match in library → falls through to unresolved', () => {
-    const part = makePart('U1', 'ESP32', 'Package:ESP32-WROOM-32')
+    const part = makePart('U1', 'FOO1234', 'Package:SOIC-8_3.9x4.9mm_P1.27mm')
     const circuit = makeCircuit([part])
     const [res] = resolveAll(circuit, undefined, undefined, [diodeEntry])
     expect(res.status).toBe('unresolved')

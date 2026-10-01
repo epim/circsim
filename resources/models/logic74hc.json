@@ -219,6 +219,63 @@
           "14": "DS", "15": "Q0", "16": "VCC"
         }
       }
+    },
+    "74HC02": {
+      "desc": "Quad 2-input NOR",
+      "gates": [
+        { "prim": "d_nor", "in": ["1A", "1B"], "out": "1Y" },
+        { "prim": "d_nor", "in": ["2A", "2B"], "out": "2Y" },
+        { "prim": "d_nor", "in": ["3A", "3B"], "out": "3Y" },
+        { "prim": "d_nor", "in": ["4A", "4B"], "out": "4Y" }
+      ],
+      "inputs": ["1A", "1B", "2A", "2B", "3A", "3B", "4A", "4B"],
+      "outputs": ["1Y", "2Y", "3Y", "4Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 9,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1Y", "2": "1A", "3": "1B", "4": "2Y", "5": "2A", "6": "2B",
+          "7": "GND", "8": "3A", "9": "3B", "10": "3Y", "11": "4A", "12": "4B",
+          "13": "4Y", "14": "VCC"
+        }
+      }
+    },
+    "74HC10": {
+      "desc": "Triple 3-input NAND",
+      "gates": [
+        { "prim": "d_nand", "in": ["1A", "1B", "1C"], "out": "1Y" },
+        { "prim": "d_nand", "in": ["2A", "2B", "2C"], "out": "2Y" },
+        { "prim": "d_nand", "in": ["3A", "3B", "3C"], "out": "3Y" }
+      ],
+      "inputs": ["1A", "1B", "1C", "2A", "2B", "2C", "3A", "3B", "3C"],
+      "outputs": ["1Y", "2Y", "3Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 9,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1A", "2": "1B", "3": "2A", "4": "2B", "5": "2C", "6": "2Y",
+          "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "3C", "12": "1Y",
+          "13": "1C", "14": "VCC"
+        }
+      }
+    },
+    "74HC20": {
+      "desc": "Dual 4-input NAND",
+      "gates": [
+        { "prim": "d_nand", "in": ["1A", "1B", "1C", "1D"], "out": "1Y" },
+        { "prim": "d_nand", "in": ["2A", "2B", "2C", "2D"], "out": "2Y" }
+      ],
+      "inputs": ["1A", "1B", "1C", "1D", "2A", "2B", "2C", "2D"],
+      "outputs": ["1Y", "2Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 9,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1A", "2": "1B", "4": "1C", "5": "1D", "6": "1Y",
+          "7": "GND", "8": "2Y", "9": "2A", "10": "2B", "12": "2C", "13": "2D",
+          "14": "VCC"
+        }
+      }
     }
   }
 }
