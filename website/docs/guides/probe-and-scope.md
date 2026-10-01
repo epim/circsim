@@ -15,15 +15,15 @@ Attach as many as you like: each gets its own color and its own trace.
 
 Press **`Run`**. circsim streams a live transient simulation and the scope starts drawing. Use the toolbar **Pace** control to run at `0.1×` (slow enough to watch a fast signal), `1×` (real time), or `max` (as fast as it solves). The pace you pick before pressing Run is the pace the run starts at. Press **`Pause`** to freeze, **`Resume`** (or `Run`) to continue.
 
-On a typical board `1×` is held steadily (a 1 Hz blinker takes one second per blink). If the readout next to Pace shows less than the pace you asked for, the circuit itself is the limit: a fast function generator needs a finer time step, and a stiff or switching circuit makes ngspice take many small steps. See [how the live bench keeps up](../reference/architecture#live-sample-channel).
+On a small board such as the 555 sample, `1×` is held steadily (a 1 Hz blinker takes one second per blink). A larger board can fall short of `1×`: a lantern-class board runs at about 1× to 2× real time on a desktop machine and below 1× on a slower one. The readout next to Pace shows the factor actually achieved; when it is less than the pace you asked for, the simulation itself is the limit (the size of the board and its part models, a fast function generator that needs a finer time step, or a switching circuit that makes ngspice take many small steps). See [how the live bench keeps up](../reference/architecture#live-sample-channel).
 
 ::: info Why it "comes alive"
-The transient starts from the circuit's initial state rather than a pre-solved DC point, so you watch capacitors charge and oscillators start up: the "power on and see it come alive" moment. For very long runs, circsim restarts the window every ~30 seconds to bound memory; your scope history is kept. A window is shorter than 30 seconds when its samples would not fit the simulator's 1.5 GB memory budget: a fast function generator sets a fine time step (1/200 of its period), and a board with many nets saves more per step. circsim then restarts at the shorter boundary and the log says how long the windows are (*"Transient windows are limited to …"*). At the default 10 µs step the bundled 555 blinker needs about 0.6 GB per window, so it keeps the full 30 seconds.
+The transient starts from the circuit's initial state rather than a pre-solved DC point, so you watch capacitors charge and oscillators start up: the "power on and see it come alive" moment. For very long runs, circsim restarts the window every ~30 seconds to bound memory; your scope history is kept. A window is shorter than 30 seconds when its samples would not fit the simulator's 1.5 GB memory budget: a fast function generator sets a fine time step (1/200 of its period), and a board with many nets saves more per step. circsim then restarts at the shorter boundary and the log says how long the windows are (*"Transient windows are limited to …"*). At the default 100 µs step the bundled 555 blinker needs about 60 MB per window, so it keeps the full 30 seconds.
 :::
 
 ## Frame the waveform
 
-- **Time/div**: the dropdown sets the horizontal scale, from `1µs` to `5s` (default `1ms`). Pick a value that shows a few cycles.
+- **Time/div**: the dropdown sets the horizontal scale, from `1µs` to `5s` (default `1ms`). Pick a value that shows a few cycles. When the window holds fewer simulated points than the scope has pixels across (at the default 100 µs step, `1ms`/div or finer), the trace joins the simulated points with straight lines; a function generator on the bench sets a finer step for a fast signal.
 - **Follow / Pause** (scope toolbar): Follow tracks the latest data; Pause lets you **scrub** back through history with the Scroll slider.
 
 ## Measure with cursors
