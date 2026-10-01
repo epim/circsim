@@ -9,9 +9,9 @@
  *  (1) a finite bg run's polled `samples` equal a foreground `tran` of the same
  *      deck, point for point, and the `latest` snapshot carries the final value
  *      of every unwatched vector;
- *  (2) alters (each one a bg_halt / bg_resume, during which ngspice repeats
- *      SendInitData for the same plot) and a user pause never replay or reorder
- *      the stream: sim time only moves forward;
+ *  (2) alters (each batch of them a bg_halt / bg_resume, during which ngspice
+ *      repeats SendInitData for the same plot) and a user pause never replay
+ *      or reorder the stream: sim time only moves forward;
  *  (3) samples reach the renderer on the 16 ms tick, not the 50 ms pacing tick
  *      (issue #78).
  *
@@ -110,8 +110,12 @@ describe.skipIf(!haveNgspice)('live sample channel (real libngspice)', () => {
       host.handleCommand({ type: 'stop' })
       await host.whenIdle()
 
-      const resumes = events.filter((e) => e.type === 'log' && /Doing analysis/.test(e.text)).length
-      expect(resumes, 'the run went through halt/resume cycles').toBeGreaterThanOrEqual(6)
+      // One "Doing analysis" each for the startup smoke deck and the run's
+      // start, then one per resume. Six alters 150 ms apart come faster than a
+      // halt / resume cycle (about 300 ms), so they are applied in two to four
+      // batches, plus the user's resume.
+      const starts = events.filter((e) => e.type === 'log' && /Doing analysis/.test(e.text)).length
+      expect(starts, 'the run went through halt/resume cycles').toBeGreaterThanOrEqual(4)
 
       const batches = events.filter((e): e is Samples => e.type === 'samples')
       const time = batches.flatMap((b) => Array.from(b.simTime))

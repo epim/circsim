@@ -122,7 +122,19 @@ export type { HaltOwner } from './haltCoordinator'
 interface QueueItem {
   run: () => Promise<void>
   label: string
+  /** False for the commands in CHAIN_ONLY_COMMANDS. */
+  touchesPlot: boolean
 }
+
+/**
+ * Queue items that reach ngspice only through engineChain (a halt, a resume,
+ * an alter batch, a stop) or not at all, and never rebuild or replace the
+ * plot. Every other item (a reload, an op, a foreground tran, a run start, a
+ * bench restart) sends commands to ngspice directly: it waits for the halts,
+ * resumes and alters already ordered on engineChain before it runs, and the
+ * sample tick does not read while it is queued or running.
+ */
+const CHAIN_ONLY_COMMANDS = new Set(['alterBatch', 'halt', 'resume', 'stop', 'setPace', 'watch'])
 
 // ─── SimHost orchestrator ────────────────────────────────────────────────────
 
@@ -157,6 +169,8 @@ export class SimHost {
 
   private queue: QueueItem[] = []
   private draining = false
+  /** Queued or running items that may rebuild the plot (sampleTick does not read meanwhile). */
+  private plotItems = 0
   private watchdogTimer: NodeJS.Timeout | null = null
   private lastProgress = Date.now()
 
@@ -215,6 +229,17 @@ export class SimHost {
    * the plot must not be read until that has happened.
    */
   private bgSettlingSince: number | null = null
+  /** A thread started while bgSettlingSince was set has reported itself running. */
+  private settlingThreadUp = false
+  /**
+   * The background run of this window is over by itself: it reached its stop
+   * time or ngspice gave up on it. Nothing is left to resume, and a bg_resume
+   * would only make ngspice try a fresh `run` ("run simulation not started")
+   * that never announces itself.
+   */
+  private runEnded = false
+  /** A bg_halt was issued since the thread was last started or resumed. */
+  private haltedSinceStart = false
   /** this.now() when the background thread was last started (bg_tran) or resumed. */
   private lastBgStartAt = -Infinity
   private readonly resumeGapMs: number
@@ -260,6 +285,11 @@ export class SimHost {
   /** Pending alters awaiting their coalesce window (Spec §7.4.3). */
   private pendingAlters: string[] = []
   private alterTimer: NodeJS.Timeout | null = null
+  /**
+   * An alter batch is ordered and has not applied its alters yet: it takes
+   * every alter pending when it gets to them, so no new batch is needed.
+   */
+  private alterStepPending = false
 
   /** Periodic timers (pacing + status report, and the separate sample tick). */
   private pacingTimer: NodeJS.Timeout | null = null
@@ -296,8 +326,12 @@ export class SimHost {
     // commands run strictly in request order on engineChain, and a resume
     // waits for the old thread to be gone (see runResume).
     this.halt = new HaltCoordinator({
-      halt: () => this.chain(() => this.runHalt()),
-      resume: () => this.chain(() => this.runResume())
+      halt: () => {
+        void this.chain(() => this.runHalt())
+      },
+      resume: () => {
+        void this.chain(() => this.runResume())
+      }
     })
 
     // Wire the engine event stream now (registration only — no init required), so
@@ -344,7 +378,19 @@ export class SimHost {
         break
       case 'bgRunning':
         this.bgThreadRunning = ev.running
-        if (ev.running) this.bgEverRan = true
+        if (ev.running) {
+          this.bgEverRan = true
+          if (this.bgSettlingSince !== null) this.settlingThreadUp = true
+        } else if (this.bgSettlingSince !== null && this.settlingThreadUp) {
+          // The thread a bg_tran / bg_resume started has ended without
+          // announcing a plot: ngspice had nothing to run (a resume after the
+          // run completed or failed answers "run simulation not started").
+          // No announcement is coming, so stop waiting for one, and resume
+          // nothing more in this window.
+          this.bgSettlingSince = null
+          this.settlingThreadUp = false
+          if (this.tran) this.runEnded = true
+        }
         this.noteProgress()
         break
       case 'initData':
@@ -353,6 +399,7 @@ export class SimHost {
         // first one after the run starts (sampler still null) opens a plot.
         // Restarting the read cursor on a resume would replay the whole history.
         this.bgSettlingSince = null
+        this.settlingThreadUp = false
         if (this.tran && !this.sampler) {
           const scale = ev.names.find(isScaleVectorName) ?? 'time'
           const names = ev.names.filter((n) => n !== scale)
@@ -459,9 +506,7 @@ export class SimHost {
         })
         break
       case 'stop':
-        this.enqueue('stop', async () => {
-          this.stopTransient()
-        })
+        this.enqueue('stop', () => this.stopTransient())
         break
       case 'setPace':
         this.enqueue('setPace', async () => {
@@ -616,6 +661,9 @@ export class SimHost {
     this.sampler = null
     this.vectorsEmitted = false
     this.halt.clear()
+    this.runEnded = false
+    this.haltedSinceStart = false
+    this.settlingThreadUp = false
 
     this.tran = {
       tstep,
@@ -647,8 +695,9 @@ export class SimHost {
   sampleTick(): void {
     // A queue item (loadCircuit's `destroy all`, an op, a bench restart) may be
     // rebuilding the plot on another thread, and a bg_resume is still starting
-    // the simulation thread: never read while either is in progress.
-    if (!this.tran || !this.sampler || this.draining) return
+    // the simulation thread: never read while either is in progress. (An alter
+    // batch does neither: reads go on through a knob drag.)
+    if (!this.tran || !this.sampler || this.plotItems > 0) return
     if (this.bgSettlingSince !== null) {
       // Bounded: a resume that never announces itself (nothing left to run)
       // must not silence the stream for good.
@@ -861,16 +910,17 @@ export class SimHost {
    * it is halted most of the wall clock), and an alter batch halts it too.
    * Those halts are the engine's own scheduling, the run is still going. Not
    * live: finished, paused by the user, or the thread stopped with nothing
-   * ordered to restart it (the run ended or failed on its own).
+   * ordered to restart it (the run ended or failed on its own). A continuous
+   * run whose window ran to its stop is live: the next window is due.
    */
   private runIsLive(t: NonNullable<SimHost['tran']>): boolean {
     if (t.finished || this.halt.isUserPaused()) return false
-    return (
-      this.engine.isRunning() ||
-      this.halt.getOwner() !== 'none' ||
-      this.chainPending > 0 ||
-      this.bgSettlingSince !== null
-    )
+    if (this.engine.isRunning()) return true
+    if (t.continuous && t.head >= t.windowStop) return true
+    // Over by itself: halts and resumes still on their way (a knob being
+    // turned) do not bring it back, see runResume.
+    if (this.runEnded) return false
+    return this.halt.getOwner() !== 'none' || this.chainPending > 0 || this.bgSettlingSince !== null
   }
 
   private reportStatus(): void {
@@ -899,6 +949,9 @@ export class SimHost {
     this.stopPeriodicTimers()
 
     this.enqueue('benchRestart', async () => {
+      // The halts, resumes and alters already ordered have run (see drain; a
+      // resume sees tran gone and skips itself), and none can be added while
+      // tran is null, so the bg_halt below is the last word on the old thread.
       await this.waitBgSettled()
       await this.engine.command('bg_halt', false)
       await this.waitForHalt()
@@ -924,10 +977,10 @@ export class SimHost {
     this.stopPeriodicTimers()
   }
 
-  private stopTransient(): void {
+  private async stopTransient(): Promise<void> {
     // Through the chain: a resume still waiting out its settle gap must not run
     // after this halt (runResume also sees tran gone).
-    this.chain(() => this.runHalt())
+    const halted = this.chain(() => this.runHalt())
     this.halt.clear()
     // Flush whatever remains so the renderer sees the tail. Reading a halting
     // plot is safe: the reads hold the realloc lock and the vectors only grow.
@@ -935,6 +988,9 @@ export class SimHost {
     this.tran = null
     this.sampler = null
     this.stopPeriodicTimers()
+    // The next command (a reload's `destroy all`, a new bg_tran) must not
+    // reach ngspice before this halt has.
+    await halted
   }
 
   // ── convergence detection (Spec §7.4.6) ────────────────────────────────────
@@ -1070,28 +1126,56 @@ export class SimHost {
     if (this.disableTimers && this.alterTimer.unref) this.alterTimer.unref()
   }
 
-  /** Drain pending alters inside one halt/resume window, respecting haltOwner. */
+  /**
+   * Drain pending alters inside one halt/resume window, respecting haltOwner.
+   * The alters are applied on engineChain, behind the halt that precedes them
+   * (this batch's own, or the user's / pacing's that already holds the
+   * thread) and ahead of the resume, which is ordered after them. Issued
+   * straight from the queue, they overtook a bg_resume still waiting out its
+   * settle gap and landed on a thread that was starting: ngspice aborted the
+   * run (PR #129 review).
+   *
+   * At most one batch is waiting to apply its alters, and it takes every alter
+   * pending when it gets to them: a knob dragged faster than one halt/resume
+   * cycle is applied a batch at a time instead of piling up a cycle per alter,
+   * and the queue is never held up by a batch, so a pause or a stop during a
+   * drag is not either.
+   */
   flushAlters(): void {
-    if (this.pendingAlters.length === 0) return
-    const alters = this.pendingAlters
-    this.pendingAlters = []
+    if (this.pendingAlters.length === 0 || this.alterStepPending) return
+    this.alterStepPending = true
     this.enqueue('alterBatch', async () => {
-      // Halt, then WAIT for the bg thread to actually stop before applying alters.
-      // bg_halt only requests the background thread to pause; an alter issued
-      // before the thread has stopped races and is silently dropped (verified
-      // against ngspice 46 — the alter must land while the engine is halted).
       const tookHalt = this.halt.requestHalt('alter')
-      const wasRunning = tookHalt
-      if (wasRunning) await this.waitForHalt()
-      for (const a of alters) {
-        await this.engine.command(a, false)
-      }
-      // If the user paused, we keep their pause (a non-owner resume is a no-op in
-      // the coordinator); otherwise the alter batch resumes the run.
-      if (tookHalt) {
-        this.halt.requestResume('alter')
-      }
+      this.chain(() => this.runAlters()).catch((e: unknown) => {
+        this.emit({ type: 'log', level: 'error', text: `alter failed: ${(e as Error).message}` })
+      })
+      // If the user paused, we keep their pause (a non-owner resume is a no-op
+      // in the coordinator); otherwise the alter batch resumes the run.
+      if (tookHalt) this.halt.requestResume('alter')
     })
+  }
+
+  /**
+   * Apply the pending alters, as ordered on engineChain. WAIT for the bg thread
+   * to actually stop first: bg_halt only requests the background thread to
+   * pause, and an alter issued before the thread has stopped races and is
+   * silently dropped (verified against ngspice 46: the alter must land while
+   * the engine is halted).
+   */
+  private async runAlters(): Promise<void> {
+    let alters: string[] = []
+    try {
+      await this.waitForHalt()
+      await this.waitThreadGone()
+    } finally {
+      // From here on a new alter needs a batch of its own.
+      this.alterStepPending = false
+      alters = this.pendingAlters
+      this.pendingAlters = []
+    }
+    for (const a of alters) {
+      await this.engine.command(a, false)
+    }
   }
 
   /**
@@ -1122,18 +1206,50 @@ export class SimHost {
     if (wait > 0) await sleep(wait)
   }
 
-  /** Append a bg_halt / bg_resume command to engineChain (strict request order). */
-  private chain(run: () => Promise<void>): void {
+  /**
+   * Append a step (bg_halt, bg_resume, an alter batch) to engineChain: it runs
+   * after every step ordered before it. The returned promise settles with the
+   * step; a step that fails does not stop the ones after it.
+   */
+  private chain(run: () => Promise<void>): Promise<void> {
     this.chainPending++
-    this.engineChain = this.engineChain.then(run).finally(() => {
-      this.chainPending--
-    })
+    const step = this.engineChain.then(run)
+    this.engineChain = step
+      .catch(() => {
+        /* reported to the step's own caller */
+      })
+      .finally(() => {
+        this.chainPending--
+      })
+    return step
+  }
+
+  /**
+   * Wait (bounded) for the halted thread's final BGThreadRunning: bg_halt
+   * returns, and ngSpice_running() drops, a little before the thread has
+   * finished unwinding. No-op when the settle gap is disabled (unit tests).
+   */
+  private async waitThreadGone(): Promise<void> {
+    if (this.resumeGapMs <= 0) return
+    const deadline = this.now() + 500
+    while (this.bgThreadRunning && this.now() < deadline) await sleep(5)
   }
 
   /** bg_halt, as ordered on engineChain. Never rejects: the chain must keep going. */
   private async runHalt(): Promise<void> {
     await this.waitBgSettled()
     try {
+      // A thread that announced itself, was not halted since, and is no longer
+      // running ended by itself: the run reached its stop time or failed.
+      if (
+        this.tran &&
+        !this.haltedSinceStart &&
+        this.bgSettlingSince === null &&
+        !this.engine.isRunning()
+      ) {
+        this.runEnded = true
+      }
+      this.haltedSinceStart = true
       await this.engine.command('bg_halt', false)
     } catch {
       /* engine gone: nothing left to halt */
@@ -1144,24 +1260,38 @@ export class SimHost {
   /**
    * bg_resume, as ordered on engineChain: wait until the thread that was halted
    * has reported itself stopped and RESUME_GAP_MS have passed since bg_halt
-   * completed (see RESUME_GAP_MS), then resume. Skipped if the run was stopped
-   * or replaced in the meantime.
+   * completed (see RESUME_GAP_MS), then resume. Skipped if the run was stopped,
+   * replaced or finished in the meantime, or has ended by itself (see runEnded):
+   * a resume then never announces itself, and the sample tick would wait for
+   * it.
    */
   private async runResume(): Promise<void> {
-    if (!this.tran) return
+    if (!this.resumable()) return
     if (this.resumeGapMs > 0) {
-      const deadline = this.now() + 500
-      while (this.bgThreadRunning && this.now() < deadline) await sleep(5)
+      await this.waitThreadGone()
       const wait = this.haltDoneAt + this.resumeGapMs - this.now()
       if (wait > 0) await sleep(wait)
-      if (!this.tran) return
+      if (!this.resumable()) return
     }
     this.bgSettlingSince = this.lastBgStartAt = this.now()
+    this.settlingThreadUp = false
+    this.haltedSinceStart = false
     try {
       await this.engine.command('bg_resume', false)
     } catch {
       this.bgSettlingSince = null
     }
+  }
+
+  /**
+   * Whether a resume ordered earlier should still reach ngspice. Not when the
+   * run is gone, finished or over by itself, and not when a halt has been
+   * requested since (a pause pressed during a knob drag): that halt is behind
+   * this resume on engineChain, and starting the thread only to halt it again
+   * would cost a whole halt / resume cycle.
+   */
+  private resumable(): boolean {
+    return this.tran !== null && !this.tran.finished && !this.runEnded && !this.halt.isHalted()
   }
 
   // ── haltOwner accessors (tests) ────────────────────────────────────────────
@@ -1173,7 +1303,9 @@ export class SimHost {
   // ── queue + watchdog ────────────────────────────────────────────────────
 
   private enqueue(label: string, run: () => Promise<void>): void {
-    this.queue.push({ label, run })
+    const touchesPlot = !CHAIN_ONLY_COMMANDS.has(label)
+    if (touchesPlot) this.plotItems++
+    this.queue.push({ label, run, touchesPlot })
     this.scheduleDrain()
   }
 
@@ -1190,6 +1322,9 @@ export class SimHost {
         const item = this.queue.shift()!
         this.noteProgress()
         try {
+          // Commands sent to ngspice directly never overlap a halt, resume or
+          // alter batch ordered before them (CHAIN_ONLY_COMMANDS).
+          if (item.touchesPlot) await this.engineChain
           await item.run()
         } catch (e) {
           this.emit({
@@ -1197,6 +1332,8 @@ export class SimHost {
             level: 'error',
             text: `command "${item.label}" failed: ${(e as Error).message}`
           })
+        } finally {
+          if (item.touchesPlot) this.plotItems--
         }
         this.noteProgress()
       }

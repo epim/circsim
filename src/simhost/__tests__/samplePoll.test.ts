@@ -598,6 +598,12 @@ describe('halting and resuming the background thread', () => {
 
   it('leaves a resumed thread alone until it has announced itself and run a moment', async () => {
     const engine = new StubEngine()
+    const stamps: Record<string, number> = {}
+    const command = engine.command.bind(engine)
+    engine.command = (cmd: string): Promise<void> => {
+      if (cmd === 'bg_halt' || cmd === 'bg_resume') stamps[cmd] = Date.now()
+      return command(cmd)
+    }
     const { host } = settlingHost(engine, 20)
     host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-4, tstopSeconds: 30 })
     await host.whenIdle()
@@ -608,13 +614,38 @@ describe('halting and resuming the background thread', () => {
     await host.whenIdle()
     await sleepMs(30)
     host.handleCommand({ type: 'resume' })
+    await host.whenIdle() // the settle gap has passed: the bg_resume is out
+    expect(engine.commands).toContain('bg_resume')
     host.handleCommand({ type: 'halt' }) // right behind the resume
     await host.whenIdle()
     await sleepMs(200)
 
-    // bg_halt, bg_resume (which announces itself in the stub), then the second bg_halt.
+    // bg_halt, bg_resume (which announces itself in the stub), then the second
+    // bg_halt only once the resumed thread has run a moment.
     const order = engine.commands.filter((c) => c === 'bg_halt' || c === 'bg_resume')
     expect(order).toEqual(['bg_halt', 'bg_resume', 'bg_halt'])
+    expect(stamps['bg_halt'] - stamps['bg_resume']).toBeGreaterThanOrEqual(45)
+    await host.dispose()
+  })
+
+  it('a resume still waiting when a new halt is asked for is dropped, not started and halted again', async () => {
+    const engine = new StubEngine()
+    const { host } = settlingHost(engine, 60)
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-4, tstopSeconds: 30 })
+    await host.whenIdle()
+    engine.pushPoint({ time: 1e-4, out: 1 })
+    await sleepMs(80)
+
+    host.handleCommand({ type: 'halt' })
+    await host.whenIdle()
+    host.handleCommand({ type: 'resume' }) // waits out the 60 ms settle gap
+    host.handleCommand({ type: 'halt' }) // paused again before it is out
+    await host.whenIdle()
+    await sleepMs(200)
+
+    expect(engine.commands.filter((c) => c === 'bg_resume')).toEqual([])
+    expect(host.getHaltOwner()).toBe('user')
+    expect(engine.running).toBe(false)
     await host.dispose()
   })
 
@@ -658,5 +689,223 @@ describe('halting and resuming the background thread', () => {
     expect(engine.commands).not.toContain('bg_resume')
     expect(engine.running).toBe(false)
     await host.dispose()
+  })
+
+  it('a run started right after a stop reaches ngspice only after the stop has halted the old one', async () => {
+    const engine = new StubEngine()
+    const { host } = settlingHost(engine, 30)
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-4, tstopSeconds: 30 })
+    await host.whenIdle()
+    engine.pushPoint({ time: 1e-4, out: 1 })
+    // Stop and Run again at once: the stop's halt still waits for the young
+    // thread to have run a moment.
+    host.handleCommand({ type: 'stop' })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-4, tstopSeconds: 30 })
+    await host.whenIdle()
+    await sleepMs(150)
+    const order = engine.commands.filter((c) => c === 'bg_halt' || c.startsWith('bg_tran'))
+    expect(order).toEqual(['bg_tran 0.0001 30 uic', 'bg_halt', 'bg_tran 0.0001 30 uic'])
+    expect(engine.running).toBe(true) // the new run was not halted by the old stop
+    await host.dispose()
+  })
+})
+
+describe('knob drags: alters at a steady cadence (PR #129 review)', () => {
+  const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+  /** Real clock and settle gap; records whether the thread was running when each alter reached the engine. */
+  function dragHost(engine: StubEngine, gapMs: number): { host: SimHost; events: SimEvent[]; altersWhileRunning: string[] } {
+    const events: SimEvent[] = []
+    const altersWhileRunning: string[] = []
+    const command = engine.command.bind(engine)
+    engine.command = (cmd: string): Promise<void> => {
+      if (cmd.startsWith('alter') && engine.running) altersWhileRunning.push(cmd)
+      return command(cmd)
+    }
+    const host = new SimHost({
+      engine,
+      emit: (e) => events.push(e),
+      disableWatchdog: true,
+      disableTimers: true,
+      resumeGapMs: gapMs
+    })
+    return { host, events, altersWhileRunning }
+  }
+
+  const turn = (host: SimHost, volts: number): void => {
+    host.handleCommand({ type: 'alter', device: 'v1', value: volts })
+    host.flushAlters() // the 30 ms coalesce window, closed now
+  }
+
+  const haltsResumesAlters = (engine: StubEngine): string[] =>
+    engine.commands.filter((c) => c === 'bg_halt' || c === 'bg_resume' || c.startsWith('alter'))
+
+  it('an alter is applied inside its own halt / resume window, never ahead of a resume still waiting out its gap', async () => {
+    const engine = new StubEngine()
+    const { host, altersWhileRunning } = dragHost(engine, 60)
+    host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-4, tstopSeconds: 30 })
+    await host.whenIdle()
+    engine.pushPoint({ time: 1e-4, out: 1 })
+    await sleepMs(80)
+
+    turn(host, 6)
+    await host.whenIdle() // applied; its bg_resume now waits out the 60 ms gap
+    turn(host, 7) // the next step of the drag lands inside that gap
+    await host.whenIdle()
+    await sleepMs(300)
+
+    expect(haltsResumesAlters(engine)).toEqual([
+      'bg_halt',
+      'alter v1 = 6',
+      'bg_resume',
+      'bg_halt',
+      'alter v1 = 7',
+      'bg_resume'
+    ])
+    expect(altersWhileRunning).toEqual([])
+    await host.dispose()
+  })
+
+  it('alters that arrive while a batch waits for its halt join that batch', async () => {
+    const engine = new StubEngine()
+    const { host, altersWhileRunning } = dragHost(engine, 60)
+    host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-4, tstopSeconds: 30 })
+    await host.whenIdle()
+    engine.pushPoint({ time: 1e-4, out: 1 })
+    await sleepMs(80)
+
+    turn(host, 6)
+    await host.whenIdle()
+    turn(host, 7) // waits behind the resume of the 6 V batch
+    await sleepMs(10)
+    turn(host, 8) // the drag goes on meanwhile
+    turn(host, 9)
+    await host.whenIdle()
+    await sleepMs(300)
+
+    // One halt / resume cycle per batch, not one per alter.
+    expect(haltsResumesAlters(engine)).toEqual([
+      'bg_halt',
+      'alter v1 = 6',
+      'bg_resume',
+      'bg_halt',
+      'alter v1 = 7',
+      'alter v1 = 8',
+      'alter v1 = 9',
+      'bg_resume'
+    ])
+    expect(altersWhileRunning).toEqual([])
+    await host.dispose()
+  })
+
+  it('a pause during a drag is not held up behind the alter batches', async () => {
+    const engine = new StubEngine()
+    const { host } = dragHost(engine, 60)
+    host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-4, tstopSeconds: 30 })
+    await host.whenIdle()
+    engine.pushPoint({ time: 1e-4, out: 1 })
+    await sleepMs(80)
+
+    turn(host, 6)
+    await host.whenIdle()
+    turn(host, 7) // its halt waits behind the 6 V batch's resume
+    host.handleCommand({ type: 'halt' })
+    await host.whenIdle() // the command queue is free at once
+    expect(host.getHaltOwner()).toBe('user')
+    expect(engine.commands).not.toContain('alter v1 = 7')
+    turn(host, 8) // still dragging while paused: applied, never resumed
+    await host.whenIdle()
+    await sleepMs(300)
+
+    // Both batches' resumes are dropped: the pause asked for since then would
+    // only halt the thread again (the bg_halts after the first find it halted).
+    expect(haltsResumesAlters(engine)).toEqual([
+      'bg_halt',
+      'alter v1 = 6',
+      'bg_halt',
+      'alter v1 = 7',
+      'alter v1 = 8',
+      'bg_halt'
+    ])
+    expect(engine.running).toBe(false)
+    await host.dispose()
+  })
+
+  it('samples keep flowing while an alter batch waits for its halt', async () => {
+    const engine = new StubEngine()
+    const { host, events } = dragHost(engine, 60)
+    host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-4, tstopSeconds: 30 })
+    await host.whenIdle()
+    engine.pushPoint({ time: 1e-4, out: 1 })
+    await sleepMs(80)
+    turn(host, 6)
+    await host.whenIdle()
+    turn(host, 7) // in the queue, waiting behind the 6 V batch's resume
+    await sleepMs(10)
+    expect(engine.commands).not.toContain('alter v1 = 7')
+
+    engine.pushPoint({ time: 2e-4, out: 2 })
+    host.sampleTick()
+    const delivered = samplesOf(events).flatMap((b) => Array.from(b.simTime))
+    expect(delivered).toEqual([1e-4, 2e-4])
+    await host.whenIdle()
+    await host.dispose()
+  })
+
+  it('a run that ended by itself is not resumed by a knob turn, and its tail is delivered at once', async () => {
+    const engine = new StubEngine()
+    let t = 1000
+    const { host, events } = makeHost({ engine, now: () => t }) // the settle bound never runs out on this clock
+    await startRun(host)
+    for (let i = 1; i <= 5; i++) engine.pushPoint({ time: i, out: i })
+    host.sampleTick()
+    for (let i = 6; i <= 10; i++) engine.pushPoint({ time: i, out: i }) // computed, not delivered yet
+    engine.endRun() // ngspice stopped by itself (the run failed, or reached its stop)
+
+    for (let k = 0; k < 5; k++) {
+      turn(host, 6 + k)
+      await host.whenIdle()
+      await settle()
+      host.sampleTick()
+    }
+
+    expect(engine.commands.filter((c) => c === 'bg_resume')).toEqual([])
+    expect(engine.commands.filter((c) => c.startsWith('alter'))).toHaveLength(5)
+    const delivered = samplesOf(events).flatMap((b) => Array.from(b.simTime))
+    expect(delivered).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    t += 1000
+    host.pacingTick()
+    const status = [...events].reverse().find((e) => e.type === 'status') as Extract<SimEvent, { type: 'status' }>
+    expect(status.running).toBe(false) // over, though the knob keeps halting and "resuming" it
+  })
+
+  it('a resume that finds the run already over stops the wait for its announcement and is not repeated', async () => {
+    const engine = new StubEngine()
+    const { host, events } = makeHost({ engine })
+    await startRun(host)
+    for (let i = 1; i <= 3; i++) engine.pushPoint({ time: i, out: i })
+    host.sampleTick()
+    host.handleCommand({ type: 'halt' })
+    await host.whenIdle()
+    await settle()
+    // The run had reached its end just as the halt arrived: there is nothing
+    // left to resume, which only the resume itself finds out.
+    for (let i = 4; i <= 6; i++) engine.pushPoint({ time: i, out: i })
+    engine.endRun()
+
+    host.handleCommand({ type: 'resume' })
+    await host.whenIdle()
+    await settle()
+    host.sampleTick()
+    expect(samplesOf(events).flatMap((b) => Array.from(b.simTime))).toEqual([1, 2, 3, 4, 5, 6])
+
+    turn(host, 7)
+    await host.whenIdle()
+    await settle()
+    expect(engine.commands.filter((c) => c === 'bg_resume')).toHaveLength(1)
   })
 })

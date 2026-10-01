@@ -28,6 +28,13 @@ export class StubEngine implements SpiceEngine {
   reads = 0
   /** Vector names that exist in the plot but have no readable data. */
   unreadable = new Set<string>()
+  /**
+   * The run is over (it reached its stop time or failed). As in ngspice, a
+   * bg_resume then starts a thread that finds nothing to run ("run simulation
+   * not started"): it reports itself running and stopped, and never announces
+   * a plot.
+   */
+  ended = false
   private initSent = false
 
   init(): void {}
@@ -46,16 +53,28 @@ export class StubEngine implements SpiceEngine {
     this.commands.push(cmd)
     if (cmd.startsWith('bg_tran')) {
       this.running = true
+      this.ended = false
       this.initSent = false
       this.plot = {}
     }
     if (cmd === 'bg_halt') this.running = false
     if (cmd === 'bg_resume') {
-      this.running = true
-      // ngspice re-announces the (continuing) plot on every resume.
-      this.emit({ type: 'initData', plot: 'tran1', analysisType: 'transient', names: this.initNames })
+      if (this.ended) {
+        this.emit({ type: 'bgRunning', running: true })
+        this.emit({ type: 'bgRunning', running: false })
+      } else {
+        this.running = true
+        // ngspice re-announces the (continuing) plot on every resume.
+        this.emit({ type: 'initData', plot: 'tran1', analysisType: 'transient', names: this.initNames })
+      }
     }
     return Promise.resolve()
+  }
+
+  /** The run reaches its end by itself: the thread stops, nothing is left to resume. */
+  endRun(): void {
+    this.running = false
+    this.ended = true
   }
   currentPlot(): string {
     return 'tran1'

@@ -41,6 +41,8 @@ Pacing works on delivery rather than on the solver: ngspice may run a little ahe
 
 Pausing, a knob turn (which halts the solver for a moment) and the pacing halt all go through one ordered queue. ngspice's background thread must never be halted while it is still starting, and a resumed thread needs a moment before it is halted again, so circsim spaces halts and resumes by a fixed settle time (about 50 to 120 ms). Without it a fast simulation crashed ngspice on the resume after such a halt.
 
+A knob turn's new values travel in that same queue, after its halt and before its resume, so a value never reaches ngspice while the solver's thread is starting (that aborted the run). One halt and resume takes about a third of a second, so a knob dragged faster than that is applied in batches: values that arrive while a batch waits for its halt join that batch. Pause and Stop do not wait behind a drag, and a resume that a pause has overtaken is dropped rather than started and halted again. A run that is over (it reached its stop time, or ngspice gave up on it) is not resumed again, so turning a knob after the end never holds back the last samples or keeps the toolbar on Running.
+
 On measured benches (a 555 astable at the default step, a lantern-shaped board of about 70 vectors) the achieved factor is far above 1×, so `1×` is held rather than missed; the integration test `realtime.integration.test.ts` pins that.
 
 ::: info AC analysis
