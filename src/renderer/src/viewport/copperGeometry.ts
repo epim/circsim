@@ -463,17 +463,16 @@ function layerSide(layer: string): 'F' | 'B' | null {
 
 export type CopperEntry = { F?: THREE.BufferGeometry; B?: THREE.BufferGeometry }
 
+type CopperAccum = Map<number, { F: THREE.BufferGeometry[]; B: THREE.BufferGeometry[] }>
+
 /**
- * Build copper geometry for a board.
- *
- * Returns Map<netId, { F?, B? }> where F and B are merged BufferGeometries
- * for front/back copper layers respectively.
- *
- * One geometry per (net, layer) so it can be tinted per net for voltage overlay.
+ * Collect every copper primitive (tracks, pads, zones) of a board as flat
+ * geometries grouped by net and side. Shared by buildCopper (one merged
+ * geometry per net and side) and buildCopperLayers (one geometry per side).
  */
-export function buildCopper(board: BoardModel): Map<number, CopperEntry> {
+function collectCopper(board: BoardModel): CopperAccum {
   // Accumulate geometries: netId → layer → BufferGeometry[]
-  const accum = new Map<number, { F: THREE.BufferGeometry[]; B: THREE.BufferGeometry[] }>()
+  const accum: CopperAccum = new Map()
 
   function getAccum(netId: number) {
     if (!accum.has(netId)) accum.set(netId, { F: [], B: [] })
@@ -545,6 +544,22 @@ export function buildCopper(board: BoardModel): Map<number, CopperEntry> {
     if (geo) addGeo(zone.netId, side, geo)
   }
 
+  return accum
+}
+
+/**
+ * Build copper geometry for a board.
+ *
+ * Returns Map<netId, { F?, B? }> where F and B are merged BufferGeometries
+ * for front/back copper layers respectively.
+ *
+ * One geometry per (net, layer). The viewport itself uses buildCopperLayers
+ * (one geometry per layer, #57); this per-net form stays for callers that need
+ * a net's own geometry.
+ */
+export function buildCopper(board: BoardModel): Map<number, CopperEntry> {
+  const accum = collectCopper(board)
+
   // ── Merge per (net, layer) ──
   const result = new Map<number, CopperEntry>()
 
@@ -562,6 +577,92 @@ export function buildCopper(board: BoardModel): Map<number, CopperEntry> {
   }
 
   return result
+}
+
+// ─── layered copper (one geometry per side, #57) ───────────────────────────────
+
+export interface CopperLayers {
+  /** netIds[i] is the net that vertices with netIndex === i belong to. */
+  netIds: number[]
+  /** Front copper, or undefined when no net has front copper. */
+  F?: THREE.BufferGeometry
+  /** Back copper, or undefined when no net has back copper. */
+  B?: THREE.BufferGeometry
+}
+
+/**
+ * Concatenate flat geometries into one non-indexed geometry with a per-vertex
+ * `netIndex` float attribute. Positions only: every copper primitive is flat
+ * and the material needs no uv or normal.
+ */
+function concatLayer(
+  parts: { geo: THREE.BufferGeometry; netIndex: number }[]
+): THREE.BufferGeometry | undefined {
+  // Indexed primitives (CircleGeometry) are expanded so every part is a
+  // plain triangle list.
+  const lists: { pos: ArrayLike<number>; netIndex: number }[] = []
+  let total = 0
+  for (const { geo, netIndex } of parts) {
+    const src = geo.getIndex() ? geo.toNonIndexed() : geo
+    const attr = src.getAttribute('position')
+    if (!attr || attr.count === 0) continue
+    lists.push({ pos: attr.array, netIndex })
+    total += attr.count
+  }
+  if (total === 0) return undefined
+
+  const positions = new Float32Array(total * 3)
+  const netIndex = new Float32Array(total)
+  let v = 0
+  for (const { pos, netIndex: ni } of lists) {
+    positions.set(pos as Float32Array, v * 3)
+    const n = pos.length / 3
+    netIndex.fill(ni, v, v + n)
+    v += n
+  }
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geo.setAttribute('netIndex', new THREE.BufferAttribute(netIndex, 1))
+  return geo
+}
+
+/**
+ * Build copper as ONE geometry per board side with a per-vertex `netIndex`
+ * attribute, so the whole copper set is two draw calls however many nets the
+ * board has. Net tint and hover live in the NetTintTable texture (netTint.ts),
+ * indexed by netIndex.
+ *
+ * Triangle order is net-major: all of net 0's triangles, then net 1's, and so
+ * on, so a net's triangles are contiguous in each layer.
+ */
+export function buildCopperLayers(board: BoardModel): CopperLayers {
+  const accum = collectCopper(board)
+
+  const netIds: number[] = []
+  const fParts: { geo: THREE.BufferGeometry; netIndex: number }[] = []
+  const bParts: { geo: THREE.BufferGeometry; netIndex: number }[] = []
+
+  for (const [netId, { F, B }] of accum) {
+    if (F.length === 0 && B.length === 0) continue
+    const netIndex = netIds.length
+    netIds.push(netId)
+    for (const geo of F) fParts.push({ geo, netIndex })
+    for (const geo of B) bParts.push({ geo, netIndex })
+  }
+
+  const layers: CopperLayers = { netIds }
+  const f = concatLayer(fParts)
+  const b = concatLayer(bParts)
+  if (f) layers.F = f
+  if (b) layers.B = b
+
+  // The per-primitive geometries are scratch; free them.
+  for (const { F, B } of accum.values()) {
+    for (const g of F) g.dispose()
+    for (const g of B) g.dispose()
+  }
+  return layers
 }
 
 // ─── via instancing ────────────────────────────────────────────────────────────

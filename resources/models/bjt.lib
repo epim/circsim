@@ -1,37 +1,68 @@
-* Provenance: written for circsim from manufacturer datasheet parameters, MIT.
+* Provenance: derived for circsim from manufacturer datasheet operating points by scripts/fit-model-cards.mjs, MIT.
 * In-house bipolar-transistor .model cards (ngspice Gummel-Poon NPN/PNP).
-* Parameters are derived from published datasheet figures: hFE (bf) at the
-* spec test current, transition frequency fT (-> tf), output capacitances
-* (Cobo -> cjc, Cibo -> cje), Early voltage (vaf) and BVceo (-> bvceo handled
-* by application, not in the level-1 card). No vendor model text is copied;
-* only datasheet operating points inform the standard parameter set.
+*
+* The cards below are the output of scripts/fit-model-cards.mjs. Its inputs are
+* datasheet figures only: hFE at stated collector currents (window midpoint at
+* the reference current, scaled to two other currents by the guaranteed minima),
+* Vbe at the reference current, output conductance hoe (-> vaf), fT (-> tf),
+* Cobo and Cibo at their stated bias (-> cjc, cje) and the storage time ts
+* (-> tr, calibrated once against a simulated ngspice 46 turn-off so the card
+* reproduces the stated ts). Nothing is read from any third-party library card, and
+* src/core/models/__tests__/library-fingerprint.test.ts fails CI if a bundled
+* card's parameter tuple matches a known PSpice or LTspice library card.
+*
+* Values that are NOT datasheet figures (device-class assumptions): br=3,
+* var=20, ne=1.5, xtb=1.5, eg=1.11, vje/vjc=0.75 and mje/mjc=0.33 (ngspice
+* defaults, no C-V curve sampled), re=0.3, rb=10 (2N2222A: from the stated
+* rb x Cc product), rc (half the slope of the two stated VCE(sat) maxima),
+* Cobo and Cibo typical taken as 0.75 x the datasheet maximum where only a
+* maximum is stated. The figures themselves are transcribed from the datasheet
+* families and are not yet re-verified against vendor PDFs row by row.
+*
+* Checked against the datasheet points in resources/models/characterization.json
+* (hFE, Vce(sat)); run `npm run test:characterization`.
 *
 * Glossary: is=sat current, bf=fwd beta, vaf=Early V, ikf=knee, rb/rc/re=
 * ohmic, cje/cjc=junction caps, tf/tr=transit times.
 
 * --------------------------------------------------------------------------- NPN
-* 2N2222A NPN switching/amplifier (hFE~100-300, fT=300MHz, Ic=800mA).
-.model Q2N2222 NPN(is=14.34f bf=255.9 vaf=74.03 ikf=0.2847 ise=14.34f ne=1.307
-+ br=6.092 var=28.0 nr=1.0 rb=10 rc=1.0 re=0.4 cje=22.01p vje=0.75 mje=0.377
-+ tf=411.1p cjc=7.306p vjc=0.75 mjc=0.3416 tr=46.91n xtb=1.5 eg=1.11)
+* 2N2222A NPN switching/amplifier (hFE 100-300 at 150mA/10V, fT>=300MHz, Ic=800mA).
+* Inputs: hFE 141/200/126 at 0.1mA/150mA/500mA (Vce=10V), Vbe 0.9V at 150mA,
+* hoe 20umho (1mA,10V), fT 300MHz (20mA,20V), Cobo 8pF max (10V), Cibo 25pF
+* max (0.5V), ts 225ns (150mA, IB1=IB2=15mA), rb'Cc 150ps.
+.model Q2N2222 NPN(is=1.6f bf=253 vaf=40 ikf=0.335 ise=27.3f ne=1.5 br=3
++ var=20 rb=25 rc=1 re=0.3 cje=22.2p vje=0.75 mje=0.33 tf=469p cjc=14.4p
++ vjc=0.75 mjc=0.33 tr=112n xtb=1.5 eg=1.11)
 
-* 2N3904 NPN general purpose (hFE~100-300, fT=300MHz, Ic=200mA).
-.model Q2N3904 NPN(is=6.734f bf=416.4 vaf=74.03 ikf=66.78m ise=6.734f ne=1.259
-+ br=0.7371 var=18.7 nr=1.0 rb=10 rc=1.0 re=0.5 cje=4.493p vje=0.75 mje=0.2593
-+ tf=301.2p cjc=3.638p vjc=0.75 mjc=0.3085 tr=239.5n xtb=1.5 eg=1.11)
+* 2N3904 NPN general purpose (hFE 100-300 at 10mA/1V, fT>=300MHz, Ic=200mA).
+* Inputs: hFE 126/200/110 at 0.1mA/10mA/100mA (Vce=1V), Vbe 0.75V at 10mA,
+* hoe 20.5umho (1mA,10V), fT 300MHz (10mA,20V), Cobo 4pF max (5V), Cibo 8pF
+* max (0.5V), ts 200ns (10mA, IB1=IB2=1mA).
+.model Q2N3904 NPN(is=3.43f bf=298 vaf=38.8 ikf=75.5m ise=46.8f ne=1.5 br=3
++ var=20 rb=10 rc=1.2 re=0.3 cje=7.1p vje=0.75 mje=0.33 tf=492p cjc=5.88p
++ vjc=0.75 mjc=0.33 tr=97.6n xtb=1.5 eg=1.11)
 
-* BC547B NPN general purpose (hFE~200-450, fT=300MHz, Ic=100mA).
-.model QBC547 NPN(is=7.049f bf=374.6 vaf=62.79 ikf=81.97m ise=68.0f ne=1.576
-+ br=1.0 var=25.0 nr=1.0 rb=10 rc=1.0 re=0.5 cje=11.5p vje=0.75 mje=0.333
-+ tf=411p cjc=5.25p vjc=0.57 mjc=0.315 tr=34n xtb=1.5 eg=1.11)
+* BC547B NPN general purpose (hFE 200-450, typical 290 at 2mA/5V, fT=300MHz).
+* Inputs: hFE 150/290/180 at 10uA/2mA/100mA (Vce=5V), Vbe 0.66V at 2mA,
+* hoe 30umho (2mA,5V), fT 300MHz (10mA,5V), Cc 1.5pF typ (10V), Ce 11pF typ
+* (0.5V), ts 280ns typ (10mA, IB1=IB2=0.5mA).
+.model QBC547 NPN(is=16.7f bf=356 vaf=61.7 ikf=0.104 ise=57.8f ne=1.5 br=3
++ var=20 rb=10 rc=1 re=0.3 cje=13p vje=0.75 mje=0.33 tf=469p cjc=3.61p
++ vjc=0.75 mjc=0.33 tr=149n xtb=1.5 eg=1.11)
 
 * --------------------------------------------------------------------------- PNP
-* 2N3906 PNP general purpose (hFE~100-300, fT=250MHz, Ic=200mA).
-.model Q2N3906 PNP(is=1.41f bf=180.7 vaf=18.7 ikf=80m ise=0 ne=1.5
-+ br=4.977 var=15.7 nr=1.0 rb=10 rc=2.5 re=0.4 cje=8.063p vje=0.75 mje=0.4373
-+ tf=179.3p cjc=9.728p vjc=0.75 mjc=0.5776 tr=33.42n xtb=1.5 eg=1.11)
+* 2N3906 PNP general purpose (hFE 100-300 at 10mA/1V, fT>=250MHz, Ic=200mA).
+* Inputs: hFE 155/200/110 at 0.1mA/10mA/100mA (Vce=1V), Vbe 0.75V at 10mA,
+* hoe 20.5umho (1mA,10V), fT 250MHz (10mA,20V), Cobo 4.5pF max (5V), Cibo
+* 10pF max (0.5V), ts 225ns (10mA, IB1=IB2=1mA).
+.model Q2N3906 PNP(is=3.37f bf=262 vaf=38.8 ikf=87.8m ise=26.1f ne=1.5 br=3
++ var=20 rb=10 rc=1.9 re=0.3 cje=8.88p vje=0.75 mje=0.33 tf=588p cjc=6.61p
++ vjc=0.75 mjc=0.33 tr=112n xtb=1.5 eg=1.11)
 
-* BC557B PNP general purpose (hFE~200-450, fT=150MHz, Ic=100mA).
-.model QBC557 PNP(is=1.0f bf=330 vaf=29.8 ikf=92m ise=10.13f ne=1.5
-+ br=5.334 var=22.4 nr=1.0 rb=10 rc=1.5 re=0.6 cje=30p vje=0.5 mje=0.333
-+ tf=612p cjc=13p vjc=0.5 mjc=0.333 tr=10n xtb=1.5 eg=1.11)
+* BC557B PNP general purpose (hFE 200-450, typical 290 at 2mA/5V, fT=150MHz).
+* Inputs: hFE 100/290/140 at 10uA/2mA/100mA (Vce=5V), Vbe 0.65V at 2mA,
+* hoe 30umho (2mA,5V), fT 150MHz (10mA,5V), Cc 4.5pF typ (10V), Ce 11pF typ
+* (0.5V), ts 300ns typ (10mA, IB1=IB2=0.5mA).
+.model QBC557 PNP(is=25.2f bf=499 vaf=61.7 ikf=43.3m ise=154f ne=1.5 br=3
++ var=20 rb=10 rc=1.5 re=0.3 cje=13p vje=0.75 mje=0.33 tf=983p cjc=10.8p
++ vjc=0.75 mjc=0.33 tr=160n xtb=1.5 eg=1.11)

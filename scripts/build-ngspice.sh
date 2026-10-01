@@ -9,7 +9,9 @@
 # Usage: bash scripts/build-ngspice.sh
 #
 # Prerequisites (macOS): brew install autoconf automake libtool
-# Prerequisites (Linux): apt-get install -y autoconf automake libtool libfftw3-dev bison flex
+# Prerequisites (Linux): apt-get install -y autoconf automake libtool bison flex
+#   (libfftw3-dev is deliberately NOT a prerequisite: the library is built with
+#   --with-fftw3=no and a post-build gate rejects any non-runtime dependency.)
 
 set -euo pipefail
 
@@ -112,8 +114,15 @@ cd "${BUILD_DIR}"
   --with-x=no \
   --disable-debug \
   --disable-openmp \
+  --with-fftw3=no \
   --prefix="${WORK_DIR}/install" \
   CFLAGS="-O2"
+# --with-fftw3=no: ngspice's configure defaults to FFTW3 whenever libfftw3 is
+# installed, which makes libngspice.so carry NEEDED libfftw3.so.3. The .deb and
+# AppImage neither declare nor bundle it, so on a machine without
+# libfftw3-double3 the dlopen fails and the simulator never starts (issue #15).
+# circsim never issues ngspice's fft command; ngspice falls back to its built-in
+# FFT. Step 5 enforces the result: only the C/C++ runtime may be linked.
 # --disable-openmp: Apple clang has no bundled <omp.h>, so an OpenMP-enabled
 # build fails with "'omp.h' file not found" (misc_time.c). ngspice runs fine
 # single-threaded for our use; disabling OpenMP keeps the macOS/Linux source
@@ -195,6 +204,92 @@ mkdir -p "${CM_DEST_DIR}"
 cp "${FOUND_LIB}" "${DEST_DIR}/${LIB_NAME}"
 echo "Copied ${LIB_NAME} → ${DEST_DIR}/${LIB_NAME}"
 
+# ---------------------------------------------------------------------------
+# 5a. Dependency gate: the shipped library may link only the C/C++ runtime.
+# ---------------------------------------------------------------------------
+# The .deb, AppImage and dmgs bundle libngspice but no third-party libraries,
+# so any other dynamic dependency (libfftw3, a Homebrew dylib, ...) makes the
+# dlopen fail on a clean machine and the simulator silently never starts
+# (issue #15). This reads the produced library's dynamic dependencies, fails on
+# anything outside the allowlist below, and records the list in manifest.json
+# (dynamicDeps) so the ngspice-resources tests can assert it.
+
+# Print the library's dynamic dependencies, one per line, sorted: SONAMEs on
+# Linux (readelf NEEDED entries), install-name paths on macOS (otool -L minus
+# the library's own id).
+list_dynamic_deps() {
+  local lib="$1"
+  case "${OS}" in
+    Linux)
+      if ! command -v readelf >/dev/null 2>&1; then
+        echo "ERROR: readelf not found (install binutils); cannot verify dependencies." >&2
+        return 1
+      fi
+      readelf -d "${lib}" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | sort -u
+      ;;
+    Darwin)
+      if ! command -v otool >/dev/null 2>&1; then
+        echo "ERROR: otool not found; cannot verify dependencies." >&2
+        return 1
+      fi
+      local self
+      self="$(otool -D "${lib}" | sed -n '2p')"
+      otool -L "${lib}" | sed -n '2,$p' \
+        | sed 's/^[[:space:]]*//; s/ (compatibility version.*$//' \
+        | { grep -vxF "${self}" || true; } | sort -u
+      ;;
+  esac
+}
+
+# Allowed: glibc and the C++ runtime on Linux; only Apple system locations on
+# macOS (/usr/lib, /System/Library), which every Mac has.
+dep_is_allowed() {
+  case "${OS}" in
+    Linux)
+      case "$1" in
+        libc.so.6|libm.so.6|libdl.so.2|libpthread.so.0|librt.so.1|libgcc_s.so.1|libstdc++.so.6|ld-linux-x86-64.so.2)
+          return 0 ;;
+      esac
+      ;;
+    Darwin)
+      case "$1" in
+        /usr/lib/*|/System/Library/*) return 0 ;;
+      esac
+      ;;
+  esac
+  return 1
+}
+
+echo ""
+echo "Checking dynamic dependencies of ${LIB_NAME} ..."
+DEP_LIST="$(list_dynamic_deps "${DEST_DIR}/${LIB_NAME}")"
+if [[ -z "${DEP_LIST}" ]]; then
+  echo "ERROR: no dynamic dependencies found for ${LIB_NAME}; the listing tool produced nothing." >&2
+  exit 1
+fi
+
+BAD_DEPS=""
+while IFS= read -r _dep; do
+  [[ -z "${_dep}" ]] && continue
+  echo "  needs: ${_dep}"
+  if ! dep_is_allowed "${_dep}"; then
+    BAD_DEPS="${BAD_DEPS}${_dep}"$'\n'
+  fi
+done <<< "${DEP_LIST}"
+
+if [[ -n "${BAD_DEPS}" ]]; then
+  echo "ERROR: ${LIB_NAME} links libraries beyond the C/C++ runtime:" >&2
+  printf '%s' "${BAD_DEPS}" | sed 's/^/  /' >&2
+  echo "These are not shipped with the installers, so the library would fail to load" >&2
+  echo "on a clean machine. Disable the feature in configure (see --with-fftw3=no)." >&2
+  exit 1
+fi
+echo "Verified: only C/C++ runtime dependencies."
+
+DYN_DEPS_JSON="$(DEP_LIST="${DEP_LIST}" node -e "
+  console.log(JSON.stringify(process.env.DEP_LIST.split('\n').filter(Boolean)));
+")"
+
 # Find and copy .cm files
 CM_SRC_DIR="$(find "${INSTALL_DIR}" -type d -name 'ngspice' | head -1)"
 if [[ -z "${CM_SRC_DIR}" ]]; then
@@ -272,7 +367,7 @@ for NAME in "${COPIED_CM[@]}"; do
   ")"
 done
 
-node -e "
+DYN_DEPS_JSON="${DYN_DEPS_JSON}" node -e "
 const fs = require('fs');
 const manifest = {
   version: '${VERSION}',
@@ -284,6 +379,7 @@ const manifest = {
   files: {
     '${LIB_NAME}': '${SHA256_LIB}',
   },
+  dynamicDeps: JSON.parse(process.env.DYN_DEPS_JSON),
   cmFiles: JSON.parse('${CM_JSON}'),
   tablecmExcluded: true,
 };

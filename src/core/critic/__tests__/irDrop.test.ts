@@ -18,7 +18,6 @@ import { describe, it, expect } from 'vitest'
 import { parseBoard } from '../../kicad/board'
 import { extract, type Circuit } from '../../netlist/extract'
 import { runCritic } from '../run'
-import { solveLinear } from '../checks/irDrop'
 import type { OpResult } from '../types'
 
 // VCC = net 1, GND = net 2. J1 (a connector → preferred supply entry) sits at
@@ -97,7 +96,7 @@ describe('checkIrDrop', () => {
       .toHaveLength(0)
   })
 
-  it('stitches layers through a via (two 50mm halves + ~0.5 mΩ via)', () => {
+  it('stitches layers through a via (two 50mm halves + a 1.4 mΩ barrel)', () => {
     const b = makeBoard(
       `(segment (start 10 10) (end 60 10) (width 0.25) (layer "F.Cu") (net 1))
        (via (at 60 10) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1))
@@ -108,8 +107,8 @@ describe('checkIrDrop', () => {
     const [f] = runCritic(b, c, opFor(c, { U1: 1 })).findings.filter((f) => f.check === 'ir-drop')
     expect(f).toBeDefined()
     expect(f.severity).toBe('warn')
-    // 0.09655 + 0.0005 (via) + 0.09655 ≈ 0.1936 V at 1 A
-    expect(f.metrics!.dropV).toBeCloseTo(0.1936, 3)
+    // 0.09655 + 0.00143 (0.3 mm drill, 20 um plating, 1.6 mm board) + 0.09655 = 0.19453 V at 1 A
+    expect(f.metrics!.dropV).toBeCloseTo(0.1945, 3)
   })
 
   it("does not count the source part's own current as a sink", () => {
@@ -130,12 +129,15 @@ describe('checkIrDrop', () => {
       .toHaveLength(0)
   })
 
-  it('emits no finding when the op result carries no part currents', () => {
+  it('reports not assessed, not clean, when the op result carries no branch currents', () => {
     const b = makeBoard(LONG_THIN)
     const c = extract(b)
     const vcc = c.nets.find((n) => n.kicadName === 'VCC')!
     const op: OpResult = { nodeVoltages: { [vcc.spiceNode]: 5 } }
-    expect(runCritic(b, c, op).findings.filter((f) => f.check === 'ir-drop')).toHaveLength(0)
+    const report = runCritic(b, c, op)
+    expect(report.findings.filter((f) => f.check === 'ir-drop')).toHaveLength(0)
+    expect(report.ranBy).not.toContain('ir-drop')
+    expect(report.skipped.some((s) => s.check === 'ir-drop')).toBe(true)
   })
 
   it("emits no finding when the rail's nominal voltage is unknown", () => {
@@ -165,50 +167,49 @@ describe('checkIrDrop', () => {
     const c = extract(b)
     expect(() => runCritic(b, c, opFor(c, { U1: 1 }))).not.toThrow()
   })
-})
 
-describe('solveLinear', () => {
-  it('solves a known 2×2 system', () => {
-    // 2x + y = 5 ; x + 3y = 10  →  x = 1, y = 3
-    const x = solveLinear(
-      [
-        [2, 1],
-        [1, 3],
-      ],
-      [5, 10],
-    )
-    expect(x).not.toBeNull()
-    expect(x![0]).toBeCloseTo(1)
-    expect(x![1]).toBeCloseTo(3)
-  })
+  // Copper-weight scaling (issue #69). R = rho L / (w t), t = oz x 34.8 um.
+  // The 100mm x 0.25mm trace is 0.1931 ohm at 1 oz, 0.0966 at 2 oz, 0.3862 at 0.5 oz.
+  describe('copper weight', () => {
+    function irAt(oz: number, amps: number) {
+      const b = makeBoard(LONG_THIN)
+      const c = extract(b)
+      return runCritic(b, c, opFor(c, { U1: amps }), { copperOz: oz }).findings.find(
+        (f) => f.check === 'ir-drop',
+      )
+    }
 
-  it('solves a 1×1 system', () => {
-    expect(solveLinear([[4]], [8])![0]).toBeCloseTo(2)
-  })
+    it('2 oz halves the drop: 2 A over 100mm x 0.25mm sags 0.1931 V (same as 1 A at 1 oz)', () => {
+      const f = irAt(2, 2)
+      expect(f).toBeDefined()
+      expect(f!.metrics!.dropV).toBeCloseTo(0.1931, 3)
+      expect(f!.metrics!.sagPct).toBeCloseTo(3.86, 1)
+      expect(f!.severity).toBe('warn')
+    })
 
-  it('returns null for a singular matrix instead of throwing', () => {
-    expect(
-      solveLinear(
-        [
-          [1, 1],
-          [1, 1],
-        ],
-        [1, 2],
-      ),
-    ).toBeNull()
-  })
+    it('0.5 oz doubles the drop: 0.5 A over 100mm x 0.25mm sags 0.1931 V', () => {
+      const f = irAt(0.5, 0.5)
+      expect(f).toBeDefined()
+      expect(f!.metrics!.dropV).toBeCloseTo(0.1931, 3)
+      expect(f!.severity).toBe('warn')
+    })
 
-  it('does not mutate its inputs', () => {
-    const A = [
-      [2, 1],
-      [1, 3],
-    ]
-    const b = [5, 10]
-    solveLinear(A, b)
-    expect(A).toEqual([
-      [2, 1],
-      [1, 3],
-    ])
-    expect(b).toEqual([5, 10])
+    it('the same 1 A load warns at 1 oz but clean at 2 oz (0.0966 V, 1.9%)', () => {
+      expect(irAt(1, 1)!.metrics!.dropV).toBeCloseTo(0.1931, 3)
+      // 1.93% is under the 2% warn threshold, so heavier copper clears the finding.
+      expect(irAt(2, 1)).toBeUndefined()
+    })
+
+    it('0.5 oz at 1 A escalates to error (0.3862 V, 7.7%)', () => {
+      const f = irAt(0.5, 1)
+      expect(f).toBeDefined()
+      expect(f!.severity).toBe('error')
+      expect(f!.metrics!.dropV).toBeCloseTo(0.3862, 3)
+    })
+
+    it('states the copper weight used in the assumption text', () => {
+      expect(irAt(2, 2)!.assumption).toContain('2 oz copper')
+      expect(irAt(0.5, 0.5)!.assumption).toContain('0.5 oz copper')
+    })
   })
 })

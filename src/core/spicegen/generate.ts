@@ -154,9 +154,27 @@ function parseModelCards(text: string): Map<string, string> {
 interface ModelTextIndex {
   subcktsByFile: Map<string, Map<string, SubcktDef>>
   modelsByFile: Map<string, Map<string, string>>
-  /** M12 cache: `${file}::${lowercased name}` → terminal-index groups (null = no definition). */
-  terminalGroups: Map<string, number[][] | null>
+  /** M12 cache: `${file}::${lowercased name}` → terminal conductivity (null = no definition). */
+  terminalGroups: Map<string, TerminalConductivity | null>
+  /** Same, in the DC view (issue #43): see terminalConductivityFor. */
+  dcTerminalGroups: Map<string, TerminalConductivity | null>
   texts: Record<string, string>
+}
+
+/** What terminalConductivityFor learns about a subckt's declared terminals. */
+interface TerminalConductivity {
+  /** Terminal-index groups; every terminal appears in exactly one group. */
+  groups: number[][]
+  /**
+   * Terminal indices the subckt holds to an absolute (ground-referenced)
+   * level. DC view: terminals with an internal DC path to global ground, node
+   * "0". Island view: only terminals pinned by a voltage source that cancels
+   * its own negative node (see cancelsNegativeNode); internal node "0" stays
+   * an ordinary node there. Either way the board net on such a terminal is
+   * driven (an op-amp output stage), even when no other card gives it a path
+   * to ground.
+   */
+  grounded: number[]
 }
 
 function makeModelTextIndex(texts: Record<string, string> | undefined): ModelTextIndex {
@@ -164,6 +182,7 @@ function makeModelTextIndex(texts: Record<string, string> | undefined): ModelTex
     subcktsByFile: new Map(),
     modelsByFile: new Map(),
     terminalGroups: new Map(),
+    dcTerminalGroups: new Map(),
     texts: texts ?? {},
   }
 }
@@ -434,11 +453,38 @@ export function buildLedSpiceNames(
 // ─── Wave source card builders ────────────────────────────────────────────────
 
 /**
+ * Width of the flat top of the triangle PULSE card. ngspice's PULSE needs a
+ * positive pulse width; 1 ps is far below any step the bench takes and keeps the
+ * waveform within ~1e-9 V of an ideal triangle (verified against ngspice 46).
+ */
+const TRIANGLE_TOP_WIDTH = '1e-12'
+
+/**
+ * PULSE parameter list [lo hi delay rise fall width period] for a triangle
+ * function-gen. rise = fall = T/2 makes the PULSE an exact triangle. Shared by
+ * the deck card and the live alter vector so the two can never drift.
+ */
+function triangleParams(inst: Extract<Instrument, { kind: 'function-gen' }>): string[] {
+  const { freqHz, amplitudeV, offsetV } = inst
+  const half = formatSpiceValue(0.5 / freqHz)
+  return [
+    formatSpiceValue(offsetV - amplitudeV),
+    formatSpiceValue(offsetV + amplitudeV),
+    '0',
+    half,
+    half,
+    TRIANGLE_TOP_WIDTH,
+    formatSpiceValue(1 / freqHz),
+  ]
+}
+
+/**
  * Build the SPICE source value string for a function-gen instrument.
  *
  * Sine:     SIN(<offset> <amplitude> <freq>)
  * Square:   PULSE(0 <vhigh> 0 1n 1n <width> <period>)
- * Triangle: not a native SPICE source — use SIN as approximation (warn)
+ * Triangle: PULSE(<lo> <hi> 0 <T/2> <T/2> <tiny> <T>): an exact linear ramp
+ *           (rise = fall = half a period, negligible top width)
  * Pulse:    PULSE(<lo> <hi> 0 <rise> <fall> <width> <period>)
  */
 function buildWaveSourceValue(inst: Extract<Instrument, { kind: 'function-gen' }>): string {
@@ -452,9 +498,10 @@ function buildWaveSourceValue(inst: Extract<Instrument, { kind: 'function-gen' }
 
   switch (wave) {
     case 'sine':
-    case 'triangle':
-      // Triangle uses SIN as an approximation (first harmonic)
       return `SIN(${off} ${amp} ${freq})`
+
+    case 'triangle':
+      return `PULSE(${triangleParams(inst).join(' ')})`
 
     case 'square': {
       // PULSE: lo hi delay rise fall width period
@@ -489,18 +536,30 @@ function buildWaveSourceValue(inst: Extract<Instrument, { kind: 'function-gen' }
 class NodeUnionFind {
   /** parent map; insertion order is first-seen order (drives deterministic output). */
   private readonly parent = new Map<string, string>()
+  /**
+   * Second union-find over DC-conductive links only (issue #43). A capacitor
+   * links into `parent` only (an island with a capacitor path is still wired
+   * up), so two nets joined only by a capacitor are separate DC components. A
+   * subckt terminal held by a ground-referenced source inside the subckt links
+   * to "0" here only: the bleed set, which `parent` decides, never changes.
+   */
+  private readonly dcParent = new Map<string, string>()
 
-  private find(n: string): string {
+  private findIn(map: Map<string, string>, n: string): string {
     let root = n
-    while (this.parent.get(root) !== root) root = this.parent.get(root)!
+    while (map.get(root) !== root) root = map.get(root)!
     // Path compression.
     let cur = n
     while (cur !== root) {
-      const next = this.parent.get(cur)!
-      this.parent.set(cur, root)
+      const next = map.get(cur)!
+      map.set(cur, root)
       cur = next
     }
     return root
+  }
+
+  private find(n: string): string {
+    return this.findIn(this.parent, n)
   }
 
   /**
@@ -512,16 +571,33 @@ class NodeUnionFind {
     return this.parent.has(n) ? this.find(n) : undefined
   }
 
-  /** Register a card's analog nodes and union them into one component. */
-  link(nodes: string[]): void {
+  /**
+   * Root of a node's DC-conductive component. A node that only ever met
+   * capacitive links (or was never registered) is its own component.
+   */
+  dcRootOf(n: string): string {
+    return this.dcParent.has(n) ? this.findIn(this.dcParent, n) : n
+  }
+
+  /**
+   * Register a card's analog nodes and union them into one component. `scope`
+   * picks the union-finds: 'island' for a capacitor (it passes no DC, so it
+   * joins the island component only), 'dc' for a DC fact the island view does
+   * not model (it never changes the bleeds), 'both' for everything else.
+   */
+  link(nodes: string[], scope: 'both' | 'island' | 'dc' = 'both'): void {
     const clean = nodes.filter(n => n.length > 0)
-    for (const n of clean) {
-      if (!this.parent.has(n)) this.parent.set(n, n)
-    }
-    for (let i = 1; i < clean.length; i++) {
-      const a = this.find(clean[0])
-      const b = this.find(clean[i])
-      if (a !== b) this.parent.set(b, a)
+    const maps =
+      scope === 'island' ? [this.parent] : scope === 'dc' ? [this.dcParent] : [this.parent, this.dcParent]
+    for (const map of maps) {
+      for (const n of clean) {
+        if (!map.has(n)) map.set(n, n)
+      }
+      for (let i = 1; i < clean.length; i++) {
+        const a = this.findIn(map, clean[0])
+        const b = this.findIn(map, clean[i])
+        if (a !== b) map.set(b, a)
+      }
     }
   }
 
@@ -629,6 +705,85 @@ function incompleteCardReason(card: string): string | undefined {
 // ─── M12: per-subckt terminal conductivity ────────────────────────────────────
 
 /**
+ * True for a behavioral current source (`b<name> n+ n- i = <expr>`) whose
+ * expression never reads the voltage across its own branch (no `v(...)`
+ * argument names n+ or n-). Such a source forces a current independent of its
+ * own terminals, so it carries no DC link between them (issue #131). Anything
+ * that might be a conductance, and every `v = ...` source, answers false.
+ */
+function isPureCurrentSource(toks: string[]): boolean {
+  const expr = toks.slice(3).join(' ')
+  if (!/^i\s*=/i.test(expr)) return false
+  const own = new Set([toks[1].toLowerCase(), toks[2].toLowerCase()])
+  for (const m of expr.matchAll(/\bv\(([^)]*)\)/gi)) {
+    if (m[1].split(',').some((arg) => own.has(arg.trim().toLowerCase()))) return false
+  }
+  return true
+}
+
+/**
+ * Stand-in for "absolute ground" inside a subckt body in the island view, where
+ * internal node "0" is an ordinary node. Never a legal SPICE node name.
+ */
+const ISLAND_REF = '*ref*'
+
+/**
+ * True for a behavioral voltage source (`b<name> n+ n- v = <expr>`) whose
+ * expression carries the term `- v(n-)` at the top level, so the constraint
+ * v(n+) - v(n-) = E - v(n-) reduces to v(n+) = E: the source pins n+ to an
+ * absolute level (the opamp.lib output buffer `bout obuf vee v = v(vpole) -
+ * v(vee)`) and its negative node only carries the branch current. Its negative
+ * node is NOT tied to anything by the source, so floating it must not hide
+ * behind this card (issue #131).
+ */
+function cancelsNegativeNode(toks: string[]): boolean {
+  const expr = toks.slice(3).join(' ')
+  const m = /^v\s*=\s*(.*)$/i.exec(expr)
+  if (!m) return false
+  const neg = toks[2].toLowerCase()
+  // Split into signed top-level terms (parentheses nest; a sign after an
+  // exponent letter, as in 1e-3, is part of the number).
+  const body = m[1]
+  let depth = 0
+  let sign = 1
+  let term = ''
+  const terms: Array<{ sign: number; text: string }> = []
+  const flush = (): void => {
+    terms.push({ sign, text: term.trim() })
+    term = ''
+  }
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]
+    if (c === '(') depth++
+    else if (c === ')') depth--
+    if (depth === 0 && (c === '+' || c === '-') && term.trim() !== '' && !/[0-9.]e$/i.test(term.trim())) {
+      flush()
+      sign = c === '-' ? -1 : 1
+      continue
+    }
+    if (depth === 0 && (c === '+' || c === '-') && term.trim() === '') {
+      if (c === '-') sign = -sign
+      continue
+    }
+    term += c
+  }
+  flush()
+  const exactRef = /^v\(\s*([^)\s,]+)\s*\)$/i
+  const mentionsNeg = (text: string): boolean =>
+    [...text.matchAll(/\bv\(([^)]*)\)/gi)].some((r) => r[1].split(',').some((a) => a.trim().toLowerCase() === neg))
+  let coeff = 0
+  for (const t of terms) {
+    const ref = exactRef.exec(t.text)
+    if (ref && ref[1].toLowerCase() === neg) coeff += t.sign
+    // Any other mention of v(n-) (a product, a two-argument form) is a real
+    // dependence, so the conservative pair union stays.
+    else if (mentionsNeg(t.text)) return false
+  }
+  // Only the exact `... - v(n-)` shape cancels.
+  return coeff === -1
+}
+
+/**
  * Analog node groups of an element card INSIDE a .subckt body. Extends
  * primitiveCardNodeGroups with the shapes that appear in lib bodies but never
  * in resolve.ts primitive cards:
@@ -638,23 +793,41 @@ function incompleteCardReason(card: string): string | undefined {
  *       references inside the expression (`v(inp)`, `i(vsense)`) are SENSE
  *       only and are never tokenized as nodes — the fixed slice(1,3) stops
  *       before the expression text, so `v = v(x) - v(y)` contributes nothing.
- *       KNOWN APPROXIMATION: a constant-current b-card (`i = 2u`, e.g.
- *       regulators.lib biq/bref) is an ideal current source, not true
- *       conductance, yet its branch pair unions like every other b-card.
- *       Safe direction only (merging can at most suppress a bleed the pre-M12
- *       blanket union also suppressed); pinned by the regulators.lib tests.
+ *       A PURE current source (`i = ...` whose expression never reads the
+ *       voltage across its own two nodes, e.g. the opamp.lib supply-pin sources
+ *       bsrc/biq between vcc and vee, or regulators.lib bref) forces a branch
+ *       current whatever the node voltages are, so it is NOT a DC path: each
+ *       node registers as a singleton instead of the pair unioning (issue
+ *       #131). A floating supply pin therefore stays its own island, is bled,
+ *       and is reported undriven. A current source that does read its own
+ *       node voltages (`i = v(disch,gnd)*g`) can be a conductance, so it keeps
+ *       unioning its pair, as does every voltage-source b-card.
+ *
+ *       A voltage source whose expression ends in `- v(n-)` (cancelsNegativeNode)
+ *       pins n+ to an absolute level and ties n- to nothing, so it registers
+ *       n+ against ground (global node "0" in the DC view, ISLAND_REF in the
+ *       island view) and leaves n- alone. A floating supply pin the output
+ *       buffer is referenced to therefore stays its own island even when the
+ *       output net has a DC path of its own, e.g. a load to ground (issue #131).
  *
  *   unknown letters — conservative: treat the first two node tokens as a
  *       conductive pair. Merging too much can only suppress a bleed the same
  *       way the pre-M12 blanket union did; it never strands a real path.
  *
  * `x` cards are handled by the caller (child terminal-group substitution).
+ * With `dc` set, capacitor cards contribute nothing (they pass no DC).
  */
-function subcktBodyCardGroups(card: string): string[][] {
+function subcktBodyCardGroups(card: string, dc = false): string[][] {
   const toks = card.trim().split(/\s+/)
   if (toks.length < 3) return []
   const letter = toks[0].charAt(0).toLowerCase()
-  if (letter === 'b') return [toks.slice(1, 3)]
+  // DC view (issue #43): a capacitor passes no DC, so it joins nothing.
+  if (dc && letter === 'c') return []
+  if (letter === 'b') {
+    if (isPureCurrentSource(toks)) return [[toks[1]], [toks[2]]]
+    if (cancelsNegativeNode(toks)) return [[toks[1], dc ? '0' : ISLAND_REF], [toks[2]]]
+    return [toks.slice(1, 3)]
+  }
   if ('rclvidqjmegfh'.includes(letter)) return primitiveCardNodeGroups(card)
   // Unknown element letter inside a lib body: conservative two-node pair.
   return [toks.slice(1, 3)]
@@ -680,20 +853,31 @@ function subcktBodyCardGroups(card: string): string[][] {
  * worst adds a harmless 1 GΩ bleed on an otherwise-driven net — never the
  * reverse. Bleeds therefore remain a SUPERSET of the pre-M12 set, minus
  * nothing (strictly additive refinement).
+ *
+ * With `dc` set (the DC view, separate cache) the analysis serves the
+ * undriven-net diagnostic (issue #43) and never the bleeds: capacitors join
+ * nothing, and node "0" is global ground. A terminal in the same internal DC
+ * component as "0" is reported in `grounded`, and a child's grounded terminals
+ * link their parent nodes to "0", so an op-amp output buffer
+ * (`bout obuf 0`, `rout obuf out`) marks `out` grounded through every nesting
+ * level. That bleed is still emitted (the island view decides bleeds), but the
+ * net is driven, so the diagnostic does not report it.
  */
-function terminalGroupsFor(
+function terminalConductivityFor(
   idx: ModelTextIndex,
   file: string,
   name: string,
   visiting: Set<string> = new Set(),
-): number[][] | undefined {
+  dc = false,
+): TerminalConductivity | undefined {
   const key = `${file}::${name.toLowerCase()}`
-  const cached = idx.terminalGroups.get(key)
+  const cache = dc ? idx.dcTerminalGroups : idx.terminalGroups
+  const cached = cache.get(key)
   if (cached !== undefined) return cached ?? undefined
   if (visiting.has(key)) return undefined // cycle — no info for this instance
   const def = getSubcktDef(idx, file, name)
   if (!def) {
-    idx.terminalGroups.set(key, null)
+    cache.set(key, null)
     return undefined
   }
   visiting.add(key)
@@ -708,13 +892,18 @@ function terminalGroupsFor(
       const childDef = nameTok ? getSubcktDef(idx, file, nameTok) : undefined
       if (childDef) {
         const nodeToks = toks.slice(1, 1 + childDef.terminals.length).map((n) => n.toLowerCase())
-        const childGroups = terminalGroupsFor(idx, file, nameTok, visiting)
-        if (childGroups) {
+        const child = terminalConductivityFor(idx, file, nameTok, visiting, dc)
+        if (child) {
           // Substitute the child's terminal conductivity: union the parent
           // nodes sitting at internally-connected child-terminal positions;
           // a child sense-only terminal registers its parent node alone.
-          for (const g of childGroups) {
+          for (const g of child.groups) {
             uf.link(g.map((i) => nodeToks[i]).filter((n): n is string => n !== undefined))
+          }
+          // A child terminal grounded inside the child is grounded here ("0" in
+          // the DC view, ISLAND_REF in the island view).
+          for (const i of child.grounded) {
+            if (nodeToks[i] !== undefined) uf.link([nodeToks[i], dc ? '0' : ISLAND_REF])
           }
         } else {
           uf.link(nodeToks) // cycle: conservative blanket for this instance
@@ -727,7 +916,7 @@ function terminalGroupsFor(
       }
       continue
     }
-    for (const g of subcktBodyCardGroups(t)) uf.link(g.map((n) => n.toLowerCase()))
+    for (const g of subcktBodyCardGroups(t, dc)) uf.link(g.map((n) => n.toLowerCase()))
   }
   visiting.delete(key)
   // Group the declared terminals by their internal connected component.
@@ -748,8 +937,23 @@ function terminalGroupsFor(
     groupByRoot.set(root, g)
     groups.push(g)
   })
-  idx.terminalGroups.set(key, groups)
-  return groups
+  // The terminals sharing an internal component with ground (DC view) or with
+  // the absolute reference (island view).
+  const groundRoot = uf.rootOf(dc ? '0' : ISLAND_REF)
+  const grounded: number[] = []
+  if (groundRoot !== undefined) {
+    def.terminals.forEach((term, i) => {
+      if (uf.rootOf(term) === groundRoot) grounded.push(i)
+    })
+  }
+  const result: TerminalConductivity = { groups, grounded }
+  cache.set(key, result)
+  return result
+}
+
+/** The island-view terminal groups (what decides the bleeds); see terminalConductivityFor. */
+function terminalGroupsFor(idx: ModelTextIndex, file: string, name: string): number[][] | undefined {
+  return terminalConductivityFor(idx, file, name)?.groups
 }
 
 /**
@@ -765,6 +969,20 @@ export function subcktTerminalConductivity(libText: string, name: string): strin
   const def = getSubcktDef(idx, 'lib', name)
   if (!def) return undefined
   return groups.map((g) => g.map((i) => def.terminals[i]))
+}
+
+/**
+ * Exported for tests: the lowercased names of the terminals of a named .subckt
+ * that the island view holds to an absolute level (a voltage source whose
+ * negative-node term cancels, see cancelsNegativeNode). Undefined when the
+ * subckt is not defined in the text.
+ */
+export function subcktGroundedTerminals(libText: string, name: string): string[] | undefined {
+  const idx = makeModelTextIndex({ lib: libText })
+  const def = getSubcktDef(idx, 'lib', name)
+  const cond = terminalConductivityFor(idx, 'lib', name)
+  if (!def || !cond) return undefined
+  return cond.grounded.map((i) => def.terminals[i].toLowerCase())
 }
 
 // ─── Current-probe helpers ─────────────────────────────────────────────────────
@@ -800,13 +1018,32 @@ interface Logic74Template {
   outputs: string[]
   /** Power-pin SIGNAL names (e.g. VCC/GND); the pinMap marks which pads carry them. */
   power?: { vcc: string; gnd: string }
+  /**
+   * Input SIGNAL names that are active LOW (PRE_N, CLR_N, MR_N). The XSPICE
+   * d_dff set/reset pins are active HIGH, so the expander inverts these before
+   * they reach a flip-flop's set or reset terminal.
+   */
+  activeLow?: string[]
   delaysNs: number
+}
+/**
+ * Output stage of a logic family: a Thevenin resistance plus a drive-current
+ * limit, both quoted at `atVolts` and scaled with the rail actually in use
+ * (resistance inversely with vHigh, current limit proportionally, so the knee
+ * voltage rOhms * iMaxMa stays constant). Absent in a family file means an
+ * ideal output source (the historic behavior, kept for hand-written fixtures).
+ */
+interface Logic74Output {
+  atVolts: number
+  rOhms: number
+  iMaxMa: number
 }
 interface Logic74File {
   family: {
     vHighDefault: number
     adc: { inLowFrac: number; inHighFrac: number }
     schmittAdc: { inLowFrac: number; inHighFrac: number }
+    output?: Logic74Output
   }
   templates: Record<string, Logic74Template>
 }
@@ -1030,7 +1267,13 @@ function expandXspiceDigital(
   instruments: Instrument[],
   railOverrides: Map<number, number> | undefined,
   measuredRailVHigh: Map<number, number> | undefined,
-): { lines: string[]; expanded: boolean; analogNodes: string[] } {
+): {
+  lines: string[]
+  expanded: boolean
+  analogNodes: string[]
+  links: string[][]
+  drivenNodes: string[]
+} {
   const logic = templateFile ? parseLogic74(idx, templateFile) : null
   const tpl = logic?.templates?.[model.templateId]
   if (!logic || !tpl) {
@@ -1042,6 +1285,8 @@ function expandXspiceDigital(
       ],
       expanded: false,
       analogNodes: [],
+      links: [],
+      drivenNodes: [],
     }
   }
 
@@ -1080,6 +1325,25 @@ function expandXspiceDigital(
   /** Digital (event) node for a chip signal — always per-instance. */
   const dNode = (sig: string): string => `${refLc}_d_${sig.toLowerCase()}`
 
+  // Supply-pin current conservation (issue #2). The bridges and B-sources in the
+  // expansion reference global ground, so without help the chip draws nothing
+  // from its VCC net however hard its outputs are loaded. One current source from
+  // the VCC board node to ground carries the sum of the positive (sourced) output
+  // currents; current a low output sinks already returns through ground. It is
+  // only emitted when VCC is wired to a board net (an unwired VCC is a per-chip
+  // internal node with nothing to load). `terms` are expressions for the current
+  // each output delivers into the board (positive when sourcing). The draw fades
+  // out below about 2 V on the rail, so a floating or not-yet-powered VCC net
+  // carries nothing instead of being pulled to an absurd voltage by a lone
+  // current source.
+  const vccSig = tpl.power?.vcc?.toUpperCase()
+  const vccNode = vccSig !== undefined ? signalToNode.get(vccSig) : undefined
+  const supplyCurrentLine = (terms: string[]): string | undefined => {
+    if (vccNode === undefined || vccNode === '0' || terms.length === 0) return undefined
+    const sum = terms.map((t) => `0.5*((${t}) + sqrt((${t})*(${t}) + 1e-18))`).join(' + ')
+    return `b_${refLc}_icc ${vccNode} 0 I = 0.5*(1 + tanh((v(${vccNode}) - 1)/0.25))*(${sum})`
+  }
+
   const lines: string[] = []
   lines.push(`* xspice-digital ${ref} (${model.templateId})`)
   if (railSource) {
@@ -1094,6 +1358,33 @@ function expandXspiceDigital(
   const inLow = (adc.inLowFrac * vHigh).toFixed(4)
   const inHigh = (adc.inHighFrac * vHigh).toFixed(4)
 
+  // Output stage (issue #12). A real logic output is not an ideal source: it is
+  // a finite resistance that saturates at a drive-current limit. The gate (or
+  // dac_bridge) drives an unloaded per-output source node; a behavioral current
+  // source carries it to the pad as I = iMax * tanh(dV / (rOut * iMax)), which
+  // is a rOut resistor for small signals and clamps at +-iMax. The same stage
+  // sources (output high) and sinks (output low). A family without an `output`
+  // block keeps the ideal source.
+  const outCfg = logic.family.output
+  const outScale = outCfg && outCfg.atVolts > 0 ? vHigh / outCfg.atVolts : undefined
+  const stage =
+    outCfg && outScale !== undefined && outCfg.rOhms > 0 && outCfg.iMaxMa > 0
+      ? {
+          /** Current the stage delivers into the pad (positive when sourcing). */
+          current: (srcN: string, padN: string): string => {
+            const iMax = (outCfg.iMaxMa * outScale) / 1000
+            const knee = (outCfg.rOhms * outCfg.iMaxMa) / 1000
+            const num = (x: number): string => String(Number(x.toPrecision(5)))
+            return `${num(iMax)}*tanh((v(${srcN})-v(${padN}))/${num(knee)})`
+          },
+          card: (sig: string, srcN: string, padN: string): string =>
+            `b_${refLc}_out_${sig.toLowerCase()} ${srcN} ${padN} I = ${stage!.current(srcN, padN)}`,
+        }
+      : null
+  /** Unloaded source node behind a pad (the pad itself when there is no output stage). */
+  const srcNode = (sig: string): string =>
+    stage ? `${refLc}_o_${sig.toLowerCase()}` : aNode(sig)
+
   // Schmitt-trigger inverters: expand each gate to a self-referential behavioral
   // B-source that encodes TRUE hysteresis (state retention) instead of the
   // adc_bridge → d_inverter → dac_bridge chain. The adc_bridge has no memory —
@@ -1107,20 +1398,37 @@ function expandXspiceDigital(
   if (tpl.schmitt) {
     const mid = (vHigh / 2).toFixed(4)
     const analogNodes: string[] = []
+    const drivenNodes: string[] = []
+    const outCurrents: string[] = []
     let gi = 0
     for (const g of tpl.gates) {
       gi++
       const inN = aNode(g.in![0])
-      const outN = aNode(g.out as string)
+      const padN = aNode(g.out as string)
+      // The flip state lives on the UNLOADED source node, so a heavy load that
+      // sags the pad cannot disturb the hysteresis.
+      const srcN = srcNode(g.out as string)
       lines.push(
-        `b_${refLc}_${gi} ${outN} 0 V = ` +
-          `(v(${inN}) > (v(${outN}) > ${mid} ? ${inHigh} : ${inLow})) ? 0 : ${vHigh.toFixed(4)}`,
+        `b_${refLc}_${gi} ${srcN} 0 V = ` +
+          `(v(${inN}) > (v(${srcN}) > ${mid} ? ${inHigh} : ${inLow})) ? 0 : ${vHigh.toFixed(4)}`,
       )
-      // Both the input and output analog nodes are single-node island terminals
-      // (matches the old adc-input + dac-output push exactly).
-      analogNodes.push(inN, outN)
+      if (stage) lines.push(stage.card(g.out as string, srcN, padN))
+      // Both the input and the pad are single-node island terminals (matches the
+      // old adc-input + dac-output push exactly). The source node is referenced
+      // to ground by its own voltage source and is never a floating island.
+      analogNodes.push(inN, padN)
+      // The gate drives the pad (through the output stage when there is one), so
+      // the pad is a driven net, not an undriven island.
+      drivenNodes.push(padN)
+      // The load current the gate delivers into the pad. A B voltage source
+      // reports the current flowing through it from + to -, so -i(b_...) is the
+      // current out of the source node, which the output stage (if any) passes
+      // unchanged to the pad.
+      if (signalToNode.has((g.out as string).toUpperCase())) outCurrents.push(`-i(b_${refLc}_${gi})`)
     }
-    return { lines, expanded: true, analogNodes }
+    const supply = supplyCurrentLine(outCurrents)
+    if (supply) lines.push(supply)
+    return { lines, expanded: true, analogNodes, links: [], drivenNodes }
   }
 
   const rd = `${tpl.delaysNs}n`
@@ -1138,6 +1446,9 @@ function expandXspiceDigital(
   // bridges do NOT conduct across the chip, so the nodes are reported
   // individually, never unioned with each other.
   const analogNodes: string[] = []
+  // The analog nodes the expansion drives (the dac_bridge outputs). They are
+  // bled like any island, but they are not "undriven": the chip drives them.
+  const drivenNodes: string[] = []
 
   // One adc_bridge per input signal: analog board node → digital event node.
   for (const sig of tpl.inputs) {
@@ -1146,6 +1457,8 @@ function expandXspiceDigital(
   }
 
   // Gates on digital event nodes.
+  const activeLow = new Set(tpl.activeLow ?? [])
+  const invertedControls = new Set<string>()
   let gi = 0
   for (const g of tpl.gates) {
     gi++
@@ -1153,8 +1466,22 @@ function expandXspiceDigital(
     if (g.prim === 'd_dff') {
       // d_dff terminals: data clk set reset | q qbar. set/reset that are not real
       // chip inputs get tied off to a per-instance (floating-high) node.
-      const set = g.set && tpl.inputs.includes(g.set) ? dNode(g.set) : `${inst}_nset`
-      const reset = g.reset && tpl.inputs.includes(g.reset) ? dNode(g.reset) : `${inst}_nrst`
+      // The XSPICE d_dff set/reset pins are active HIGH; a template signal named
+      // in `activeLow` (PRE_N, CLR_N, MR_N) goes through one d_inverter per
+      // signal first, so parking the pin high (inactive) leaves the flop free.
+      const ctl = (sig: string | undefined, tieOff: string): string => {
+        if (!sig || !tpl.inputs.includes(sig)) return tieOff
+        if (!activeLow.has(sig)) return dNode(sig)
+        const inv = `${dNode(sig)}_h`
+        if (!invertedControls.has(sig)) {
+          invertedControls.add(sig)
+          lines.push(`.model a_${refLc}_inv_${sig.toLowerCase()}_m d_inverter(rise_delay=${rd} fall_delay=${rd})`)
+          lines.push(`a_${refLc}_inv_${sig.toLowerCase()} ${dNode(sig)} ${inv} a_${refLc}_inv_${sig.toLowerCase()}_m`)
+        }
+        return inv
+      }
+      const set = ctl(g.set, `${inst}_nset`)
+      const reset = ctl(g.reset, `${inst}_nrst`)
       lines.push(
         `.model ${inst}_m d_dff(clk_delay=${rd} set_delay=${rd} reset_delay=${rd} ` +
           `rise_delay=${rd} fall_delay=${rd})`,
@@ -1176,12 +1503,48 @@ function expandXspiceDigital(
   }
 
   // One dac_bridge per output signal: digital event node → analog board node.
+  // When the chip's VCC and the output are both wired to board nets, the bridge
+  // drives a per-instance node and a 0 V sense source carries its current into
+  // the board node, so the supply-side current source below can draw the same
+  // current from VCC (an ngspice code-model output current cannot be read from
+  // a B-source). Otherwise the bridge drives the board node directly, as before.
+  const outCurrents: string[] = []
+  const links: string[][] = []
   for (const sig of tpl.outputs) {
-    lines.push(`abr_${refLc}_out_${sig.toLowerCase()} [${dNode(sig)}] [${aNode(sig)}] ${dacModel}`)
-    analogNodes.push(aNode(sig))
+    const sigLc = sig.toLowerCase()
+    const padN = aNode(sig)
+    const wired = vccNode !== undefined && signalToNode.has(sig.toUpperCase())
+    if (stage) {
+      // Output stage: the bridge drives an unloaded source node and the stage's
+      // own current expression is the load current delivered to the pad, so it
+      // doubles as the supply-side term (no sense source needed). The pad is the
+      // single analog island terminal; the source node is driven by the bridge.
+      const srcN = srcNode(sig)
+      lines.push(`abr_${refLc}_out_${sigLc} [${dNode(sig)}] [${srcN}] ${dacModel}`)
+      lines.push(stage.card(sig, srcN, padN))
+      if (wired) outCurrents.push(stage.current(srcN, padN))
+      analogNodes.push(padN)
+    } else if (wired) {
+      const bridgeN = `${refLc}_o_${sigLc}`
+      const senseName = `v_${refLc}_o_${sigLc}`
+      lines.push(`abr_${refLc}_out_${sigLc} [${dNode(sig)}] [${bridgeN}] ${dacModel}`)
+      lines.push(`${senseName} ${bridgeN} ${padN} DC 0`)
+      // The sense source is a DC path, so the bridge node is part of the pad's island.
+      links.push([bridgeN, padN])
+      outCurrents.push(`i(${senseName})`)
+      analogNodes.push(bridgeN, padN)
+    } else {
+      lines.push(`abr_${refLc}_out_${sigLc} [${dNode(sig)}] [${padN}] ${dacModel}`)
+      analogNodes.push(padN)
+    }
+    // Every output pad is held by its dac_bridge (directly, through the sense
+    // source, or through the output stage), so it is driven, not an undriven island.
+    drivenNodes.push(padN)
   }
+  const supply = supplyCurrentLine(outCurrents)
+  if (supply) lines.push(supply)
 
-  return { lines, expanded: true, analogNodes }
+  return { lines, expanded: true, analogNodes, links, drivenNodes }
 }
 
 // ─── Main deck generator ──────────────────────────────────────────────────────
@@ -1196,6 +1559,74 @@ function expandXspiceDigital(
  * No .tran/.op card is included — the SimHost issues the analysis command.
  */
 export function generateDeck(opts: GenerateOptions): string[] {
+  return generateDeckWithDiagnostics(opts).lines
+}
+
+/**
+ * The parts of the bled islands that nothing drives (issue #43), as ordered
+ * node lists. An island is first split into its DC-conductive components,
+ * because a capacitor joins nets into one island without carrying any DC: an
+ * AC-coupled gate input stays bled to 0 V even though the gate that drives the
+ * other side of the capacitor sits in the same island. A DC component is driven
+ * when an expanded digital chip output is DC-connected to it, or when it
+ * reaches ground in the DC view: a subckt terminal the model holds to a
+ * ground-referenced level (an op-amp output stage) links to "0" there only.
+ */
+function undrivenIslandsOf(
+  islands: string[][],
+  graph: NodeUnionFind,
+  drivenNodes: Set<string>,
+): string[][] {
+  const drivenRoots = new Set<string>([graph.dcRootOf('0')])
+  for (const n of drivenNodes) drivenRoots.add(graph.dcRootOf(n))
+  const out: string[][] = []
+  for (const island of islands) {
+    const byRoot = new Map<string, string[]>()
+    for (const node of island) {
+      const root = graph.dcRootOf(node)
+      const group = byRoot.get(root)
+      if (group) group.push(node)
+      else byRoot.set(root, [node])
+    }
+    for (const [root, nodes] of byRoot) {
+      if (!drivenRoots.has(root)) out.push(nodes)
+    }
+  }
+  return out
+}
+
+/**
+ * What the generator learned while building a deck that the deck text alone
+ * does not carry to a caller (issue #43).
+ */
+export interface DeckDiagnostics {
+  /**
+   * Floating islands: connected components of the emitted element cards with no
+   * path to node "0", as ordered lists of spice node names. Every node listed
+   * was bled to ground through a 1 GOhm `r_float_<i>` card. Empty when every
+   * node reaches ground.
+   */
+  floatingIslands: string[][]
+  /**
+   * The part of `floatingIslands` that nothing drives, split into DC-conductive
+   * components: no chip output drives the nodes listed (no expanded digital
+   * output is DC-connected to them, and no subckt holds them to a
+   * ground-referenced level), so they read 0 V only because of the bleed.
+   * Capacitors link nets into one island but pass no DC, so an AC-coupled input
+   * (gate output, then a capacitor, then a gate input with no bias) is listed
+   * even though a driven net sits on the other side of the capacitor. These are
+   * what the app surfaces to the user (issue #43). A chip output net with no
+   * other path to ground (a gate output, an op-amp output feeding only
+   * high-impedance inputs) is bled too, but it is driven, so it is not listed.
+   */
+  undrivenIslands: string[][]
+}
+
+/** generateDeck plus its diagnostics; `lines` is exactly what generateDeck returns. */
+export function generateDeckWithDiagnostics(opts: GenerateOptions): {
+  lines: string[]
+  diagnostics: DeckDiagnostics
+} {
   const { circuit, resolutions, instruments, title, modelTexts } = opts
   // groundNetId is used by the caller to build the circuit (node "0" assignment);
   // the deck generator relies on circuit.nets[].spiceNode already being "0" for ground.
@@ -1208,6 +1639,10 @@ export function generateDeck(opts: GenerateOptions): string[] {
   // nodes here; after all elements are out, any connected component that never
   // reaches node "0" gets a 1 GΩ bleed per net (see NodeUnionFind).
   const islandNodes = new NodeUnionFind()
+  // Analog nodes an expanded digital chip drives (issue #43). A DC component
+  // holding one of these is bled for matrix conditioning but is not reported
+  // undriven. (Subckt-driven outputs reach "0" in the DC view instead.)
+  const drivenNodes = new Set<string>()
 
   // Model-definition inlining (only when lib texts are supplied). Definitions are
   // collected per-deck and deduplicated, then appended once before .save (ngspice
@@ -1262,7 +1697,18 @@ export function generateDeck(opts: GenerateOptions): string[] {
       islandNodes.link(nodes)
       return
     }
-    for (const g of groups) islandNodes.link(g.map((i) => nodes[i]))
+    // The island view (capacitors count) decides the bleeds, exactly as before
+    // issue #43. The DC view (capacitors pass nothing, internal node 0 is
+    // ground) only feeds the undriven-net diagnostic: a terminal the subckt
+    // holds to a ground-referenced level (an op-amp output) links to "0" there.
+    for (const g of groups) islandNodes.link(g.map((i) => nodes[i]), 'island')
+    const dc = terminalConductivityFor(modelIndex, libFile, subcktName, new Set(), true)
+    for (const g of dc?.groups ?? groups) islandNodes.link(g.map((i) => nodes[i]), 'dc')
+    for (const i of dc?.grounded ?? []) islandNodes.link([nodes[i], '0'], 'dc')
+    // A terminal the subckt pins to an absolute level needs no bleed: it is
+    // grounded in the island view too (opamp.lib output buffer).
+    const isl = terminalConductivityFor(modelIndex, libFile, subcktName)
+    for (const i of isl?.grounded ?? []) islandNodes.link([nodes[i], '0'], 'island')
   }
 
   // ── Line 0: title (SPICE requires first line to be a title comment) ────────
@@ -1448,7 +1894,9 @@ export function generateDeck(opts: GenerateOptions): string[] {
       } else {
         lines.push(model.card)
       }
-      for (const group of primitiveCardNodeGroups(model.card)) islandNodes.link(group)
+      // A capacitor joins the island but passes no DC (issue #43).
+      const scope = model.card.trim().charAt(0).toLowerCase() === 'c' ? 'island' : 'both'
+      for (const group of primitiveCardNodeGroups(model.card)) islandNodes.link(group, scope)
       continue
     }
 
@@ -1588,6 +2036,9 @@ export function generateDeck(opts: GenerateOptions): string[] {
       // an adc input has no DC conductance, so a net touched ONLY by bridges is
       // itself a floating island and needs a bleed.
       for (const n of xspice.analogNodes) islandNodes.link([n])
+      for (const n of xspice.drivenNodes) drivenNodes.add(n)
+      // A 0 V output-current sense source conducts: its two nodes are one island.
+      for (const pair of xspice.links) islandNodes.link(pair)
       continue
     }
   }
@@ -1603,8 +2054,8 @@ export function generateDeck(opts: GenerateOptions): string[] {
   // convergence-culprit parser maps `<prefix>_<ref>`-shaped instance names back
   // to parts, and a spice node embedded in the name (r_float__gauge_c3) would
   // false-positive onto a refdes-like net segment (C3).
+  const islands = islandNodes.floatingIslands()
   {
-    const islands = islandNodes.floatingIslands()
     if (islands.length > 0) {
       lines.push('* floating-island bleed resistors (no DC path to ground)')
       let bleedIdx = 0
@@ -1674,7 +2125,13 @@ export function generateDeck(opts: GenerateOptions): string[] {
 
   lines.push('.end')
 
-  return lines
+  return {
+    lines,
+    diagnostics: {
+      floatingIslands: islands,
+      undrivenIslands: undrivenIslandsOf(islands, islandNodes, drivenNodes),
+    },
+  }
 }
 
 // ─── Subckt node list builders ────────────────────────────────────────────────
@@ -1936,11 +2393,19 @@ export function alterPlan(
     const va   = formatSpiceValue(next.amplitudeV)
     const freq = formatSpiceValue(next.freqHz)
 
-    if (next.wave === 'sine' || next.wave === 'triangle') {
+    if (next.wave === 'sine') {
       // SIN vector form: exact spacing required by spec §9
       return {
         kind: 'alter',
         commands: [`alter @${name}[sin] [ ${vo} ${va} ${freq} ]`],
+      }
+    }
+
+    // Triangle: PULSE vector form with rise = fall = T/2 (same params as the deck card)
+    if (next.wave === 'triangle') {
+      return {
+        kind: 'alter',
+        commands: [`alter @${name}[pulse] [ ${triangleParams(next).join(' ')} ]`],
       }
     }
 

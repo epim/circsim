@@ -1,6 +1,6 @@
 # Model library reference
 
-circsim ships a built-in SPICE model library, written in-house from datasheet parameters (every model file carries a provenance header; nothing is copied from vendor libraries). This page lists what's bundled so you can tell at a glance whether a part on your board will resolve automatically.
+circsim ships a built-in SPICE model library, written in-house from datasheet parameters (every model file carries a provenance header; nothing is copied from vendor libraries). The diode, LED, TVS and bipolar-transistor cards are derived from datasheet operating points (forward voltage at a stated current, gain at a stated collector current, transition frequency, capacitances) by a script checked into the repository, and a CI test fails if any of them reproduces a known third-party library card. The datasheet figures are transcribed from the datasheet families and have not yet been re-verified against vendor PDFs row by row. This page lists what's bundled so you can tell at a glance whether a part on your board will resolve automatically.
 
 For *how* a part gets matched to one of these, see [Models & resolution](../concepts/models). To add a part that isn't here, see [Fix an unresolved part](../guides/model-doctor).
 
@@ -11,11 +11,11 @@ For *how* a part gets matched to one of these, see [Models & resolution](../conc
 
 ## Diodes: primitive
 
-Two-terminal, anode = pin 1, cathode = pin 2. Zeners and the TVS are modeled as silicon diodes with a reverse-breakdown voltage.
+Two-terminal, anode = pin 1, cathode = pin 2. Zeners are modeled as silicon diodes with a reverse-breakdown voltage. The TVS is a small two-branch subcircuit: a forward diode and a separate reverse clamp, so its forward drop (about 1 V at 1 A) does not inherit the clamp slope.
 
 | Part | Matches (examples) | Notes |
 | --- | --- | --- |
-| 1N4148 | 1N4148, 1N914, 1N4148W/WS, BAS16/BAS16W | small-signal, Vf ≈ 0.72 V @ 5 mA |
+| 1N4148 | 1N4148, 1N914, 1N4148W/WS, BAS16/BAS16W | small-signal, Vf ≈ 0.67 V @ 5 mA, 0.9 V @ 100 mA |
 | 1N4001 | 1N4001-1N4007 | 1 A / 50 V rectifier |
 | 1N5819 | 1N5819, 1N5817/18, SB5819, B5819W, **SS14** | Schottky 1 A / 40 V |
 | SS54 | SS54, SS52, SS56, SB540 | 5 A / 40 V Schottky (MPN only) |
@@ -25,14 +25,14 @@ Two-terminal, anode = pin 1, cathode = pin 2. Zeners and the TVS are modeled as 
 
 ## LEDs: primitive
 
-Matched by value (the word "LED" plus a color, such as `Green`, `LED_green` or `Green LED`). Forward voltage is tuned per color. An LED on an `LED_*` footprint whose value is not one of these colors (`Yellow`, `Amber`, `LED 0805`) resolves to the generic LED with a fallback warning. LEDs get a current sense that drives their [3D glow](../guides/energize).
+Matched by value (the word "LED" plus a color, such as `Green`, `LED_green` or `Green LED`). Forward voltage is fitted per color to the middle of the typical datasheet band at 20 mA, and checked at 10 mA and 20 mA by the characterization suite. An LED on an `LED_*` footprint whose value is not one of these colors (`Yellow`, `Amber`, `LED 0805`) resolves to the generic LED with a fallback warning. LEDs get a current sense that drives their [3D glow](../guides/energize).
 
-| Part | Matches | Approx. Vf character |
+| Part | Matches | Vf at 20 mA (10 mA) |
 | --- | --- | --- |
-| Red LED | LED, "red" | lowest Vf |
-| Green LED | "green" | |
-| Blue LED | "blue" | |
-| White LED | "white" | highest Vf |
+| Red LED | LED, "red" | 1.90 V (1.85 V) |
+| Green LED | "green" | 2.15 V (2.09 V) |
+| Blue LED | "blue" | 3.10 V (3.00 V) |
+| White LED | "white" | 3.20 V (3.09 V) |
 
 ## Bipolar transistors (BJTs): primitive
 
@@ -108,7 +108,7 @@ These are deliberately simplified operating-point stubs: they model a single ste
 
 ## Digital logic: behavioral (XSPICE)
 
-Correct truth tables with datasheet-typical thresholds. Schmitt-trigger parts carry true hysteresis, so RC astables built around them oscillate. All match by part number.
+Correct truth tables with datasheet-typical thresholds. Schmitt-trigger parts carry true hysteresis, so RC astables built around them oscillate. Outputs are not ideal: each gate drives its pin through a source resistance and a drive-current limit (74HC about 40 ohm and 25 mA at 5 V, CD4000 about 400 ohm and 3 mA at 5 V, scaled with the rail), so an unbuffered LED or a heavy load pulls the pin down. Asynchronous controls (`PRE_N`, `CLR_N`, `MR_N`) are active low. All match by part number.
 
 **74HC family** (default rail 5 V): `74HC00` NAND, `74HC04` inverter, `74HC08` AND, `74HC14` Schmitt inverter, `74HC32` OR, `74HC74` dual D flip-flop, `74HC86` XOR, `74HC164` shift register, `74HC595` shift register + latch. Accepts 74HCT / SN74HC / 74LS aliases.
 
