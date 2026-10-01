@@ -94,6 +94,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #87 LM358 output low level is 69 mV against a 20 mV maximum (rout=100 ohm in the output stage) | M | merged | fix/2-supply-current-and-opamp | #118 | 4 | e503bc8 | escalated to opus (4 rounds), both reviewers APPROVE; merged 2026-09-30 22:10 PDT; canary green; note: macos-14 CI flaked once with ngspice memory required in the fine-step 555 test, green on rerun |
 | #131 Floating negative supply pin joins VCC through the supply-current source and is never reported as undriven | M | merged | fix/131-floating-supply-pin-undriven | #132 | 2 | 9ad8890 | sonnet rung (2 rounds), reviewer APPROVE; merged 2026-10-01 01:55 PDT; canary green |
 | #136 74HC flip-flop and shift-register clock-to-output delay is twice the library delaysNs | M | todo | | | 0 | | filed by D2 (#138) 2026-10-01: 74HC74 and 74HC164 clk-to-Q 2.1x datasheet |
+| #144 openBoard parity test races the background board hash: boardSha256 null on a slow runner | U | todo | | | 0 | | filed 2026-10-01 from a #135 CI flake; may be a product bug if sidecar or diagnostics can read a null hash |
 
 ## Wave log
 
@@ -130,3 +131,4 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 - 2026-10-01 03:25 PDT: #110 (Electron 44) green and approved but the merge is refused: the gh OAuth token lacks the workflow scope and this PR changes .github/workflows/ci.yml (HTTP 403 via gh pr merge and the REST API). Needs the human: gh auth refresh -h github.com -s workflow. Blocks #110, #112 (also touches ci.yml) and R3+R4 (after R1). Other PRs continue.
 - 2026-10-01 03:32 PDT: Linux E2E flake on master: e2e/sidecar-report.spec.ts:213 (dropped lead, openJack count) fails on PRs #114, #140 and #138 (docs-only) since about 03:10; master run bff1188 passed. Master-level fix branch fix/w1-linux-e2e-sidecar-lead (sonnet) must show three consecutive green Linux E2E runs. #138, #140 and #120 wait on it. #116 merged (31471e5).
 - 2026-10-01 03:38 PDT: #129 merged (c335730) closing #78 only; #25 stays open for W2.3 with the profile recorded in the issue. Scope renderer bug (trace broken at empty pixel columns) fixed inside #129 with a unit test. 34 of 36 batch 1 PRs merged.
+- 2026-10-01 03:55 PDT: #135 (V6) resolution reviewed by opus (field-by-field parity, APPROVE); one macos-14 failure in the #116 parity test (boardSha256 race) filed as #144 and the job rerun.
