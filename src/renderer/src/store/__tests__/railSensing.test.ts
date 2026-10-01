@@ -292,6 +292,25 @@ describe('sensed-rail cache invalidation (FIX 1)', () => {
     expect(store.getState().railNotes).toEqual([])
   })
 
+  it('powerOn surfaces the bled nets, and markDeckDirty clears them (issue #43)', async () => {
+    const mock = createMockSimClient()
+    const store = createAppStore({ simClient: mock })
+    seedSwitchedRailBoard(store)
+    // Move the bench supply onto the VDD net: IN then reaches only U1's
+    // sense-only input, so nothing drives it and the deck bled it to 0 V.
+    // OUT is driven by the gate and VDD by the supply, so neither is listed.
+    store.setState({
+      instruments: [{ kind: 'dc-supply', id: 'psu1', netId: 4, volts: 5, seriesOhms: 0.1 }],
+    })
+    autoRespond(mock, () => ({ vgated: 5, a: 0, b: 5 }))
+
+    await store.getState().powerOn()
+    expect(store.getState().undrivenNets.map(n => n.kicadName)).toEqual(['IN'])
+
+    store.getState().markDeckDirty()
+    expect(store.getState().undrivenNets).toEqual([])
+  })
+
   it('a gated-off railNote is cleared by a deck-dirtying edit (setGround)', async () => {
     const mock = createMockSimClient()
     const store = createAppStore({ simClient: mock })
