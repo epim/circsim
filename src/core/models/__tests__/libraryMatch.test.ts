@@ -377,15 +377,26 @@ describe('resolveAll tier 3 — library matching wired into resolve pipeline', (
     expect(res.warnings.some(w => w.includes('diode-a') || w.includes('diode-b'))).toBe(true)
   })
 
-  it('tier 1 wins over tier 3', () => {
-    // If schematic has Sim.Device=D for D1, tier 1 wins even if library also matches
+  it('tier 1 wins over tier 3 when the schematic gives a complete card', () => {
+    // Sim.Device=V with a dc value is a complete tier-1 card; the library never sees it.
+    const part = makePart('D1', '1N4148', 'Device:D', { mpn: '1N4148' })
+    const circuit = makeCircuit([part])
+    const schData = new Map([
+      ['D1', { value: '1N4148', sim: { Device: 'V', Params: 'dc=5' }, pins: [], noConnects: [] }],
+    ])
+    const [res] = resolveAll(circuit, schData, undefined, [diodeEntry])
+    expect(res.tier).toBe(1)
+  })
+
+  it('a bare Sim.Device=D does NOT win over tier 3: it has no model name (issue #6)', () => {
     const part = makePart('D1', '1N4148', 'Device:D', { mpn: '1N4148' })
     const circuit = makeCircuit([part])
     const schData = new Map([
       ['D1', { value: '1N4148', sim: { Device: 'D' }, pins: [], noConnects: [] }],
     ])
     const [res] = resolveAll(circuit, schData, undefined, [diodeEntry])
-    expect(res.tier).toBe(1)
+    expect(res.tier).toBe(3)
+    expect(res.model?.kind).toBe('subckt')
   })
 
   it('tier 2 wins over tier 3 for R/C/L', () => {
@@ -619,8 +630,9 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
   })
 
   it('BT1 value "3V" (battery symbol) stays unresolved — bare "3V" must not match zener-3v0', async () => {
-    // valueRegex matching is not refdes-gated, so a coin-cell battery whose
-    // VALUE is "3V" would resolve as a 3.0 V zener if the regex accepted the
+    // valueRegex matching refuses battery refdes, but the regex must not accept
+    // the bare form either: a coin-cell battery whose
+    // VALUE is "3V" on an unlisted refdes would resolve as a 3.0 V zener if the regex accepted the
     // bare form. Only "3.0V" (value) and "3V0"/"BZX84C3V0" (mpn) may match.
     const part = makePart('BT1', '3V', 'Battery:BatteryHolder_Keystone_3034_1x20mm')
     const circuit = makeCircuit([part])
@@ -732,7 +744,7 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
     }
   })
 
-  it('D7 value "SS54" on SMC → schottky-ss54 (pad 1 = ANODE — EasyEDA/JLC footprint)', async () => {
+  it('D7 value "SS54" on SMC → schottky-ss54, polarity UNVERIFIED (EasyEDA/JLC footprint, issue #5)', async () => {
     const part = makePart('D7', 'SS54', 'SMC_L7.1-W6.2-LS8.1-R-RD')
     const circuit = makeCircuit([part])
     const [res] = resolveAll(circuit, undefined, undefined, await realIndex())
@@ -740,16 +752,13 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
     expect(res.status).toBe('ok')
     if (res.model?.kind === 'subckt') {
       expect(res.model.subcktName).toBe('DSS54')
-      // The dimension-pattern (EasyEDA-origin) footprint name puts pad 1 =
-      // anode — the opposite of KiCad's D_* convention. Confirmed by the
-      // led_lantern rev B designer on the design files: D7 pad 1 = /VBUS_C =
-      // anode (series back-feed-block, forward VBUS_C → VIN_CHG). The old
-      // cathode-first expectation here modeled D7 reversed (dead charge path).
-      expect(res.model.pinMap).toEqual({ '1': '1', '2': '2' })
+      // A dimension-pattern (EasyEDA-origin) footprint name carries no polarity
+      // convention: on the led_lantern rev B board pad 1 is the anode on D7 but
+      // the cathode on D2, D8 and D9. Without the schematic the map is the KiCad
+      // default, and it is flagged rather than presented as confident.
+      expect(res.model.pinMap).toEqual({ '1': '2', '2': '1' })
     }
-    // The bare SMC footprint (no D_ prefix, as routed boards name it) matches a
-    // pinMaps key directly — no pinmap-unverified fallback warning.
-    expect(res.warnings.some((w) => w.includes('pinmap-unverified'))).toBe(false)
+    expect(res.warnings.some((w) => w.startsWith('pinmap-unverified:') && /polarity/i.test(w))).toBe(true)
   })
 
   it('D8 value "SB540" → schottky-ss54 via alias', async () => {
