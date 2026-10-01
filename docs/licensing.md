@@ -95,26 +95,35 @@ real lockfile's production tree does not contain `electron-updater`.
   `extraResources` places each platform's library. The `.cm` files load via an
   explicit `codemodel <abs>.cm` bootstrap using those packaged absolute paths.
 
-## Code signing / notarization — deferred (the one allowed v1 deferral, Spec §15)
+## Code signing / notarization (certificates supplied at release time)
 
-v1 ships **unsigned** installers from CI:
+The release job in `.github/workflows/ci.yml` signs and notarizes installers
+when the release environment carries the certificates, and otherwise builds
+them unsigned. Which path ran is visible in the job log (the "Package
+installers (signed)" or "Package installers (unsigned)" step). Until
+certificates are supplied, releases are unsigned.
 
-- **Windows (NSIS `.exe`):** unsigned. Windows SmartScreen will warn on first
-  run. To sign for distribution: provide an Authenticode certificate and set
-  `CSC_LINK` / `CSC_KEY_PASSWORD` (or `WIN_CSC_*`) in the release environment;
-  electron-builder signs automatically when those are present.
-- **macOS (`.dmg`):** unsigned, `identity: null`. Gatekeeper will block by
-  default (users must right-click → Open, or remove the quarantine attribute).
-  To sign + notarize for distribution: an Apple Developer ID Application
-  certificate (`CSC_LINK`/`CSC_KEY_PASSWORD`), `notarize` config, and
-  `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` credentials.
+- **Windows (NSIS `.exe`):** signed when `CSC_LINK` / `CSC_KEY_PASSWORD` (or
+  `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`) hold an Authenticode certificate;
+  otherwise unsigned and Windows SmartScreen warns on first launch.
+- **macOS (`.dmg`):** signed and notarized when an Apple Developer ID
+  Application certificate (`CSC_LINK` / `CSC_KEY_PASSWORD`) and the notarization
+  credentials (`APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID`) are
+  present. Otherwise the build is unsigned, and macOS 15 and later will not
+  open it unless the user deliberately allows it in System Settings > Privacy &
+  Security. There is no shortcut around that prompt, and circsim does not
+  document one. The steps are in the install guide
+  (`website/docs/start/install.md`).
 - **Linux (AppImage / `.deb`):** signing is not generally required for direct
   download; an optional GPG-signed `.deb` and `zsync` AppImage updates can be
   added for a repository-based distribution channel.
+- **`SHA256SUMS`:** every tagged release attaches this file next to the
+  installers. It lists the SHA-256 hash of each installer so a downloader can
+  confirm the file is the one that was published, which matters most while the
+  installers are unsigned. It is not a substitute for a signature.
 
-Auto-update is deferred for the same reason: an update channel needs signed
-builds, so `electron-updater` is not a dependency until that work lands.
+Auto-update is deferred: an update channel needs signed builds, so `electron-updater` is not a dependency until that work lands.
 
-This is the only deferred item for v1 and is a release-blocker only for
-distribution beyond direct download. It does not affect functional correctness
+Missing certificates are a release-blocker only for distribution beyond direct
+download. It does not affect functional correctness
 of the packaged app.

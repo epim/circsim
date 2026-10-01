@@ -41,8 +41,10 @@ Paste the generated list here.
 ### Install
 
 Download the installer for your platform from the assets below: Windows `.exe`, macOS `.dmg` (one
-per CPU architecture), Linux `.AppImage` or `.deb`. The installers are unsigned, so Windows
-SmartScreen and macOS Gatekeeper will warn on first launch. The
+per CPU architecture), Linux `.AppImage` or `.deb`. State here whether this release is signed
+and notarized (certificates were supplied) or unsigned. If unsigned, Windows SmartScreen will
+warn on first launch and macOS 15 will not open the app until the user allows it in System
+Settings. `SHA256SUMS` is attached next to the installers so downloads can be checked. The
 [install guide](https://epim.github.io/circsim/start/install) walks through each.
 
 circsim makes no network calls and does not check for updates. To upgrade, download the new
