@@ -12,6 +12,7 @@
 
 import React, { useCallback } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
+import { TEXT_HINT } from '../ui/palette'
 
 // ── MCU Pin Rows ──────────────────────────────────────────────────────────────
 
@@ -203,7 +204,7 @@ const pinModeBtnStyle: React.CSSProperties = {
   background: '#1a1a2a',
   border: '1px solid #2a2a3a',
   borderRadius: 2,
-  color: '#666',
+  color: TEXT_HINT,
   fontSize: 10,
   cursor: 'pointer',
 }

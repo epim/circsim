@@ -38,6 +38,9 @@ import type { PickEvent } from './viewport/picking'
 import type { SceneManager } from './viewport/scene'
 import type { OverlayMode } from './viewport/overlay'
 import { showNetsTabCue } from './ui/tabCues'
+import VoltageLegend from './ui/VoltageLegend'
+import { openDocsPage } from './ui/docsLink'
+import { termTitle } from './ui/glossary'
 import {
   APP_MIN_HEIGHT, APP_MIN_WIDTH, DOCK_COLLAPSED_H, DOCK_HEIGHT, MIN_VIEWPORT_H, useCollapsed,
 } from './ui/layoutPrefs'
@@ -309,9 +312,17 @@ function Shell(): React.ReactElement {
         {board && (
           <span style={{ fontSize: 12, color: '#9ab' }}>
             {summary.total} parts · {summary.ok} ok
-            {summary.stubbed > 0 && ` · ${summary.stubbed} stubbed`}
+            {summary.stubbed > 0 && (
+              <span title={termTitle('stub')} data-testid="header-stubbed">
+                {` · ${summary.stubbed} ${summary.stubbed === 1 ? 'placeholder' : 'placeholders'}`}
+              </span>
+            )}
             {summary.documentedOpen > 0 && ` · ${summary.documentedOpen} open by design`}
-            {summary.unresolved > 0 && ` · ${summary.unresolved} unresolved`}
+            {summary.unresolved > 0 && (
+              <span title={termTitle('unresolved')} data-testid="header-unresolved">
+                {` · ${summary.unresolved} with no model`}
+              </span>
+            )}
           </span>
         )}
         <FidelityBadge />
@@ -322,6 +333,14 @@ function Shell(): React.ReactElement {
         )}
         <button
           style={{ ...toolbarBtn, marginLeft: 'auto' }}
+          onClick={() => void openDocsPage('')}
+          data-testid="docs-btn"
+          title="Open the circsim documentation (guides, glossary, and what the results mean) in your browser"
+        >
+          Docs
+        </button>
+        <button
+          style={toolbarBtn}
           onClick={() => setAboutOpen(true)}
           data-testid="about-btn"
           title="Licenses & provenance"
@@ -385,6 +404,15 @@ function Shell(): React.ReactElement {
                   onOpenRecent={path => void handleOpenRecent(path)}
                   onClearRecent={handleClearRecent}
                   notice={recentNotice}
+                />
+              )}
+              {/* Voltage legend (issue #70): the scale for the copper tint, with
+                  min/max volts, whenever the Voltage overlay is showing results.
+                  The 0..5 V fallback mirrors the tint effect in Viewport. */}
+              {board && overlay === 'voltage' && opVoltages && (
+                <VoltageLegend
+                  min={(voltageRange ?? { min: 0, max: 5 }).min}
+                  max={(voltageRange ?? { min: 0, max: 5 }).max}
                 />
               )}
               {/* Plain-language dark-LED coach (non-blocking overlay). */}

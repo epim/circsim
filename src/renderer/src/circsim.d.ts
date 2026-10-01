@@ -112,6 +112,12 @@ declare global {
        */
       openDocs(): Promise<CircsimOpenDocsResult>
       /**
+       * Open one page of the public docs site in the system browser by slug
+       * (e.g. 'guides/energize'). Resolves true when the OS accepted the open.
+       * Optional so tests and non-Electron previews can omit it (issue #73).
+       */
+      openDocsPage?(slug: string): Promise<boolean>
+      /**
        * Licensing texts for the About dialog (Task 27, Spec §14): app license,
        * verbatim ngspice COPYING, model-library provenance, docs/licensing.md.
        */

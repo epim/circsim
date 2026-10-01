@@ -132,7 +132,8 @@ describe('ModelDoctor — documented-open cards (M9)', () => {
     // surfaces every override path: the 3 primary actions directly, plus the
     // overflow trigger for the rest.
     const html = renderDoctorWith([openRes], [part('U1', 'CH224K')])
-    for (const label of ['Stub open', 'Import .lib…', 'Pin map']) {
+    // Plain-language labels (issue #73); the technical term lives in the tooltip.
+    for (const label of ['Ignore this part', 'Import model file', 'Pin matching']) {
       expect(html, `action "${label}" must stay available`).toContain(label)
     }
     expect(html, 'overflow menu trigger must stay available').toContain(
@@ -189,11 +190,12 @@ describe('ModelDoctor — documented-open cards (M9)', () => {
 describe('Doctor card action hierarchy (Gemini finding 1)', () => {
   it('card shows exactly the 3 primary actions + the ⋮ trigger; menu closed', () => {
     const html = renderDoctor(null)
-    expect(html).toContain('Import .lib')
-    expect(html).toContain('Pin map')
-    expect(html).toContain('Stub open')
+    expect(html).toContain('Import model file')
+    expect(html).toContain('Pin matching')
+    expect(html).toContain('Ignore this part')
     expect(html).toContain('data-testid="doctor-more"')
     // secondary actions are NOT in the closed-state DOM
+    expect(html).not.toContain('Replace with a wire')
     expect(html).not.toContain('Stub short')
     expect(html).not.toContain('Interactive pins')
     expect(html).not.toContain('Ask your LLM')
@@ -245,6 +247,52 @@ describe('_revealDoctorCard — scroll helper', () => {
 
   it('tolerates an element without scrollIntoView (jsdom-style stub)', () => {
     expect(() => _revealDoctorCard({} as { scrollIntoView?: () => void })).not.toThrow()
+  })
+})
+
+// ─── Issue #73: plain-language labels, technical terms in tooltips ─────────────
+
+describe('Model Doctor wording (issue #73)', () => {
+  const stubbedRes: Resolution = {
+    ref: 'U3',
+    status: 'stubbed',
+    tier: 6,
+    warnings: [],
+    model: { kind: 'stub', mode: 'open' },
+  }
+
+  it('primary actions are plain language and keep the technical term in the tooltip', () => {
+    const html = renderDoctorWith([unresolved('U2')], [part('U2', 'X')])
+    expect(html).toContain('>Ignore this part<')
+    // The old jargon is not a visible label any more...
+    expect(html).not.toMatch(/>Stub open</)
+    // ...but it is one hover away, with a plain definition.
+    expect(html).toMatch(/title="Ignore this part \(Stub open\): Leave this part&#x27;s pins unconnected/)
+    expect(html).toMatch(/title="Pin matching \(pin map: pad to model terminal\)/)
+  })
+
+  it('a stubbed part wears a "placeholder" pill, not "stubbed"', () => {
+    const html = renderDoctorWith([stubbedRes], [part('U3', 'X')])
+    expect(html).toContain('>placeholder<')
+    expect(html).not.toContain('>stubbed<')
+  })
+
+  it('the overflow menu item carries the technical term as its tooltip', () => {
+    const html = renderToStaticMarkup(
+      <DoctorMoreMenu
+        items={[{ label: 'Replace with a wire', hint: 'Replace with a wire (Stub short): x', onSelect: () => {} }]}
+        open={true}
+        onToggle={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    expect(html).toContain('title="Replace with a wire (Stub short): x"')
+  })
+
+  it('the drawer links to its docs page', () => {
+    const html = renderDoctorWith([unresolved('U2')], [part('U2', 'X')])
+    expect(html).toContain('data-testid="doctor-docs-link"')
+    expect(html).toContain('data-docs="guides/model-doctor"')
   })
 })
 

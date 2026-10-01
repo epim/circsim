@@ -45,6 +45,9 @@ import {
   type RailNote,
 } from '../store/appStore'
 import { SCHEMATIC_PINMAP_PREFIX } from '../../../core/models/libraryMatch'
+import Term from '../ui/Term'
+import DocsLink from '../ui/docsLink'
+import { termTitle } from '../ui/glossary'
 import type { ConvergenceCulprit } from '../store/convergenceCulprit'
 import { openDocsAndReport } from './docsLink'
 import { saveDiagnostics, type SaveDiagnosticsResult } from '../diagnostics/saveDiagnostics'
@@ -236,11 +239,11 @@ export default function WarningsBar(): React.ReactElement | null {
       {benchToast && (
         <div style={toastStyle}>
           <strong>Bench restarted</strong>{' '}
-          ({benchToast.reason === 'memory' ? 'memory limit' : 'window elapsed'}). Scope history is kept.
+          ({benchToast.reason === 'memory' ? 'the simulator hit its memory limit' : 'the simulation window ran out'}). Scope history is kept.
           {benchToast.sequentialLogicCaveat && (
             <span style={caveatStyle}>
               {' '}
-              Note: sequential-logic state (flip-flops, counters) resets on a restart.
+              Note: flip-flops and counters start over from their initial state after a restart.
             </span>
           )}
           <button style={dismissBtn} onClick={() => store.getState().dismissBenchRestartToast()}>
@@ -264,7 +267,7 @@ export default function WarningsBar(): React.ReactElement | null {
           <div style={{ marginTop: 4 }}>{convergenceCard.plainLanguage}</div>
           {convergenceCard.culprit && (
             <div style={{ marginTop: 4 }} data-testid="convergence-culprit">
-              The simulator reported trouble converging around{' '}
+              The simulator had trouble finding a stable answer around{' '}
               <CulpritName
                 culprit={convergenceCard.culprit}
                 actionable={
@@ -279,9 +282,17 @@ export default function WarningsBar(): React.ReactElement | null {
           <div style={{ marginTop: 4, color: '#caa', fontStyle: 'italic' }}>
             {convergenceCard.retryLadderNote}
           </div>
-          <button style={rawToggleBtn} onClick={() => setRawOpen(o => !o)}>
-            {rawOpen ? '▾ Hide raw log' : '▸ Show raw ngspice log'}
-          </button>
+          <button
+            style={rawToggleBtn}
+            onClick={() => setRawOpen(o => !o)}
+            title={termTitle('rawLog')}
+            data-testid="raw-log-toggle"
+          >
+            {rawOpen ? '▾ Hide the full log' : "▸ Show the simulator's full log"}
+          </button>{' '}
+          <DocsLink to="guides/warnings#convergence" testId="convergence-docs-link">
+            What does this mean?
+          </DocsLink>
           {rawOpen && <pre style={rawLogStyle}>{convergenceCard.rawDetail}</pre>}
         </div>
       )}
@@ -301,7 +312,10 @@ export default function WarningsBar(): React.ReactElement | null {
                 {opCaveatMessage(opCaveat.method)}
               </details>
             </>
-          )}
+          )}{' '}
+          <DocsLink to="guides/warnings#op-caveat" testId="op-caveat-docs-link">
+            What does this mean?
+          </DocsLink>
         </div>
       )}
 
@@ -391,7 +405,10 @@ export default function WarningsBar(): React.ReactElement | null {
           the simulation solvable. On the real board{' '}
           {undrivenNets.length === 1 ? 'it floats' : 'they float'}, and anything{' '}
           {undrivenNets.length === 1 ? 'it feeds' : 'they feed'} reads a value the hardware would
-          not guarantee.
+          not guarantee.{' '}
+          <DocsLink to="guides/warnings#undriven-nets" testId="undriven-nets-docs-link">
+            What does this mean?
+          </DocsLink>
         </div>
       )}
 
@@ -490,10 +507,14 @@ function RailNoteRow({
   return (
     <div style={railNoteStyle} data-testid="rail-note" data-net={note.kicadName}>
       <div>
-        <strong>Check this rail.</strong> VDD (
-        <span style={refStyle}>{note.kicadName}</span>) is ~0 V at the operating
-        point — using the default swing. If this rail is powered during a
-        transient, logic thresholds may be inaccurate.
+        <strong>Check this rail.</strong> The <Term id="vdd" /> on{' '}
+        <span style={refStyle}>{note.kicadName}</span> reads about 0 V in the
+        steady-state measurement, so circsim is using a typical logic voltage
+        instead. If this rail is powered during a <Term id="transient" />, logic
+        thresholds may be inaccurate.{' '}
+        <DocsLink to="guides/warnings#rail-note" testId="rail-note-docs-link">
+          What does this mean?
+        </DocsLink>
       </div>
       <div style={railActionRowStyle}>
         <input

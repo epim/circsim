@@ -3,7 +3,8 @@
  *
  * Left-dock Parts / BOM list (Spec §11). For every part in the circuit shows the
  * ref, value, and a status badge (ok = green, stubbed = amber, unresolved = red,
- * documented-open = grey "Open by design" — M9).
+ * documented-open = grey "Open by design", M9). The badge never relies on color
+ * alone (issue #70): each status has its own dot shape plus a visible text label.
  *
  * Parts are grouped by status with the ones that need attention first and a
  * count in each heading (issue #72), and the list is windowed once it grows past
@@ -23,6 +24,7 @@ import { useApp, useAppStoreApi } from '../store/storeContext'
 import { statusBadge, type StatusBadge } from '../store/appStore'
 import type { Resolution } from '../../../core/models/types'
 import type { Part } from '../../../core/netlist/extract'
+import { TEXT_MUTED } from '../ui/palette'
 import WindowedList from './WindowedList'
 
 const BADGE_COLORS: Record<StatusBadge, string> = {
@@ -37,6 +39,25 @@ const BADGE_LABEL: Record<StatusBadge, string> = {
   amber: 'Stubbed',
   red: 'No model',
   grey: 'Open by design',
+}
+
+/** Longer explanation for the tooltip (plain language, issue #73). */
+const BADGE_HINT: Record<StatusBadge, string> = {
+  ok: 'OK: this part has a working model.',
+  amber: 'Stubbed: this part is a placeholder (left open, shorted, or driven by hand), not a real model.',
+  red: 'No model: circsim found no model for this part, so it contributes nothing to the simulation.',
+  grey: 'Open by design: this part is deliberately not simulated (for example a connector).',
+}
+
+/**
+ * Dot shape per status, so the four states differ by shape as well as color:
+ * circle = ok, diamond = stubbed, square = no model, ring = open by design.
+ */
+const BADGE_SHAPE: Record<StatusBadge, React.CSSProperties> = {
+  ok: { borderRadius: '50%' },
+  amber: { borderRadius: 1, transform: 'rotate(45deg)' },
+  red: { borderRadius: 0 },
+  grey: { borderRadius: '50%', background: 'transparent', border: '2px solid #95a5a6', boxSizing: 'border-box' },
 }
 
 /** Fixed heights (px) so the list can be windowed without measuring. */
@@ -182,12 +203,19 @@ export default function PartsPanel(): React.ReactElement {
               data-testid="part-row"
             >
               <span
-                style={{ ...badgeStyle, background: BADGE_COLORS[badge] }}
-                title={BADGE_LABEL[badge]}
+                style={{ ...badgeStyle, background: BADGE_COLORS[badge], ...BADGE_SHAPE[badge] }}
+                title={BADGE_HINT[badge]}
                 data-testid={`status-badge-${badge}`}
               />
               <span style={refStyle}>{part.ref}</span>
               <span style={valueStyle}>{part.value || '—'}</span>
+              <span
+                style={statusLabelStyle}
+                title={BADGE_HINT[badge]}
+                data-testid={`status-label-${badge}`}
+              >
+                {BADGE_LABEL[badge]}
+              </span>
             </div>
           )
         }}
@@ -262,4 +290,14 @@ const refStyle: React.CSSProperties = {
 }
 const valueStyle: React.CSSProperties = {
   color: '#aaa',
+  flex: 1,
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+const statusLabelStyle: React.CSSProperties = {
+  color: TEXT_MUTED,
+  fontSize: 11,
+  flexShrink: 0,
 }

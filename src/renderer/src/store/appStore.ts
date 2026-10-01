@@ -198,17 +198,17 @@ export function hasDigitalParts(resolutions: Resolution[]): boolean {
  * nets it could not really resolve.
  */
 export function opCaveatMessage(method: Exclude<OpSolveMethod, 'direct'>): string {
-  const unreliable = 'Voltages may be unreliable — especially 0.000 V readings.'
+  const unreliable = 'Voltages may be unreliable, especially 0.000 V readings.'
   switch (method) {
     case 'gmin':
-      return `Operating point found via fallback (gmin stepping — the direct solve did not converge). ${unreliable}`
+      return `The steady-state voltages (operating point) were found with a fallback: a gentler solve (gmin stepping), because the direct solve did not settle. ${unreliable}`
     case 'source':
-      return `Operating point found via fallback (source stepping — gmin stepping failed). ${unreliable}`
+      return `The steady-state voltages (operating point) were found with a fallback: a ramped solve (source stepping), after the gentler solve (gmin stepping) failed. ${unreliable}`
     case 'tran-fallback':
-      return `Operating point found via fallback (transient-op — gmin and source stepping both failed). ${unreliable}`
+      return `The steady-state voltages (operating point) were found with a last-resort fallback (transient-op, a short live run), after the gentler and ramped solves both failed. ${unreliable}`
     case 'failed':
       return (
-        'The operating point did not converge at all — the displayed voltages ' +
+        'The steady-state solve (operating point) did not converge at all: the displayed voltages ' +
         'come from the last failed attempt and should not be trusted.'
       )
   }
@@ -2483,10 +2483,11 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
             convergenceCard: {
               plainLanguage:
                 "The simulator couldn't find a stable solution for this circuit. " +
-                'Common causes: a missing or wrong model, a floating node with no DC path ' +
-                'to ground, or component values that are far apart in scale.',
+                'Common causes: a missing or wrong model, an unconnected net (a floating node ' +
+                'with no DC path to ground), or component values that are far apart in scale.',
               retryLadderNote:
-                'circsim already retried with gmin-stepping and source-stepping before reporting this.',
+                'circsim already retried with a gentler solve (gmin stepping) and a ramped solve ' +
+                '(source stepping) before reporting this.',
               rawDetail: event.detail,
               // Name the culprit part/net when ngspice's abort text carries one
               // ("trouble with mpmos_gen-instance m_q7" → Q7) — F2. One abort

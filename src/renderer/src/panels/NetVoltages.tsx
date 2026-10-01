@@ -17,6 +17,7 @@ import { useApp, useAppStoreApi } from '../store/storeContext'
 import { opCaveatMessage, type AppStore } from '../store/appStore'
 import { formatVolts } from '../viewport/markers'
 import type { CircuitNet } from '../../../core/netlist/extract'
+import { TEXT_HINT } from '../ui/palette'
 import WindowedList from './WindowedList'
 
 /** Fixed row heights (px) so the list can be windowed without measuring. */
@@ -293,7 +294,7 @@ const filterStyle: React.CSSProperties = {
   padding: '2px 6px',
 }
 const countStyle: React.CSSProperties = {
-  color: '#556',
+  color: TEXT_HINT,
   fontSize: 10,
   flexShrink: 0,
 }
@@ -321,7 +322,7 @@ const listStyle: React.CSSProperties = {
 }
 const emptyStyle: React.CSSProperties = {
   padding: '8px',
-  color: '#555',
+  color: TEXT_HINT,
   fontStyle: 'italic',
 }
 const rowStyle: React.CSSProperties = {

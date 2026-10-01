@@ -138,7 +138,11 @@ describe('WarningsBar — gated-off rail note (Task 6)', () => {
     const html = renderWithRailNotes()
     expect(html).toContain('data-testid="rail-note"')
     // Names the offending net and the ~0 V op measurement.
-    expect(html).toMatch(/VGATED.*0 V at the operating point/i)
+    expect(html).toMatch(/VGATED.*reads about 0 V in the steady-state measurement/i)
+    // Plain wording with the jargon defined on hover (issue #73).
+    expect(html).toContain('data-term="vdd"')
+    expect(html).toContain('data-term="transient"')
+    expect(html).toContain('data-testid="rail-note-docs-link"')
     expect(html).toMatch(/logic thresholds may be inaccurate/i)
     // A working "set rail voltage" affordance (input + button).
     expect(html).toContain('data-testid="rail-note-input"')

@@ -18,7 +18,7 @@ If the schematic lives elsewhere or has a different name, attach it by hand with
 - **Drag and drop** the `.kicad_sch` onto the circsim window.
 - Click **Attach schematic…** (or **Replace schematic…**) in the **Ground & Power** panel and pick the file.
 
-The Ground & Power panel's schematic row shows the attached filename in green once it's loaded, or *"No schematic: no Sim.\* fields"* in red when none is attached.
+The Ground & Power panel's schematic row shows the attached filename in green once it's loaded, or *"No schematic attached: no simulation settings from the schematic (Sim.\* fields)"* in red when none is attached. Hover the dotted term in the app for a definition, or see the [glossary](./glossary#sim-fields).
 
 ## What you'll notice
 

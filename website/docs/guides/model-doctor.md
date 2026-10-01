@@ -8,17 +8,17 @@ In the **Parts** panel, parts needing attention are grouped first, under a **Nee
 
 ## What a card shows
 
-Each problem part shows a status pill: **no model** (red), **stubbed** (amber), or **open by design** (grey). It also shows a reference, value, and library id, plus any warnings (an ambiguous match, an unverified pin order, an electrolytic-polarity caution). Below that is a row of actions.
+Each problem part shows a status pill: **no model** (red), **placeholder** (amber; also called *stubbed*), or **open by design** (grey). It also shows a reference, value, and library id, plus any warnings (an ambiguous match, an unverified pin order, an electrolytic-polarity caution). Below that is a row of actions.
 
 ## Your options
 
 ### Import a `.lib` {#import-a-lib}
 
-If you have a SPICE model file for the part (from the manufacturer, or anywhere), click **Import .lib…**. The guided flow:
+If you have a SPICE model file for the part (from the manufacturer, or anywhere), click **Import model file (.lib)…**. The guided flow:
 
 1. **Pick** a `.lib` or `.sub` file.
 2. **Choose the subckt** to bind (if the file has several).
-3. **Verify the pin map**: map each board pad to the correct model terminal. *Check this against the datasheet; a wrong pin map produces confidently-wrong results.*
+3. **Verify the pin matching** (the *pin map*): map each board pad to the correct model terminal. *Check this against the datasheet; a wrong pin map produces confidently-wrong results.*
 4. **Bind** it to the part.
 
 What gets bound is the model itself, not a link to the file. circsim copies the chosen `.subckt` block into the board's model, together with any helper subckts it instantiates and the top-level `.model`, `.param` and `.func` cards those blocks use. Unrelated parts in the same file are left out, and comments are dropped. Because the text is copied, the original `.lib` can move or disappear afterwards. If the file `.include`s or `.lib`s other files, circsim cannot follow them: the panel says so under the subckt list, and you can import those files too.
@@ -53,8 +53,10 @@ Models are always inlined into the deck, never loaded by path, so a legitimate m
 
 Sometimes the right answer is "take this part out of the picture":
 
-- **Stub open**: leave the pins electrically open (part not fitted, or removed from the sim).
-- **Stub short** (⋮ menu): tie the pins together (a jumper, a fitted zero-ohm, a closed switch).
+- **Ignore this part** (a *stub open*): leave the pins electrically open (part not fitted, or removed from the sim).
+- **Replace with a wire** (a *stub short*, in the ⋮ menu): tie the pins together (a jumper, a fitted zero-ohm, a closed switch).
+
+Hover either button in the app for the technical name and a plain definition.
 
 ### Interactive pins {#interactive-pins}
 
@@ -68,7 +70,7 @@ Now you can answer "if GPIO5 goes high, does the LED light?" by driving the pin 
 
 ## Edit the pin map {#pin-map}
 
-Click **Pin map** on any card to open the pad ↔ terminal table. Each terminal is editable (with a datalist of the model's terminal names), and every edit commits immediately as your override: it beats every automatic source and survives re-resolution. This is where you fix a [reversed diode](../reference/pin-maps#diode-polarity) if the automatic sources got it wrong.
+Click **Pin matching** on any card to open the pad ↔ terminal table (the *pin map*). Each terminal is editable (with a datalist of the model's terminal names), and every edit commits immediately as your override: it beats every automatic source and survives re-resolution. This is where you fix a [reversed diode](../reference/pin-maps#diode-polarity) if the automatic sources got it wrong.
 
 ## Undo
 

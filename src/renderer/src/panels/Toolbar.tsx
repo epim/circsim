@@ -25,6 +25,8 @@ import React, { useCallback } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
 import { wiredInstruments } from '../../../core/spicegen/instruments'
 import type { OverlayMode } from '../viewport/overlay'
+import { TEXT_HINT } from '../ui/palette'
+import { termTitle } from '../ui/glossary'
 
 const PACE_OPTIONS: { label: string; value: number | 'max' }[] = [
   { label: '0.1×', value: 0.1 },
@@ -32,10 +34,14 @@ const PACE_OPTIONS: { label: string; value: number | 'max' }[] = [
   { label: 'max', value: 'max' },
 ]
 
-const OVERLAY_OPTIONS: { label: string; value: OverlayMode }[] = [
-  { label: 'Realistic', value: 'realistic' },
-  { label: 'Voltage', value: 'voltage' },
-  { label: 'Highlight', value: 'highlight' },
+const OVERLAY_OPTIONS: { label: string; value: OverlayMode; hint: string }[] = [
+  { label: 'Realistic', value: 'realistic', hint: 'Show the board as it looks' },
+  {
+    label: 'Voltage',
+    value: 'voltage',
+    hint: 'Tint the copper by voltage; a color scale with the lowest and highest voltage appears on the board',
+  },
+  { label: 'Highlight', value: 'highlight', hint: 'Highlight the net you select' },
 ]
 
 export interface ToolbarProps {
@@ -113,7 +119,7 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
         style={canPowerOn ? primaryBtn : disabledBtn}
         aria-disabled={!canPowerOn}
         onClick={handlePowerOn}
-        title={canPowerOn ? 'Run a DC operating-point check' : disabledReason}
+        title={canPowerOn ? termTitle('operatingPoint') : disabledReason}
         data-testid="power-on-btn"
       >
         Power On
@@ -157,6 +163,7 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
           <button
             key={opt.value}
             style={overlay === opt.value ? segActive : segBtn}
+            title={opt.hint}
             onClick={() => onOverlay(opt.value)}
           >
             {opt.label}
@@ -167,7 +174,7 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
       {/* Status readout */}
       <span style={statusStyle}>
         {simState === 'idle' && 'idle'}
-        {simState === 'op' && 'operating point…'}
+        {simState === 'op' && 'measuring voltages…'}
         {(running || simState === 'paused') && (
           <>
             {running ? 'running' : 'paused'}
@@ -210,7 +217,7 @@ const disabledBtn: React.CSSProperties = {
   ...baseBtn,
   background: '#1a1a24',
   borderColor: '#2a2a34',
-  color: '#555',
+  color: TEXT_HINT,
   cursor: 'not-allowed',
 }
 const reasonStyle: React.CSSProperties = {
@@ -225,7 +232,7 @@ const groupStyle: React.CSSProperties = {
 }
 const groupLabel: React.CSSProperties = {
   fontSize: 10,
-  color: '#777',
+  color: TEXT_HINT,
   textTransform: 'uppercase',
   letterSpacing: '0.05em',
   marginRight: 4,

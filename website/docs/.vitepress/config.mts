@@ -78,6 +78,7 @@ export default defineConfig({
             { text: 'Read the warnings & fidelity banner', link: '/guides/warnings' },
             { text: 'Save a diagnostic bundle', link: '/guides/diagnostics' },
             { text: 'Run circsim from the command line', link: '/guides/headless-cli' },
+            { text: 'Glossary', link: '/guides/glossary' },
           ],
         },
       ],

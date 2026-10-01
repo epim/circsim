@@ -3,7 +3,7 @@
  *
  * Tests for overlay.ts:
  *   - setOverlay mode switching (realistic / voltage / highlight)
- *   - applyNetVoltages: per-net color lerp blue→red
+ *   - applyNetVoltages: per-net viridis ramp, violet (min) to yellow (max)
  *   - legend data exposed correctly
  *   - perf: color-write cost grows linearly with net count (ratio, no GL context needed)
  *
@@ -108,27 +108,50 @@ describe('OverlayController: voltage tinting', () => {
     overlay.setOverlay('voltage')
   })
 
-  it('applyNetVoltages: min voltage → blue', () => {
+  it('applyNetVoltages: min voltage → dark violet end of the ramp', () => {
     overlay.applyNetVoltages(new Map([[1, 0]]), 0, 5)
     const mat = netMaterials.get(1)!
-    // Blue: r≈0, g≈0, b≈1
-    expect(mat.color.b).toBeGreaterThan(0.7)
-    expect(mat.color.r).toBeLessThan(0.3)
+    // Viridis low end (#482878): blue-dominant, dark, green well below blue.
+    expect(mat.color.b).toBeGreaterThan(mat.color.g)
+    expect(mat.color.g).toBeLessThan(0.1)
   })
 
-  it('applyNetVoltages: max voltage → red', () => {
+  it('applyNetVoltages: max voltage → yellow end of the ramp', () => {
     overlay.applyNetVoltages(new Map([[2, 5]]), 0, 5)
     const mat = netMaterials.get(2)!
-    // Red: r≈1, g≈0, b≈0
-    expect(mat.color.r).toBeGreaterThan(0.7)
-    expect(mat.color.b).toBeLessThan(0.3)
+    // Viridis high end (#fde725): red and green bright, blue near zero.
+    expect(mat.color.r).toBeGreaterThan(0.8)
+    expect(mat.color.g).toBeGreaterThan(0.7)
+    expect(mat.color.b).toBeLessThan(0.1)
   })
 
-  it('applyNetVoltages: midpoint voltage → intermediate color (r≈g, neither pure R nor B)', () => {
+  it('applyNetVoltages: no red-to-blue hue pair (issue #70: colorblind-safe ramp)', () => {
+    overlay.applyNetVoltages(new Map([[1, 0], [2, 5]]), 0, 5)
+    const lo = netMaterials.get(1)!.color
+    const hi = netMaterials.get(2)!.color
+    // The old ramp was pure blue (0,0,1) to pure red (1,0,0): green stayed ~0 at both ends.
+    expect(hi.g).toBeGreaterThan(0.5)
+    // Lightness (a luminance proxy) must rise from low to high so it reads without hue.
+    const lum = (c: THREE.Color): number => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+    expect(lum(hi)).toBeGreaterThan(lum(lo) * 3)
+  })
+
+  it('applyNetVoltages: luminance rises monotonically with voltage', () => {
+    const lum = (c: THREE.Color): number => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+    let prev = -1
+    for (let i = 0; i <= 10; i++) {
+      overlay.applyNetVoltages(new Map([[1, i / 2]]), 0, 5)
+      const l = lum(netMaterials.get(1)!.color)
+      expect(l).toBeGreaterThan(prev)
+      prev = l
+    }
+  })
+
+  it('applyNetVoltages: midpoint voltage → intermediate teal-green', () => {
     overlay.applyNetVoltages(new Map([[3, 2.5]]), 0, 5)
     const mat = netMaterials.get(3)!
-    // At t=0.5, lerp from blue to red: neither fully red nor fully blue
-    expect(mat.color.r).toBeGreaterThan(0.1)
+    // Viridis midpoint (#1f9e89 region): green dominant, red low, blue present.
+    expect(mat.color.g).toBeGreaterThan(mat.color.r)
     expect(mat.color.b).toBeGreaterThan(0.1)
   })
 
@@ -153,10 +176,10 @@ describe('OverlayController: voltage tinting', () => {
     overlay.applyNetVoltages(new Map([[1, -99], [2, 999]]), 0, 5)
     const mat1 = netMaterials.get(1)!
     const mat2 = netMaterials.get(2)!
-    // -99 → clamped to 0 → blue
-    expect(mat1.color.b).toBeGreaterThan(0.7)
-    // 999 → clamped to 5 → red
-    expect(mat2.color.r).toBeGreaterThan(0.7)
+    // -99 → clamped to 0 → low end (violet)
+    expect(mat1.color.g).toBeLessThan(0.1)
+    // 999 → clamped to 5 → high end (yellow)
+    expect(mat2.color.r).toBeGreaterThan(0.8)
   })
 })
 
@@ -177,11 +200,12 @@ describe('OverlayController: legend data', () => {
     expect(legend.minVolts).toBe(0)
     expect(legend.maxVolts).toBe(5)
     expect(legend.stops.length).toBeGreaterThanOrEqual(2)
-    // First stop is blue (min), last stop is red (max)
+    // First stop is the violet low end (min), last stop the yellow high end (max)
     const first = legend.stops[0]
     const last  = legend.stops[legend.stops.length - 1]
-    expect(first.color.b).toBeGreaterThan(0.7)
-    expect(last.color.r).toBeGreaterThan(0.7)
+    expect(first.color.b).toBeGreaterThan(first.color.g)
+    expect(last.color.r).toBeGreaterThan(0.8)
+    expect(last.color.g).toBeGreaterThan(0.7)
   })
 
   it('getLegend clears after switching back to realistic', () => {
@@ -239,8 +263,14 @@ describe('OverlayController: NetTintTable target (#57)', () => {
     overlay.setOverlay('voltage')
     overlay.applyNetVoltages(new Map([[1, 0], [2, 5]]), 0, 5)
 
-    expect(tints.getColor(1)!.b).toBeGreaterThan(0.7)
-    expect(tints.getColor(2)!.r).toBeGreaterThan(0.7)
+    // Viridis ramp (#70): violet at the low end, yellow at the high end.
+    const low = tints.getColor(1)!
+    expect(low.b).toBeGreaterThan(low.r)
+    expect(low.b).toBeGreaterThan(low.g)
+    const high = tints.getColor(2)!
+    expect(high.r).toBeGreaterThan(0.7)
+    expect(high.g).toBeGreaterThan(0.6)
+    expect(high.b).toBeLessThan(0.2)
     // net 3 was not in the map: still copper
     expect(tints.getColor(3)!.r).toBeCloseTo(COPPER.r, 5)
 

@@ -8,30 +8,30 @@ They stack near the top of the window, most-urgent first.
 
 The one you'll see most. It appears whenever the simulation is running with incomplete information.
 
-- **"Results approximate: …"** *(amber)*: one or more parts are **unresolved** or **stubbed** (a microcontroller modeled as a [supply-load stub](../concepts/models#supply-load-stubs) is stubbed). The voltages and waveforms are correct for the *modeled* part of the circuit, but the real board may differ wherever an unmodeled part matters.
+- **"Results approximate: …"** *(amber)*: one or more parts are **unresolved** (no model found) or **stubbed** (running as a placeholder; a microcontroller modeled as a [supply-load stub](../concepts/models#supply-load-stubs) is stubbed). The voltages and waveforms are correct for the *modeled* part of the circuit, but the real board may differ wherever an unmodeled part matters.
 - **"Open by design: …"** *(grey-blue)*: the only affected parts are documented opens (a part with no meaningful SPICE model). Lower-key, because this is expected, not a problem.
 
 The banner lists the affected parts and links to **open Model Doctor** (jumps to the first one) and **What can circsim tell you?** ([the fidelity page](../concepts/fidelity)). The link opens the published page in your browser when you are online and the copy bundled with circsim when you are not. If neither can be opened, the banner says so and gives the page address instead of failing silently. If many parts are affected it collapses to a count.
 
 You can **minimize** it (the **»** button) to a compact header badge (**⚠ N approximate** or **ⓘ N open by design**) and click the badge to bring it back. You can't fully dismiss it, and it re-expands on its own if the set of affected parts changes: hiding it entirely would misrepresent the simulation. To make it go away for real, [resolve or stub the parts](./model-doctor).
 
-## "Check these voltages": the operating-point caveat
+## "Check these voltages": the operating-point caveat {#op-caveat}
 
 *(persistent, appears after a fallback solve)* The banner reads: **"Check these voltages. These voltages needed a workaround to solve; treat 0.000 V readings as unknown."** The [operating point](./energize) converged, but only through a **numerical fallback** rather than a clean direct solve, and a fallback op can report a misleading `0.000 V` on nets it couldn't resolve. Treat the voltages as suspect and look for the underlying cause (a floating node, a missing ground path). A clean solve shows no caveat.
 
-You don't need to understand the solver to use this. If you're curious which workaround ran (*gmin-stepping* or *source-stepping*, techniques that ease a stubborn circuit toward a solution, or a transient assist), open the **Details** disclosure under the banner.
+You don't need to understand the solver to use this. If you're curious which workaround ran (a *gentler solve*, called *gmin stepping*, or a *ramped solve*, called *source stepping*, techniques that ease a stubborn circuit toward a solution, or a transient assist), open the **Details** disclosure under the banner.
 
 The bundled op-amp, comparator, 555, and regulator models are written so that ordinary boards solve directly, with no fallback. So when this banner does appear on a board built from them, it is a real signal about the circuit (typically a floating node or a missing DC path), not routine noise to dismiss.
 
-## "The simulator couldn't find a stable solution"
+## "The simulator couldn't find a stable solution" {#convergence}
 
-*(dismissable card)* The solve failed outright. This is usually a **numerical** problem, not a broken circuit. circsim names the likely culprit in plain language and often points at the specific net or part. When it does, the name is a button: click a part to select it on the board and reveal its card in the [Model Doctor](./model-doctor), or click a net to select it on the board. (A culprit that maps to no net on your board is shown as plain text.) Common fixes: designate the [correct ground](./ground-and-supply), stub an [unresolved part](./model-doctor), or check for a floating node. Expand **Show raw ngspice log** if you want the engine's own output.
+*(dismissable card)* The solve failed outright. This is usually a **numerical** problem, not a broken circuit. circsim names the likely culprit in plain language and often points at the specific net or part. When it does, the name is a button: click a part to select it on the board and reveal its card in the [Model Doctor](./model-doctor), or click a net to select it on the board. (A culprit that maps to no net on your board is shown as plain text.) Common fixes: designate the [correct ground](./ground-and-supply), stub an [unresolved part](./model-doctor), or check for a floating node. Expand **Show the simulator's full log** (the raw ngspice log) if you want the engine's own output.
 
-## "Check this rail": a gated-off rail
+## "Check this rail": a gated-off rail {#rail-note}
 
-*(amber)* A digital chip's VDD net measured near 0 V at the operating point, so circsim used the family-default logic swing instead, which means logic thresholds may be wrong if that rail is actually powered during a transient. Type the real rail voltage into the inline field and click **Set rail voltage** to fix it. See [rail sensing](../reference/architecture#rail-sensing).
+*(amber)* The chip power pin (VDD) of a digital chip reads about 0 V in the steady-state measurement (the operating point), so circsim used the family-default logic swing instead, which means logic thresholds may be wrong if that rail is actually powered during a live run (a transient simulation). Type the real rail voltage into the inline field and click **Set rail voltage** to fix it. See [rail sensing](../reference/architecture#rail-sensing).
 
-## "Undriven nets held at 0 V"
+## "Undriven nets held at 0 V" {#undriven-nets}
 
 *(amber)* One or more nets have no path to ground and nothing that drives them, for example a CMOS input wired only to an unused or unmodeled part, or an enable line with no pull-down. To keep the solve numerically stable, circsim ties each such net to ground through a 1 GOhm resistor, so the net reads **0 V in the simulation**. That 0 V is an artifact of the tie, not a measurement: on the real board the net floats, and whatever it feeds (a logic input, a comparator, a gate) can read any level. The banner lists every affected net by its KiCad name.
 
