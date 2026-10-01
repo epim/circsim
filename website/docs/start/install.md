@@ -55,9 +55,9 @@ Newer builds no longer need it.
 
 ## What you'll need to feed it
 
-circsim opens a **routed KiCad board**: a `.kicad_pcb` file (KiCad 6 or newer). That's the one required input; the circuit is rebuilt straight from the copper. Two optional inputs make the simulation sharper:
+circsim opens a **routed KiCad board**: a `.kicad_pcb` file (KiCad 6 to 10). That's the one required input; the circuit is rebuilt straight from the copper. Two optional inputs make the simulation sharper:
 
-- the matching **`.kicad_sch` schematic**: the only source of KiCad `Sim.*` fields and of symbol pin names (which resolve diode/LED polarity from the design instead of a guess), and
+- the matching **`.kicad_sch` schematic**, found automatically when it has the same name as the board and sits in the same folder: the only source of KiCad `Sim.*` fields and of symbol pin names (which resolve diode/LED polarity from the design instead of a guess), and
 - a **BOM** (bill of materials, a spreadsheet listing every part) as a CSV with a manufacturer part-number column, to pin down exact parts.
 
 Don't have a board handy? That's fine: circsim ships with two sample projects you can open from the start screen. Head to [your first five minutes](./first-run) next.

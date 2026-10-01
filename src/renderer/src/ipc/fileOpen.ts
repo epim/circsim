@@ -14,14 +14,24 @@
  */
 
 export interface OpenedProject {
+  /** The path the board was read from (enables the per-board setup file). */
+  boardPath: string
   boardFileName: string
   boardText: string
+  /** Text of `<board>.circsim.json` when it exists. */
+  sidecarText?: string
+  /** The setup file exists but could not be read. */
+  sidecarError?: string
   schematicFileName?: string
   schematicText?: string
   bomText?: string
 }
 
 export type ReadFileFn = (path: string) => Promise<string>
+/** window.circsim.readSidecar: never rejects; absent, text, or an error string. */
+export type ReadSidecarFn = (
+  boardPath: string,
+) => Promise<{ exists: boolean; text?: string; error?: string }>
 /** Stat-based existence probe (window.circsim.fileExists) — never throws in prod. */
 export type FileExistsFn = (path: string) => Promise<boolean>
 
@@ -88,11 +98,24 @@ export async function openProjectFromPath(
   readFile: ReadFileFn,
   bomPath?: string,
   fileExists?: FileExistsFn,
+  readSidecar?: ReadSidecarFn,
 ): Promise<OpenedProject> {
   const boardText = await readFile(boardPath)
   const { base } = splitPath(boardPath)
 
-  const result: OpenedProject = { boardFileName: base, boardText }
+  const result: OpenedProject = { boardPath, boardFileName: base, boardText }
+
+  // Per-board setup file (best-effort: a failure to read it must never fail the
+  // open; the store reports it instead).
+  if (readSidecar) {
+    try {
+      const sc = await readSidecar(boardPath)
+      if (sc.exists && sc.text !== undefined) result.sidecarText = sc.text
+      else if (sc.exists && sc.error) result.sidecarError = sc.error
+    } catch (err) {
+      result.sidecarError = err instanceof Error ? err.message : String(err)
+    }
+  }
 
   // Sibling .kicad_sch (best-effort).
   const schPath = siblingSchematicPath(boardPath)

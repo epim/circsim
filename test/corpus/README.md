@@ -8,8 +8,8 @@ CI only ever saw seven-part fixtures (issue #22).
 
 | File | What it checks |
 |---|---|
-| `pipeline.corpus.test.ts` | Per board: header format version matches the manifest, `parseBoard`, `extract`, `resolveAll`, `generateDeck` finish inside a time budget, the deck has no NaN or undefined numbers, and pad-to-net connectivity equals KiCad's. Writes per-board metrics. |
-| `op.corpus.test.ts` | The generated deck goes through the real bundled libngspice for an operating point inside a time budget; values are finite and the bench supply node is sane. |
+| `pipeline.corpus.test.ts` | Per board: header format version matches the manifest, `parseBoard`, `extract`, `resolveAll`, `generateDeck` complete, the deck has no NaN or undefined numbers, and pad-to-net connectivity equals KiCad's. Writes per-board metrics. |
+| `op.corpus.test.ts` | The generated deck goes through the real bundled libngspice for an operating point (elapsed time is recorded as a metric, never asserted); values are finite and the bench supply node is sane. |
 | `padpos.corpus.test.ts` | `padWorldPos` against KiCad's pad centres on every corpus pad. Marked as a known defect (#3) until the pad rotation fix lands. |
 | `synthetic.corpus.test.ts` | The synthetic boards (below) against kicad-cli: KiCad loads all five syntax dialects, agrees on every pad position and net, and reports zero unconnected items on the routed board. |
 | `private.corpus.test.ts` | Your own boards, from `CIRCSIM_PRIVATE_BOARDS_DIR`. |

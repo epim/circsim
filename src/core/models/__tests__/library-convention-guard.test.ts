@@ -55,8 +55,11 @@ type Convention = 'kicad' | 'easyeda'
 /**
  * Real footprint names tagged with their known pad-numbering convention.
  * kicad: pad 1 = cathode (KiCad-official D_* / LED_* footprints).
- * easyeda: pad 1 = anode (JLC/EasyEDA-origin footprints — lib-prefixed and
- * the bare dimension-pattern form routed boards present).
+ * easyeda: NO convention. JLC/EasyEDA-origin footprints (lib-prefixed and the
+ * bare dimension-pattern form routed boards present) put pad 1 on the anode for
+ * some parts and the cathode for others (issue #5: led_lantern rev B D7 vs D2,
+ * D8, D9), so the name can never yield a CONFIDENT polarity. The guard demands
+ * a pinmap-unverified warning for every such name.
  */
 const CORPUS: Array<[string, Convention]> = [
   ['Diode_SMD:D_SMC', 'kicad'],
@@ -73,15 +76,17 @@ const CORPUS: Array<[string, Convention]> = [
   ['LED_THT:LED_D5.0mm', 'kicad'],
   ['JLC-MCP:SMC_L7.1-W6.2-LS8.1-R-RD', 'easyeda'], // lantern rev B D7 (SS54)
   ['SMC_L7.1-W6.2-LS8.1-R-RD', 'easyeda'], // …as circsim sees it (bare)
-  ['JLC-MCP:SMA_L4.4-W2.8-LS5.4-R-RD', 'easyeda'], // lantern D8/D9 (SS14)
+  ['JLC-MCP:SMA_L4.4-W2.8-LS5.4-R-RD', 'easyeda'], // an SS14 as the JLC library names it
+  ['SMA_L4.2-W2.6-LS5.0-RD_1', 'easyeda'], // lantern D8/D9 (SS14): pad 1 = cathode
+  ['JLC-MCP:SOD-123_L2.8-W1.8-LS3.7-RD', 'easyeda'], // lantern D2 (B5819W): pad 1 = cathode
   ['SMA_L4.4-W2.8-LS5.4-R-RD', 'easyeda'],
   ['SOD-123_L2.8-W1.8-LS3.7-RD', 'easyeda'],
   ['SOD-323_L1.8-W1.3-LS2.5-RD', 'easyeda'],
 ]
 
-const POLARITY_BY_CONVENTION: Record<Convention, Record<string, string>> = {
+const POLARITY_BY_CONVENTION: Record<Convention, Record<string, string> | null> = {
   kicad: CATHODE_FIRST,
-  easyeda: ANODE_FIRST,
+  easyeda: null, // no convention: never confident
 }
 
 function isPolarityMap(m: Record<string, string> | undefined): boolean {
@@ -105,9 +110,19 @@ function violations(entry: LibraryEntry): string[] {
   let confidentMatches = 0
   for (const [name, convention] of CORPUS) {
     const { pinMap, warnings } = selectPinMap(entry, name)
+    const expected = POLARITY_BY_CONVENTION[convention]
+    if (expected === null) {
+      // A name with no pad-numbering convention must never read as confident.
+      if (warnings.length === 0) {
+        out.push(
+          `"${name}" (${convention}) resolves ${JSON.stringify(pinMap)} with NO warning; ` +
+            `a footprint name with no polarity convention must carry pinmap-unverified`,
+        )
+      }
+      continue
+    }
     if (warnings.length > 0) continue // fallback path — warned, not confident
     confidentMatches++
-    const expected = POLARITY_BY_CONVENTION[convention]
     if (JSON.stringify(pinMap) !== JSON.stringify(expected)) {
       out.push(
         `"${name}" (${convention}) silently resolves ${JSON.stringify(pinMap)}; ` +
@@ -138,29 +153,40 @@ describe('convention partition guard — two-terminal polarized entries', () => 
 
 describe('guard self-test — must actually detect the D7 failure shapes', () => {
   // The pre-fix schottky-ss54 shape: one over-broad KiCad-polarity key that
-  // also matches EasyEDA names. This is the exact bug that reversed D7.
-  const preFixSs54: LibraryEntry = {
-    id: 'self-test-prefix-ss54',
+  // also matches EasyEDA names. selectPinMap now intercepts those names for any
+  // polarized entry that has a defaultPinMap; an entry WITHOUT one slips past the
+  // interception and reads confidently, which is exactly what the guard flags.
+  const noDefaultSs54: LibraryEntry = {
+    id: 'self-test-no-default-ss54',
     match: { mpn: ['SS54'] },
     model: { type: 'model-card', file: 'diodes.lib', name: 'DSS54' },
     pinMaps: { '(D_)?(SMC|SMB|SMA|DO-214|DO-201).*': CATHODE_FIRST },
-    defaultPinMap: CATHODE_FIRST,
     provenance: 'guard self-test fixture — reconstruction of the pre-f6680b6 entry shape',
   }
 
-  it('flags the pre-fix over-broad key (would have caught D7)', () => {
-    const v = violations(preFixSs54)
+  it('flags an over-broad key on an entry the interception cannot cover', () => {
+    const v = violations(noDefaultSs54)
     expect(v.length).toBeGreaterThan(0)
     expect(v.some((m) => m.includes('SMC_L7.1-W6.2-LS8.1-R-RD'))).toBe(true)
   })
 
-  it('flags a correct entry whose keys were reordered (first-match-wins fragility)', () => {
+  it('every bundled polarized entry has a defaultPinMap, so the interception covers it', () => {
+    for (const e of polarizedEntries()) {
+      expect(e.defaultPinMap, `${e.id} needs a defaultPinMap`).toBeDefined()
+    }
+  })
+
+  it('reordering the bundled ss54 keys cannot resurrect D7 (EasyEDA names never reach the keys)', () => {
     const fixed = readIndex().entries.find((e) => e.id === 'schottky-ss54')!
     const reordered: LibraryEntry = {
       ...fixed,
       pinMaps: Object.fromEntries(Object.entries(fixed.pinMaps).reverse()),
     }
     expect(violations(fixed)).toEqual([])
-    expect(violations(reordered).length).toBeGreaterThan(0)
+    expect(violations(reordered)).toEqual([])
   })
 })
+
+function polarizedEntries(): LibraryEntry[] {
+  return readIndex().entries.filter(isTwoTerminalPolarized)
+}

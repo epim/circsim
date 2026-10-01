@@ -10,10 +10,11 @@
  * proves libngspice dlopens on the host (a missing shared library such as the
  * libfftw3 of issue #15 leaves the app looking healthy but the sim never ready).
  *
- * Packaged executable per platform (electron-builder --dir):
+ * Packaged executable per platform (electron-builder --dir), resolved by
+ * resolvePackagedExe in ./util (issue #66):
  *   win32  dist/win-unpacked/circsim.exe
  *   linux  dist/linux-unpacked/circsim
- *   darwin dist/mac[-arm64]/circsim.app/Contents/MacOS/circsim
+ *   darwin dist/mac[-arch]/circsim.app/Contents/MacOS/circsim
  * CIRCSIM_PACKAGED_EXE overrides the path.
  *
  * Prerequisite: `npm run package:dir` (produces the unpacked app).
@@ -29,28 +30,11 @@ import {
   type ElectronApplication,
   type Page,
 } from '@playwright/test'
-import { join } from 'path'
 import { existsSync } from 'fs'
-import { pipeAppOutput } from './util'
+import { pipeAppOutput, resolvePackagedExe } from './util'
 
-function packagedExePath(): string {
-  const override = process.env['CIRCSIM_PACKAGED_EXE']
-  if (override) return override
-  const dist = join(__dirname, '..', 'dist')
-  switch (process.platform) {
-    case 'win32':
-      return join(dist, 'win-unpacked', 'circsim.exe')
-    case 'darwin': {
-      // electron-builder names the dir after the host arch: mac (x64) or mac-arm64.
-      const dir = process.arch === 'arm64' ? 'mac-arm64' : 'mac'
-      return join(dist, dir, 'circsim.app', 'Contents', 'MacOS', 'circsim')
-    }
-    default:
-      return join(dist, 'linux-unpacked', 'circsim')
-  }
-}
-
-const PACKAGED_EXE = packagedExePath()
+const PACKAGED_EXE: string =
+  process.env['CIRCSIM_PACKAGED_EXE'] ?? resolvePackagedExe() ?? '<packaged binary not built>'
 
 // The first op solve loads libngspice and the code models inside the SimHost
 // utility process; on a loaded CI runner that has taken well over 10 s.

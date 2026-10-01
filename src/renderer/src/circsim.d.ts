@@ -30,6 +30,10 @@ interface CircsimCrashedPayload {
   willRespawn: boolean
 }
 
+type CircsimOpenDocsResult =
+  | { ok: true; target: 'web' | 'local' }
+  | { ok: false; error: string }
+
 interface CircsimLicenseTexts {
   appVersion: string
   appLicense: string
@@ -43,6 +47,13 @@ interface CircsimModelLibrary {
   entries: import('../../core/models/types').LibraryEntry[]
   /** filename → file contents for every referenced .lib / .json model file. */
   texts: Record<string, string>
+}
+
+interface CircsimSidecarReadResult {
+  exists: boolean
+  text?: string
+  /** The file exists but could not be read. */
+  error?: string
 }
 
 declare global {
@@ -77,10 +88,12 @@ declare global {
        */
       getFirstLightDemoPath(): Promise<string>
       /**
-       * Open the "what circsim can tell you" fidelity doc in the system viewer.
-       * Wired from the fidelity banner and About panel (Task 28, Spec §12, §16 risk 7).
+       * Open the "what circsim can tell you" fidelity doc (published page in the
+       * system browser when online, else the bundled Markdown). Resolves with the
+       * outcome so a failure can be shown (issue #62). Wired from the fidelity
+       * banner and About panel (Task 28, Spec §12, §16 risk 7).
        */
-      openDocs(): Promise<void>
+      openDocs(): Promise<CircsimOpenDocsResult>
       /**
        * Licensing texts for the About dialog (Task 27, Spec §14): app license,
        * verbatim ngspice COPYING, model-library provenance, docs/licensing.md.
@@ -92,6 +105,30 @@ declare global {
        * `texts` for the deck generator to inline .subckt/.model definitions.
        */
       getModelLibrary(): Promise<CircsimModelLibrary>
+      /**
+       * Read the per-board setup file (`<board>.circsim.json`) beside a board.
+       * Never rejects. Issue #27.
+       */
+      readSidecar(boardPath: string): Promise<CircsimSidecarReadResult>
+      /**
+       * Write the setup file beside a board (atomic). `backupExisting` keeps the
+       * previous file as `<file>.bak`. Rejects on failure.
+       */
+      writeSidecar(boardPath: string, text: string, opts?: { backupExisting?: boolean }): Promise<{ path: string }>
+      /** Recently opened boards, most recent first. */
+      getRecentBoards(): Promise<string[]>
+      addRecentBoard(boardPath: string): Promise<string[]>
+      removeRecentBoard(boardPath: string): Promise<string[]>
+      clearRecentBoards(): Promise<string[]>
+      /**
+       * Save a report through the native save dialog. `pdf` content is the
+       * standalone report HTML, printed to PDF by the main process.
+       */
+      exportReport(req: {
+        format: 'md' | 'pdf'
+        content: string
+        suggestedName: string
+      }): Promise<{ cancelled: boolean; filePath?: string }>
     }
   }
 }

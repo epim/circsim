@@ -11,7 +11,7 @@ The one you'll see most. It appears whenever the simulation is running with inco
 - **"Results approximate: …"** *(amber)*: one or more parts are **unresolved** or **stubbed**. The voltages and waveforms are correct for the *modeled* part of the circuit, but the real board may differ wherever an unmodeled part matters.
 - **"Open by design: …"** *(grey-blue)*: the only affected parts are documented opens (a part with no meaningful SPICE model). Lower-key, because this is expected, not a problem.
 
-The banner lists the affected parts and links to **open Model Doctor** (jumps to the first one) and **What can circsim tell you?** ([the fidelity page](../concepts/fidelity)). If many parts are affected it collapses to a count.
+The banner lists the affected parts and links to **open Model Doctor** (jumps to the first one) and **What can circsim tell you?** ([the fidelity page](../concepts/fidelity)). The link opens the published page in your browser when you are online and the copy bundled with circsim when you are not. If neither can be opened, the banner says so and gives the page address instead of failing silently. If many parts are affected it collapses to a count.
 
 You can **minimize** it (the **»** button) to a compact header badge (**⚠ N approximate** or **ⓘ N open by design**) and click the badge to bring it back. You can't fully dismiss it, and it re-expands on its own if the set of affected parts changes: hiding it entirely would misrepresent the simulation. To make it go away for real, [resolve or stub the parts](./model-doctor).
 
@@ -25,7 +25,7 @@ The bundled op-amp, comparator, 555, and regulator models are written so that or
 
 ## "The simulator couldn't find a stable solution"
 
-*(dismissable card)* The solve failed outright. This is usually a **numerical** problem, not a broken circuit. circsim names the likely culprit in plain language and often points at the specific net or part. Common fixes: designate the [correct ground](./ground-and-supply), stub an [unresolved part](./model-doctor), or check for a floating node. Expand **Show raw ngspice log** if you want the engine's own output.
+*(dismissable card)* The solve failed outright. This is usually a **numerical** problem, not a broken circuit. circsim names the likely culprit in plain language and often points at the specific net or part. When it does, the name is a button: click a part to select it on the board and reveal its card in the [Model Doctor](./model-doctor), or click a net to select it on the board. (A culprit that maps to no net on your board is shown as plain text.) Common fixes: designate the [correct ground](./ground-and-supply), stub an [unresolved part](./model-doctor), or check for a floating node. Expand **Show raw ngspice log** if you want the engine's own output.
 
 ## "Check this rail": a gated-off rail
 
@@ -45,6 +45,18 @@ Fix it by giving the net a real source: add the missing pull-up or pull-down, co
 
 *(grey, informational)* circsim found a diode/LED whose schematic pin names (A/K) disagreed with its footprint's pad convention, and trusted the schematic, which caught a would-be-reversed part. If your *schematic* is the stale one, override in the [Model Doctor](./model-doctor#pin-map). This is the system working; no action needed unless the schematic is wrong. See [the diode-polarity trap](../reference/pin-maps#diode-polarity).
 
+## "pinmap-unverified: polarity of ..." {#polarity-unverified}
+
+*(sim log warning, when a board opens)* A diode or LED sits on a JLCPCB / EasyEDA footprint, whose pad numbering follows the part rather than any convention, so circsim cannot tell which pad is the anode from the footprint name. It uses KiCad's default (pad 1 = cathode). The part has a model, so its dot stays green and it has no Model Doctor card; the sim log names it instead (`D8: pinmap-unverified: polarity of "SMA_L4.2-W2.6-LS5.0-RD_1" ...`). [Attach the schematic](./attach-schematic) so circsim can read the symbol's `A`/`K` pin names, which settles the polarity. Without a schematic, check the part against your board (its datasheet drawing or the silkscreen) before you trust a converter or charger result. See [the diode-polarity trap](../reference/pin-maps#diode-polarity).
+
+## A part the simulator dropped or rejected
+
+*(the part turns **no model**, red, after a run)* circsim reads the simulator's log while it loads the deck. If ngspice says it `ignored` a part (`is not a valid ... instance line`), assumed `DC 0` for a source with no value, or `could not find a valid modelname` for a part's card, that part is no longer shown as modeled: it becomes **no model** with ngspice's message on its card, and the next deck leaves it out instead of repeating the bad card. Before this, such a part could read green while missing from the simulation.
+
+## `BOM:` lines in the sim log {#bom-lines}
+
+When a [BOM](../reference/file-formats#bom-csv-the-bill-of-materials-optional) is loaded, the sim log says what it did. A `BOM:` warning means the file could not be read, had a range circsim could not expand, or had rows whose references are not on the board. A `BOM: <ref>: ...` line names a part whose value the BOM replaced, or whose model its MPN chose or failed to choose, whether or not the part resolved. A part that is also in the Model Doctor shows the same thing as a `bom:` note on its card. A BOM value that only repeats the board's (a JLCPCB `Comment` such as `100nF 50V X7R` on a `100n` capacitor) changes nothing and gets no line.
+
 ## 💡 Coach notes (dark LEDs)
 
 *(bottom-left overlay)* After a solve, any LED that *should* be lit but isn't gets a plain-language card explaining why: a reversed diode, no current-limit path, too little voltage. A silent dark LED is a beginner's worst moment, so circsim turns it into a lesson. It disappears once every LED is lit.
@@ -53,7 +65,7 @@ Fix it by giving the net a real source: add the missing pull-up or pull-down, co
 
 *(dismissable toasts)*
 
-- **Simulator restarted**: the isolated SPICE engine crashed and recovered automatically. Your work is intact. If the bench was running, it restarts on its own from time zero. If the bench was paused, the paused run cannot be recovered: the notice says so, the bench goes back to idle, and pressing **Run** starts it again. (If it says it *couldn't* restart, restart circsim.)
+- **Simulator restarted**: the isolated SPICE engine crashed and recovered automatically. Your work is intact. If the bench was running, it restarts on its own from time zero. If the bench was paused, the paused run cannot be recovered: the notice says so, the bench goes back to idle, and pressing **Run** starts it again. If the engine crashes five times in quick succession, circsim stops trying: the toast changes to **Simulator stopped** and tells you to quit and reopen circsim. Your board file is never modified, so nothing is lost on disk.
 - **Bench restarted**: a long continuous transient hit its memory/time window and restarted to stay bounded. Scope history is kept. Note that sequential-logic state (flip-flops, counters) resets on a bench restart.
 
 ## The Sim Log

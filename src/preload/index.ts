@@ -13,6 +13,9 @@
  *     readFile(path)                  → UTF-8 file contents as string
  *     fileExists(path)                → true when the path is an existing regular file
  *     getPathForFile(file)            → absolute path of a dropped File ('' when none)
+ *     readSidecar / writeSidecar      → the per-board setup file beside a board
+ *     get/add/remove/clearRecentBoards → recent-boards list (userData)
+ *     exportReport(req)               → save dialog + write a markdown or PDF report
  *     getSimPort()                    → Promise<MessagePort>  (the SimHost port2)
  *     onSimhostCrashed(cb)            → register crash callback ({ willRespawn })
  *     platformPaths()                 → { platform, resourcesPath, appPath, userData }
@@ -42,6 +45,12 @@ export interface OpenDialogResult {
   filePaths: string[]
 }
 
+export interface SidecarReadResult {
+  exists: boolean
+  text?: string
+  error?: string
+}
+
 export interface PlatformPaths {
   platform: string
   resourcesPath: string
@@ -52,6 +61,11 @@ export interface PlatformPaths {
 export interface SimhostCrashedPayload {
   willRespawn: boolean
 }
+
+/** Outcome of `openDocs` (mirrors OpenDocsResult in src/main/openDocs.ts). */
+export type OpenDocsResult =
+  | { ok: true; target: 'web' | 'local' }
+  | { ok: false; error: string }
 
 export interface LicenseTexts {
   appVersion: string
@@ -168,6 +182,59 @@ contextBridge.exposeInMainWorld('circsim', {
   },
 
   /**
+   * Read the per-board setup file (`<board>.circsim.json`) beside a board.
+   * Never rejects: `{ exists: false }`, `{ exists: true, text }`, or
+   * `{ exists: true, error }` when the file is there but unreadable.
+   */
+  readSidecar: async (boardPath: string): Promise<SidecarReadResult> => {
+    return ipcRenderer.invoke('circsim:readSidecar', boardPath) as Promise<SidecarReadResult>
+  },
+
+  /**
+   * Write the per-board setup file beside a board (atomic). The destination is
+   * derived in the main process from the board path; only `.kicad_pcb` paths are
+   * accepted. `backupExisting` copies the current file to `<file>.bak` first.
+   */
+  writeSidecar: async (
+    boardPath: string,
+    text: string,
+    opts?: { backupExisting?: boolean },
+  ): Promise<{ path: string }> => {
+    return ipcRenderer.invoke('circsim:writeSidecar', boardPath, text, opts) as Promise<{ path: string }>
+  },
+
+  /** Recently opened boards, most recent first (stored under the app's userData). */
+  getRecentBoards: (): Promise<string[]> => {
+    return ipcRenderer.invoke('circsim:getRecentBoards') as Promise<string[]>
+  },
+  /** Record a board as just opened; resolves to the updated list. */
+  addRecentBoard: (boardPath: string): Promise<string[]> => {
+    return ipcRenderer.invoke('circsim:addRecentBoard', boardPath) as Promise<string[]>
+  },
+  /** Drop one board from the recent list; resolves to the updated list. */
+  removeRecentBoard: (boardPath: string): Promise<string[]> => {
+    return ipcRenderer.invoke('circsim:removeRecentBoard', boardPath) as Promise<string[]>
+  },
+  /** Empty the recent-boards list. */
+  clearRecentBoards: (): Promise<string[]> => {
+    return ipcRenderer.invoke('circsim:clearRecentBoards') as Promise<string[]>
+  },
+
+  /**
+   * Export a report: shows the native save dialog and writes the file. For
+   * `format: 'md'` `content` is markdown; for `'pdf'` it is the standalone report
+   * HTML, printed to PDF in a hidden window. Resolves `{ cancelled: true }` when
+   * the dialog is dismissed.
+   */
+  exportReport: (req: {
+    format: 'md' | 'pdf'
+    content: string
+    suggestedName: string
+  }): Promise<{ cancelled: boolean; filePath?: string }> => {
+    return ipcRenderer.invoke('circsim:exportReport', req) as Promise<{ cancelled: boolean; filePath?: string }>
+  },
+
+  /**
    * Return the MessagePort connected to SimHost. Waits for the port handshake
    * if it hasn't happened yet. After a SimHost respawn, call this again to get
    * the new port — old ports are dead.
@@ -234,12 +301,13 @@ contextBridge.exposeInMainWorld('circsim', {
   },
 
   /**
-   * Open the "what circsim can tell you" fidelity documentation in the
-   * system browser. Used by the fidelity banner and About panel (Task 28).
-   * Returns a promise that resolves once the open is dispatched.
+   * Open the "what circsim can tell you" fidelity documentation: the
+   * published page in the system browser when online, else the bundled
+   * Markdown. Used by the fidelity banner and About panel (Task 28).
+   * Resolves with the outcome so the UI can show a failure (issue #62).
    */
-  openDocs: (): Promise<void> => {
-    return ipcRenderer.invoke('circsim:openDocs') as Promise<void>
+  openDocs: (): Promise<OpenDocsResult> => {
+    return ipcRenderer.invoke('circsim:openDocs') as Promise<OpenDocsResult>
   },
 
   /**
