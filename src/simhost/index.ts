@@ -22,6 +22,8 @@
  *  - the XSPICE `.cm` startup smoke deck (Spec §7.2)
  */
 
+import { freemem } from 'node:os'
+
 import { HaltCoordinator } from './haltCoordinator'
 import { NgspiceFfiEngine, ngspiceResourcesAvailable } from './ngspiceFfi'
 import { SampleBatcher } from './sampleBatcher'
@@ -51,6 +53,21 @@ const WATCHDOG_EXIT_CODE = 86
 const DEFAULT_BENCH_WINDOW_S = 30
 /** RSS guard: restart the bench window if SimHost memory exceeds this (Spec §7.5). */
 const RSS_GUARD_BYTES = 1.5 * 1024 * 1024 * 1024
+/**
+ * ngspice-46 refuses a transient it cannot fit in memory, and it decides up
+ * front, not by allocating: every saved point it compares
+ * `vectors x (tstop/tstep + 100) x 8 B` with the free memory the OS reports
+ * (outitf.c OUTpD_memory; macOS reports only vm_stat free_count, which is often
+ * tens of MB). Above it, ngspice prints "Error: memory required ... is more than
+ * memory available" and calls ControlledExit; a library caller then hangs in
+ * "cannot recover and awaits to be reset or detached". So SimHost does the same
+ * sum first and shortens the window (bench) or refuses (runTran) instead.
+ */
+const TRAN_MEMORY_FREE_SHARE = 0.5
+/** Ceiling on one transient's estimate whatever the free memory (under RSS_GUARD_BYTES). */
+const TRAN_MEMORY_CAP_BYTES = 512 * 1024 * 1024
+/** A memory-bound window is never shorter than this many steps. */
+const TRAN_MIN_WINDOW_POINTS = 1000
 /** Pacing loop interval (Spec §7.5). */
 const PACING_INTERVAL_MS = 50
 /** Achieved-factor status report cadence (Spec §7.5). */
@@ -97,6 +114,27 @@ export interface SimHostOptions {
   now?: () => number
   /** Disable the internal pacing/flush timers (unit tests drive ticks directly). */
   disableTimers?: boolean
+  /** Free-memory probe in bytes, as ngspice's own precheck sees it (tests). Default os.freemem. */
+  freeMemoryBytes?: () => number
+}
+
+/**
+ * The memory ngspice-46 requires up front for a transient that saves
+ * `vectorCount` vectors (the scale included): its estimate is
+ * `vectors x (ceil(tstop/tstep) + 100) x 8 B`, checked against free memory.
+ */
+export function ngspiceTranMemoryBytes(vectorCount: number, tstep: number, tstop: number): number {
+  return vectorCount * (Math.ceil(tstop / tstep) + 100) * 8
+}
+
+/**
+ * The longest stop at or below `tstop` whose estimate stays within
+ * `budgetBytes`, but never fewer than TRAN_MIN_WINDOW_POINTS steps.
+ */
+export function fitTranStop(vectorCount: number, tstep: number, tstop: number, budgetBytes: number): number {
+  const points = Math.floor(budgetBytes / (vectorCount * 8)) - 101
+  // 12 digits keep the stop a clean token for the command line; the 101 above leaves room for the rounding.
+  return Math.min(tstop, Number((Math.max(points, TRAN_MIN_WINDOW_POINTS) * tstep).toPrecision(12)))
 }
 
 export class SimHost {
@@ -107,6 +145,16 @@ export class SimHost {
   private readonly benchWindowSeconds: number
   private readonly rssBytes: () => number
   private readonly now: () => number
+  private readonly freeMemoryBytes: () => number
+
+  /**
+   * Vectors (scale included) a transient of the loaded deck saves, counted by
+   * a few-step probe run; 0 until known or when the probe could not tell.
+   * Reset when a deck is loaded.
+   */
+  private vectorCount = 0
+  /** The last memory-bound window already logged, so a restart does not repeat it. */
+  private clampNoted = ''
 
   private queue: QueueItem[] = []
   private draining = false
@@ -194,6 +242,7 @@ export class SimHost {
     this.benchWindowSeconds = opts.benchWindowSeconds ?? DEFAULT_BENCH_WINDOW_S
     this.rssBytes = opts.rssBytes ?? (() => process.memoryUsage().rss)
     this.now = opts.now ?? (() => Date.now())
+    this.freeMemoryBytes = opts.freeMemoryBytes ?? freemem
 
     this.halt = new HaltCoordinator({
       halt: () => {
@@ -482,11 +531,13 @@ export class SimHost {
     wallNow: number,
     pace: number | 'max' = 1
   ): Promise<void> {
-    // Bench window: the effective tstop is the smaller of the request and W.
-    // When the request exceeds W the run is "continuous" and restarts at the
-    // window boundary; otherwise it is a finite run that completes at windowStop.
-    const windowStop = Math.min(tstop, this.benchWindowSeconds)
-    const continuous = tstop > this.benchWindowSeconds
+    // Bench window: the effective tstop is the smaller of the request and W,
+    // and of what ngspice's up-front memory check lets this deck's vectors take.
+    // When the request exceeds the window the run is "continuous" and restarts
+    // at the window boundary; otherwise it is a finite run that completes at
+    // windowStop.
+    const windowStop = await this.memoryBoundStop(tstep, Math.min(tstop, this.benchWindowSeconds))
+    const continuous = tstop > windowStop
 
     this.batcher.reset()
     this.vectorsEmitted = false
@@ -508,6 +559,62 @@ export class SimHost {
 
     this.lastStatusAt = wallNow
     this.startPeriodicTimers()
+  }
+
+  /**
+   * Count the vectors a transient of the loaded deck saves (the scale
+   * included) by running a few steps of it, once per deck load. 0 when it
+   * cannot be told (the probe failed, or the engine saved nothing).
+   */
+  private async countTranVectors(tstep: number): Promise<number> {
+    if (this.vectorCount > 0) return this.vectorCount
+    // The probe's data callbacks must not reach a run that is being replaced.
+    const live = this.tran
+    this.tran = null
+    try {
+      await this.engine.command(`tran ${formatNum(tstep)} ${formatNum(Number((tstep * 3).toPrecision(12)))} uic`, true)
+      this.vectorCount = this.engine.allVectors(this.engine.currentPlot()).length
+    } catch {
+      this.vectorCount = 0
+    } finally {
+      this.tran = live
+    }
+    return this.vectorCount
+  }
+
+  /** What one transient may be estimated at, or null when the OS reports no free memory. */
+  private tranMemoryBudget(): number | null {
+    const free = this.freeMemoryBytes()
+    if (!Number.isFinite(free) || free <= 0) return null
+    return Math.min(TRAN_MEMORY_CAP_BYTES, free * TRAN_MEMORY_FREE_SHARE)
+  }
+
+  /**
+   * `tstop`, or the longest stop below it that ngspice's memory precheck
+   * accepts for this deck (see TRAN_MEMORY_FREE_SHARE). The bench restarts at
+   * each window boundary anyway, so a shorter window costs only more restarts.
+   */
+  private async memoryBoundStop(tstep: number, tstop: number): Promise<number> {
+    const budget = this.tranMemoryBudget()
+    if (budget === null) return tstop
+    const vectors = await this.countTranVectors(tstep)
+    if (vectors === 0) return tstop
+    const stop = fitTranStop(vectors, tstep, tstop, budget)
+    if (stop < tstop) {
+      const note = `${tstep}:${stop}`
+      if (note !== this.clampNoted) {
+        this.clampNoted = note
+        this.emit({
+          type: 'log',
+          level: 'warn',
+          text:
+            `Transient windows are limited to ${formatNum(stop)} s: ${vectors} saved vectors at ${formatNum(tstep)} s steps ` +
+            `would need ${Math.round(ngspiceTranMemoryBytes(vectors, tstep, tstop) / 1048576)} MB and only ` +
+            `${Math.round(budget / 1048576)} MB may be used (free memory ${Math.round(this.freeMemoryBytes() / 1048576)} MB).`
+        })
+      }
+    }
+    return stop
   }
 
   /**
@@ -696,6 +803,8 @@ export class SimHost {
     this.currentDeck = [...deckLines]
     this.engine.loadCircuit(this.currentDeck)
     this.deckLoaded = true
+    this.vectorCount = 0
+    this.clampNoted = ''
   }
 
   // ── promise API for the in-process SolveEngine (src/simhost/solveEngine.ts) ──
@@ -716,6 +825,19 @@ export class SimHost {
     tstop: number
   ): Promise<{ time: Float64Array; vectors: Record<string, Float64Array> }> {
     return this.enqueueAwaitable('runTran', async () => {
+      // ngspice aborts irrecoverably on a run it judges too big, so refuse it here.
+      const budget = this.tranMemoryBudget()
+      const saved = budget === null ? 0 : await this.countTranVectors(tstep)
+      if (budget !== null && saved > 0) {
+        const need = ngspiceTranMemoryBytes(saved, tstep, tstop)
+        if (need > budget) {
+          throw new RangeError(
+            `runTran: ${saved} saved vectors at ${formatNum(tstep)} s steps over ${formatNum(tstop)} s need ` +
+              `${Math.round(need / 1048576)} MB, over the ${Math.round(budget / 1048576)} MB available ` +
+              `(free memory ${Math.round(this.freeMemoryBytes() / 1048576)} MB); save fewer vectors or run a shorter stop`
+          )
+        }
+      }
       await this.engine.command(`tran ${formatNum(tstep)} ${formatNum(tstop)} uic`, true)
       const plot = this.engine.currentPlot()
       let time: Float64Array = new Float64Array(0)

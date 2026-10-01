@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { SimHost, buildAlterCommand, formatNum } from '../index'
+import { SimHost, buildAlterCommand, fitTranStop, formatNum, ngspiceTranMemoryBytes } from '../index'
 import type { EngineEvent, EngineEventListener, SpiceEngine } from '../engine'
 import type { SimEvent } from '../protocol'
 
@@ -41,8 +41,10 @@ class StubEngine implements SpiceEngine {
   currentPlot(): string {
     return 'tran1'
   }
+  /** Vector names a transient plot reports; empty unless a test sets it. */
+  vectors: string[] = []
   allVectors(): string[] {
-    return []
+    return this.vectors
   }
   vectorData(): Float64Array | undefined {
     return undefined
@@ -58,6 +60,7 @@ function makeHost(opts: {
   now: () => number
   rssBytes?: () => number
   benchWindowSeconds?: number
+  freeMemoryBytes?: () => number
 }): { host: SimHost; events: SimEvent[] } {
   const events: SimEvent[] = []
   const host = new SimHost({
@@ -66,6 +69,7 @@ function makeHost(opts: {
     now: opts.now,
     rssBytes: opts.rssBytes,
     benchWindowSeconds: opts.benchWindowSeconds,
+    freeMemoryBytes: opts.freeMemoryBytes,
     disableWatchdog: true,
     disableTimers: true // unit test steps pacingTick() manually
   })
@@ -275,5 +279,68 @@ describe('SimHost convergence detection (Spec §7.4.6)', () => {
     const fail = events.find((e) => e.type === 'convergenceFailure')
     expect(fail).toBeDefined()
     vi.clearAllMocks()
+  })
+})
+
+describe('SimHost bench windows under the ngspice up-front memory check', () => {
+  // ngspice-46 aborts a transient whose estimate vectors x (tstop/tstep + 100) x 8 B
+  // exceeds free memory, before it saves a point. The bench must size its window
+  // so the estimate fits, and a finite runTran that cannot fit must be refused.
+  const MB = 1024 * 1024
+  const deck = ['* d', 'v1 in 0 dc 5', '.end']
+  const names = Array.from({ length: 26 }, (_, i) => (i === 0 ? 'time' : `v${i}`))
+
+  it('fitTranStop: the longest stop whose estimate fits, never under 1000 steps, never past tstop', () => {
+    const stop = fitTranStop(26, 1e-5, 30, 100 * MB)
+    expect(ngspiceTranMemoryBytes(26, 1e-5, stop)).toBeLessThanOrEqual(100 * MB)
+    // One more step would not fit.
+    expect(ngspiceTranMemoryBytes(26, 1e-5, stop + 2e-5)).toBeGreaterThan(100 * MB)
+    expect(fitTranStop(26, 1e-5, 0.5, 100 * MB)).toBe(0.5)
+    expect(fitTranStop(26, 1e-5, 30, 1)).toBeCloseTo(1000 * 1e-5, 12)
+  })
+
+  it('shortens the bg_tran window to what the free memory allows and keeps the bench restarting', async () => {
+    const engine = new StubEngine()
+    engine.vectors = names
+    const { host, events } = makeHost({
+      engine,
+      now: () => 0,
+      benchWindowSeconds: 30,
+      freeMemoryBytes: () => 200 * MB,
+    })
+    host.handleCommand({ type: 'loadCircuit', deckLines: deck })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-5, tstopSeconds: 30 })
+    await host.whenIdle()
+    const cmd = engine.commands.find((c) => c.startsWith('bg_tran'))!
+    const stop = Number(cmd.split(' ')[2])
+    // Half the free memory is the budget; 26 x 8 B per point.
+    expect(stop).toBeGreaterThan(0)
+    expect(stop).toBeLessThan(30)
+    expect(ngspiceTranMemoryBytes(26, 1e-5, stop)).toBeLessThanOrEqual(100 * MB)
+    // A window cut by memory, not finished: the bench goes on into the next one.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((host as any).tran.continuous).toBe(true)
+    // The vectors were counted once, by a few-step probe before the real run.
+    expect(engine.commands.filter((c) => c.startsWith('tran '))).toEqual(['tran 0.00001 0.00003 uic'])
+    expect(events.some((e) => e.type === 'log' && e.level === 'warn' && /limited to/.test(e.text))).toBe(true)
+  })
+
+  it('leaves the window alone when the estimate fits', async () => {
+    const engine = new StubEngine()
+    engine.vectors = names
+    const { host } = makeHost({ engine, now: () => 0, benchWindowSeconds: 30, freeMemoryBytes: () => 64 * 1024 * MB })
+    host.handleCommand({ type: 'loadCircuit', deckLines: deck })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
+    await host.whenIdle()
+    expect(engine.commands.find((c) => c.startsWith('bg_tran'))).toBe('bg_tran 0.001 30 uic')
+  })
+
+  it('runTran refuses a run the estimate says will not fit, without asking ngspice for it', async () => {
+    const engine = new StubEngine()
+    engine.vectors = names
+    const { host } = makeHost({ engine, now: () => 0, freeMemoryBytes: () => 200 * MB })
+    await host.loadCircuit(deck)
+    await expect(host.runTran(1e-7, 30)).rejects.toThrow(/need .* MB, over the 100 MB available/)
+    expect(engine.commands.filter((c) => c.startsWith('tran 0.0000001 30'))).toEqual([])
   })
 })

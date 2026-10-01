@@ -23,6 +23,7 @@
  */
 
 import { readFileSync, readdirSync } from 'node:fs'
+import { freemem } from 'node:os'
 import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
@@ -34,7 +35,7 @@ import type { LibraryEntry } from '../../core/models/types'
 import { extract, suggestGround } from '../../core/netlist/extract'
 import { generateDeck } from '../../core/spicegen/generate'
 import type { Instrument } from '../../core/spicegen/instruments'
-import { SimHost } from '../index'
+import { SimHost, ngspiceTranMemoryBytes } from '../index'
 import { ngspiceResourcesAvailable } from '../ngspiceFfi'
 import type { OpSolveMethod, SimEvent } from '../protocol'
 
@@ -315,16 +316,18 @@ describe.skipIf(!haveNgspice)('the shipped blinker-555 sample runs at fine solve
   // the fold. Each run covers the crossing that failed.
   //
   // The test reads only the scale and `out`, so the deck saves only `out`. The
-  // generated deck says `.save all` plus a branch current per device, which at
-  // 280k points (5 us over 1.4 s) is 25 vectors of doubles that ngspice grows
-  // point by point. On the macOS CI runners that run aborted with ngspice's
-  // "Error: memory required (Id Bytes)" / "cannot recover and awaits to be reset
-  // or detached" (the %Id is an unexpanded MSVC size_t format, so the byte count
-  // is not printed), and the same file's 2 us run before it had already left
-  // about 290 MB resident in the worker (measured on Windows: RSS 87 MB before
-  // the first run, 289 MB after its dispose, 466 MB at the end of the second).
-  // Windows and Linux ride that out; macOS does not. One saved vector is about
-  // 1/25 of that, and the step, the stop time and the edge assertions are unchanged.
+  // generated deck says `.save all` plus a branch current per device: 26 vectors,
+  // which at 280k points (5 us over 1.4 s) is the 58 MB ngspice-46 weighs against
+  // free memory before it saves the first point (vectors x (tstop/tstep + 100) x
+  // 8 B; outitf.c OUTpD_memory). macOS reports only vm_stat free_count as free,
+  // often tens of MB, and the 5 us run was refused there with "Error: memory
+  // required (Id Bytes) is more than memory available" (the %Id is an unexpanded
+  // MSVC size_t format, so the byte count is not printed) and the library then
+  // sat in "cannot recover and awaits to be reset or detached". The check is an
+  // up-front estimate, not an allocation failure, and does not depend on what
+  // earlier runs left resident. One saved vector is 1/26 of the estimate; the
+  // step, the stop time and the edge assertions are unchanged. SimHost applies
+  // the same estimate itself, which the next block pins with every vector saved.
   const deck = haveNgspice
     ? saveOnly(
         sampleDeck({ board: 'blinker-555.kicad_pcb', schematic: 'blinker-555.kicad_sch', supplyNet: 'VCC', volts: 5 }),
@@ -358,4 +361,71 @@ describe.skipIf(!haveNgspice)('the shipped blinker-555 sample runs at fine solve
       })
     }, 240_000)
   }
+})
+
+describe.skipIf(!haveNgspice)('SimHost sizes transients to the ngspice up-front memory check (every vector saved)', () => {
+  // ngspice-46 refuses a transient whose vectors x (tstop/tstep + 100) x 8 B is
+  // more than free memory, before it saves a point, and then cannot recover. The
+  // live bench saves everything over a 30 s window, so a fine step meets that
+  // check on any machine (the 10 us default on a macOS runner; 0.1 us on a
+  // desktop with 19 GB free). The step here is chosen from this machine's free
+  // memory so the whole 30 s window would be estimated at three times it.
+  const deck = haveNgspice
+    ? sampleDeck({ board: 'blinker-555.kicad_pcb', schematic: 'blinker-555.kicad_sch', supplyNet: 'VCC', volts: 5 })
+    : []
+
+  async function vectorsAndStep(host: SimHost): Promise<{ vectors: number; tstep: number }> {
+    // A short run to count what the deck saves, scale included.
+    const r = await host.runTran(1e-5, 1e-4)
+    const vectors = Object.keys(r.vectors).length + 1
+    const tstep = Number(((vectors * 8 * 30) / (3 * freemem())).toPrecision(2))
+    return { vectors, tstep }
+  }
+
+  it('bench: a window the free memory cannot hold is shortened, and samples flow', async () => {
+    const events: SimEvent[] = []
+    const host = new SimHost({ emit: (e) => events.push(e), disableWatchdog: true })
+    try {
+      await host.start()
+      await host.loadCircuit(deck)
+      const { vectors, tstep } = await vectorsAndStep(host)
+      expect(ngspiceTranMemoryBytes(vectors, tstep, 30), 'the full window must exceed free memory').toBeGreaterThan(freemem())
+
+      host.handleCommand({ type: 'runTransient', tstepSeconds: tstep, tstopSeconds: 30 })
+      host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
+      const deadline = Date.now() + 120_000
+      const samples = (): number =>
+        events.reduce((n, e) => n + (e.type === 'samples' ? e.simTime.length : 0), 0)
+      while (samples() < 50 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+
+      const refusal = events.filter(
+        (e) => e.type === 'log' && /memory required|ControlledExit/i.test(e.text),
+      )
+      expect(refusal, 'ngspice refused the transient').toEqual([])
+      expect(samples(), 'samples streamed').toBeGreaterThanOrEqual(50)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const tran = (host as any).tran as { windowStop: number; continuous: boolean }
+      expect(tran.windowStop).toBeLessThan(30)
+      expect(tran.continuous, 'a shortened window hands over to the next one').toBe(true)
+      expect(ngspiceTranMemoryBytes(vectors, tstep, tran.windowStop)).toBeLessThan(freemem() / 2)
+    } finally {
+      host.handleCommand({ type: 'stop' })
+      await host.dispose()
+    }
+  }, 240_000)
+
+  it('runTran: a run the free memory cannot hold is refused, and the host stays usable', async () => {
+    const host = new SimHost({ emit: () => {}, disableWatchdog: true })
+    try {
+      await host.start()
+      await host.loadCircuit(deck)
+      const { tstep } = await vectorsAndStep(host)
+      await expect(host.runTran(tstep, 30)).rejects.toThrow(/need \d+ MB, over the \d+ MB available/)
+      // ngspice was never asked for it, so it can still run.
+      const r = await host.runTran(1e-5, 1e-4)
+      expect(r.time.length).toBeGreaterThan(5)
+    } finally {
+      await host.dispose()
+    }
+  }, 240_000)
 })
