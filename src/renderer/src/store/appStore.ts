@@ -101,7 +101,13 @@ import { sha256Hex } from '../../../core/persist/hash'
 
 import type { SimClient } from '../ipc/simClient'
 import { splitPath, type ReadFileFn } from '../ipc/fileOpen'
-import { normalizeVectorKey, type OpSolveMethod, type SimCommand, type SimEvent } from '../../../simhost/protocol'
+import {
+  BENCH_TSTEP_MAX_SECONDS,
+  normalizeVectorKey,
+  type OpSolveMethod,
+  type SimCommand,
+  type SimEvent,
+} from '../../../simhost/protocol'
 import { parseConvergenceCulprit, type ConvergenceCulprit } from './convergenceCulprit'
 import { createRingBuffer, feedSamples, type RingBuffer } from '../scope/ringBuffer'
 import { scopeSamplesEmitter } from '../scope/sampleEmitter'
@@ -324,14 +330,22 @@ function dropLeadPositionsOf(map: Map<string, LeadPosition>, instId: string): Ma
 /** Default bench window in sim-seconds (Spec §7.5). NEVER unbounded. */
 export const BENCH_WINDOW_SECONDS = 30
 
-/** Hard cap on the transient time-step (Spec §7.5 / Task 24). */
-export const MAX_TSTEP_SECONDS = 10e-6
+/**
+ * Coarsest transient time-step (issue #25): what a bench with no fast source
+ * runs at. It was a 10 µs cap on every bench, which alone held the live bench
+ * under real time; ngspice refines below the step by itself wherever the
+ * circuit demands it (a PULSE edge, a switching node), and the scope decimates
+ * to pixel columns anyway, so a bench with nothing fast on it needs no finer
+ * step.
+ */
+export const MAX_TSTEP_SECONDS = BENCH_TSTEP_MAX_SECONDS
 
 /**
- * Compute the transient time-step from the fastest function-gen present:
- *   tstep = min( 1 / (200 · fmax), 10 µs )
- * When there is no function-gen, fmax is undefined and tstep falls back to the
- * 10 µs cap (Spec §7.5, Task 24).
+ * Compute the transient time-step from the signal bandwidth on the bench: the
+ * fastest function-gen sets it at 200 points per cycle,
+ *   tstep = min( 1 / (200 · fmax), 100 µs )
+ * and with no function-gen (nothing periodic to resolve) it is the 100 µs
+ * ceiling (Spec §7.5, Task 24, issue #25).
  */
 export function computeTstep(instruments: Instrument[]): number {
   let fmax = 0
@@ -1062,6 +1076,27 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   function resetRingBuffers(instruments: Instrument[]): void {
     ringBuffers.clear()
     syncRingBuffers(instruments)
+  }
+
+  /**
+   * The vectors the scope needs as full series: one per fully-wired voltage
+   * probe, by SPICE node name. Every other net is only tinted from the display
+   * rate snapshot SimHost sends in `samples.latest` (issue #25).
+   */
+  function watchedNodes(): string[] {
+    const { circuit, instruments } = store.getState()
+    if (!circuit) return []
+    const nodes = new Set<string>()
+    for (const inst of instruments) {
+      if (inst.kind !== 'voltage-probe' || !isFullyWired(inst)) continue
+      const net = circuit.nets.find(n => n.id === inst.netId)
+      if (net) nodes.add(net.spiceNode)
+    }
+    return [...nodes]
+  }
+
+  function sendWatch(): void {
+    simClient.send({ type: 'watch', vectors: watchedNodes() })
   }
 
   /**
@@ -2018,6 +2053,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       const tstopSeconds = BENCH_WINDOW_SECONDS
 
       simClient.send({ type: 'loadCircuit', deckLines })
+      sendWatch()
       simClient.send({ type: 'setPace', realtimeFactor: get().paceFactor })
       simClient.send({ type: 'runTransient', tstepSeconds, tstopSeconds })
       set({
@@ -2125,6 +2161,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         // initial conditions — acceptable per Spec §7.5; scope ring buffers keep
         // their history). Re-apply the pace so the fresh process honours it.
         resetRingBuffers(instruments)
+        sendWatch()
         simClient.send({ type: 'setPace', realtimeFactor: paceFactor })
         simClient.send({
           type: 'runTransient',
@@ -2362,7 +2399,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
             achievedRealtimeFactor: event.realtimeFactor,
             simTimeSeconds: event.simTimeSeconds,
             // A `status{running:false}` while we believe we're running means the
-            // engine self-halted (window end / pacing). Reflect it as paused, but
+            // run ended on its own (SimHost does not report its pacing halts as
+            // not running). Reflect it as paused, but
             // never override an explicit user pause/idle.
             simState: event.running
               ? 'running'
@@ -2381,6 +2419,13 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   // Wire the client's events into the store. The store owns this subscription so
   // a respawn (which calls attachPort on a PortSimClient) keeps delivering events.
   simClient.onEvent(event => store.getState().ingestEvent(event))
+
+  // A probe added, removed or re-wired while the bench runs changes which nets
+  // the scope needs as full series; tell SimHost (the watch is sticky there).
+  store.subscribe((state, prev) => {
+    if (state.instruments === prev.instruments) return
+    if (state.simState === 'running' || state.simState === 'paused') sendWatch()
+  })
 
   return store
 }
@@ -2828,6 +2873,25 @@ export function ingestSamples(
   // no sense column — the common no-LED case pays nothing and the glow path
   // (store + scene) is left completely untouched.
   let ledCurrents: Map<string, number> | null = null
+
+  // Unwatched vectors arrive as one newest value each (SimHost's display-rate
+  // snapshot): the same two jobs as the newest point of a full column, nothing
+  // to feed to a ring buffer.
+  if (event.latest) {
+    const { vectorNames, values } = event.latest
+    for (let i = 0; i < vectorNames.length; i++) {
+      const v = values[i]
+      if (!Number.isFinite(v)) continue
+      const ledRef = mapVectorNameToLedRef(vectorNames[i])
+      if (ledRef !== null) {
+        ledCurrents ??= new Map(state.currentsByRef)
+        ledCurrents.set(ledRef, Math.abs(v))
+        continue
+      }
+      const netId = nodeToNet.get(vectorNames[i]) ?? nodeToNet.get(vectorNames[i].toLowerCase())
+      if (netId !== undefined) liveVoltages.set(netId, v)
+    }
+  }
 
   for (let ci = 0; ci < event.vectorNames.length; ci++) {
     const vecName = event.vectorNames[ci]
