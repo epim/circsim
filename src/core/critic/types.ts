@@ -123,11 +123,13 @@ export interface OpResult {
   partCurrents?: Record<string, number>
   /**
    * Signed current (A) drawn from the pad's net into the part, keyed by ref then
-   * pad number. A load on a power rail reads positive; the same load's ground
-   * pad reads negative (the current comes back out into the ground net). Built
+   * pad number. A load on a positive rail reads positive and its ground pad
+   * negative (the current comes back out into the ground net). On a negative
+   * rail the current runs the other way, from ground through the load into the
+   * rail: the load's rail pad reads negative and its ground pad positive. Built
    * from the solve by deriveSolvedCurrents. When absent, the copper checks fall
-   * back to `partCurrents` magnitudes, sinking them on power pads and returning
-   * them on ground pads.
+   * back to `partCurrents` magnitudes in the load direction of each net: drawn
+   * from a positive rail, returned into a negative rail and into ground.
    */
   padCurrents?: Record<string, Record<string, number>>
   /**

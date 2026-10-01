@@ -7,13 +7,22 @@
  * load pads, and reports the worst supply-entry-to-load sag as a percentage of
  * the rail's op-solved nominal voltage. The ground return is solved the same
  * way: each load's return current enters the ground copper at its ground pad
- * and the rise above the return entry is the ground shift. A load's round-trip
- * drop is its supply sag plus its ground rise.
+ * and the shift from the return entry is the ground shift. A load's round-trip
+ * drop is its supply sag plus its ground shift toward the rail.
+ *
+ * Polarity: sag is toward 0 V. A positive rail falls at its loads and their
+ * ground pads rise; a negative rail's load current flows from ground through the
+ * part back into the rail, so the rail rises toward 0 V at the load and the
+ * ground there falls. A rail on which every current-carrying pad other than the
+ * entry feeds the rail (pushes current into a positive rail or pulls it out of a
+ * negative one) has no load to measure a sag at; it is named in the
+ * not-assessed line instead of passing silently.
  *
  * Needs an operating-point sim (registry `needs:'op'`) that carries branch
  * currents (OpResult.padCurrents, built by deriveSolvedCurrents from the solve;
- * a bare partCurrents map is still read, sinking each part's current on its
- * power pads and returning it on its ground pads). With no currents at all the
+ * a bare partCurrents map is still read, drawing each part's current from a
+ * positive rail's pads, returning it into a negative rail's pads and returning
+ * it on its ground pads). With no currents at all the
  * check reports "not assessed". Parts whose current the solve could not resolve
  * and pads the copper model does not connect to the supply entry are named in
  * the not-assessed line: they are never silently counted as zero. A rail whose
@@ -36,6 +45,7 @@ import { classifyRails } from '../classify'
 import {
   hasBranchCurrents,
   minResistancePath,
+  padList,
   railGapNotes,
   solveRail,
   viaResistanceOhms,
@@ -99,52 +109,69 @@ export function checkIrDrop(ctx: CriticContext): CheckOutput {
   let supplyV = 0
   for (const id of powerNetIds) supplyV = Math.max(supplyV, Math.abs(nominalOf(id) ?? 0))
 
-  // ── ground return: rise above the return entry, per load ───────────────────
+  // ── ground return: shift from the return entry, per load ───────────────────
+  // A positive rail's load returns its current into ground and lifts it there; a
+  // negative rail's load draws its current out of ground and pulls it down. Each
+  // is a ground shift; a rail's round trip counts the one toward that rail.
   const groundRiseByRef = new Map<string, number>()
+  const groundFallByRef = new Map<string, number>()
+  const noteShift = (byRef: Map<string, number>, ref: string, v: number): void => {
+    byRef.set(ref, Math.max(byRef.get(ref) ?? 0, v))
+  }
   for (const gid of [...groundNetIds].sort((a, b) => a - b)) {
     notes.push(...railGapNotes(ctx, gid, true, netName(gid)))
     const sol = solveRail(ctx, gid, true)
     if (!sol) continue
-    let worst: { load: RailLoad; riseV: number } | undefined
+    let worst: { load: RailLoad; shiftV: number } | undefined
     for (const l of sol.loads) {
-      const riseV = Math.max(0, sol.volts[l.pad.node])
-      if (!Number.isFinite(riseV)) continue
-      groundRiseByRef.set(l.pad.ref, Math.max(groundRiseByRef.get(l.pad.ref) ?? 0, riseV))
-      if (!worst || riseV > worst.riseV) worst = { load: l, riseV }
+      const shiftV = sol.volts[l.pad.node]
+      if (!Number.isFinite(shiftV)) continue
+      if (shiftV > 0) noteShift(groundRiseByRef, l.pad.ref, shiftV)
+      else if (shiftV < 0) noteShift(groundFallByRef, l.pad.ref, -shiftV)
+      if (!worst || Math.abs(shiftV) > Math.abs(worst.shiftV)) worst = { load: l, shiftV }
     }
     if (!worst || supplyV <= 0) continue
-    const pct = (100 * worst.riseV) / supplyV
+    const shiftV = Math.abs(worst.shiftV)
+    const pct = (100 * shiftV) / supplyV
     const severity = severityFor(pct)
     if (!severity) continue
+    const rises = worst.shiftV > 0
+    // The current that moves the ground this way: returned into it, or drawn out.
+    const towardA = sol.loads.reduce((s, l) => s + Math.max(0, (rises ? -1 : 1) * l.amps), 0)
     const head = pathHeadline(minResistancePath(sol, worst.load.pad.node))
+    const ref = worst.load.pad.ref
     findings.push({
       id: `ir-drop:${gid}`,
       check: 'ir-drop',
       severity,
-      title: `"${netName(gid)}" return rises to ${worst.riseV.toFixed(2)} V at ${worst.load.pad.ref} (${pct.toFixed(1)}% of ${supplyV.toFixed(2)} V${head.across})`,
+      title:
+        `"${netName(gid)}" return ${rises ? 'rises' : 'falls'} to ${worst.shiftV.toFixed(2)} V at ${ref} ` +
+        `(${pct.toFixed(1)}% of ${supplyV.toFixed(2)} V${head.across})`,
       detail:
-        `The return current of ${worst.load.pad.ref} lifts ${netName(gid)} by about ${worst.riseV.toFixed(3)} V ` +
+        (rises
+          ? `The return current of ${ref} lifts ${netName(gid)} by about ${shiftV.toFixed(3)} V `
+          : `The current ${ref} draws out of ${netName(gid)} pulls it down by about ${shiftV.toFixed(3)} V `) +
         `(${pct.toFixed(1)}% of the ${supplyV.toFixed(2)} V supply) between the return entry at ` +
-        `${sol.source.ref} pad ${sol.source.padNumber} and ${worst.load.pad.ref} pad ${worst.load.pad.padNumber}` +
+        `${sol.source.ref} pad ${sol.source.padNumber} and ${ref} pad ${worst.load.pad.padNumber}` +
         (head.across ? `, over a path${head.across}.` : '.') +
         ' Ground shift moves analog references and logic thresholds by the same amount.',
       assumption: assumptionFor(ctx, sol, 'return'),
-      refs: [worst.load.pad.ref],
+      refs: [ref],
       netId: gid,
       location: worst.load.pad.pos,
       suggestion: suggestionFor(sol, head),
       metrics: {
-        dropV: worst.riseV,
+        dropV: shiftV,
         sagPct: pct,
         nominalV: supplyV,
-        totalSinkA: sol.loadAmps,
+        totalSinkA: towardA,
         pathLengthMm: head.trackMm + head.pourMm,
         ...(head.minWidthMm !== undefined ? { minTrackWidthMm: head.minWidthMm } : {}),
       },
     })
   }
 
-  // ── power rails: supply sag, plus the ground rise at the same load ─────────
+  // ── power rails: supply sag, plus the ground shift at the same load ────────
   for (const railId of [...powerNetIds].sort((a, b) => a - b)) {
     // Nominal rail voltage from the op solve (the sim treats the whole net as one
     // node, i.e. the voltage at the supply entry). Without it a % sag is
@@ -154,17 +181,31 @@ export function checkIrDrop(ctx: CriticContext): CheckOutput {
     notes.push(...railGapNotes(ctx, railId, false, netName(railId)))
     const sol = solveRail(ctx, railId, false)
     if (!sol) continue
-    if (sol.loadAmps < 1e-9) continue
+    if (sol.loadAmps < 1e-9) {
+      // Current on the rail, but every pad carrying it feeds the rail the way a
+      // supply does: nothing draws from the inferred entry, so no sag to measure.
+      if (sol.loads.length > 0) {
+        notes.push(
+          `${netName(railId)}: ${padList(sol.loads)} ${sol.loadSign > 0 ? 'push current into' : 'pull current out of'} ` +
+            `the rail as a supply would, and no load draws from the supply entry inferred at ` +
+            `${sol.source.ref} pad ${sol.source.padNumber}, so its sag was not measured`,
+        )
+      }
+      continue
+    }
 
-    // Sag toward 0 V: a +5 V rail falls below the entry, a -12 V rail rises above it.
-    const dir = nominal >= 0 ? -1 : 1
-    let worst: { load: RailLoad; sagV: number; riseV: number; totalV: number } | undefined
+    // Sag toward 0 V: a +5 V rail falls below the entry, a -12 V rail rises above
+    // it. The ground shift that adds to it is the one toward the rail: the
+    // return's rise under a positive rail's load, its fall under a negative one's.
+    const dir = -sol.loadSign
+    const groundShiftByRef = sol.loadSign > 0 ? groundRiseByRef : groundFallByRef
+    let worst: { load: RailLoad; sagV: number; shiftV: number; totalV: number } | undefined
     for (const l of sol.loads) {
       const sagV = Math.max(0, dir * sol.volts[l.pad.node])
       if (!Number.isFinite(sagV)) continue
-      const riseV = groundRiseByRef.get(l.pad.ref) ?? 0
-      const totalV = sagV + riseV
-      if (!worst || totalV > worst.totalV) worst = { load: l, sagV, riseV, totalV }
+      const shiftV = groundShiftByRef.get(l.pad.ref) ?? 0
+      const totalV = sagV + shiftV
+      if (!worst || totalV > worst.totalV) worst = { load: l, sagV, shiftV, totalV }
     }
     if (!worst) continue
 
@@ -176,7 +217,7 @@ export function checkIrDrop(ctx: CriticContext): CheckOutput {
     const head = pathHeadline(minResistancePath(sol, pad.node))
     const sinkV = nominal >= 0 ? nominal - worst.totalV : nominal + worst.totalV
     const roundTrip =
-      worst.riseV > 0 ? ` (${worst.sagV.toFixed(3)} V on the supply, ${worst.riseV.toFixed(3)} V on the return)` : ''
+      worst.shiftV > 0 ? ` (${worst.sagV.toFixed(3)} V on the supply, ${worst.shiftV.toFixed(3)} V on the return)` : ''
 
     findings.push({
       id: `ir-drop:${railId}`,
@@ -190,14 +231,14 @@ export function checkIrDrop(ctx: CriticContext): CheckOutput {
         `with the rail carrying ~${sol.loadAmps.toFixed(2)} A of op-point load` +
         (head.across ? `, and the worst path runs${head.across}.` : '.') +
         ` Sagging rails brown-out ICs and shift analog references.`,
-      assumption: assumptionFor(ctx, sol, 'supply', worst.riseV > 0),
+      assumption: assumptionFor(ctx, sol, 'supply', worst.shiftV > 0),
       refs: [pad.ref],
       netId: railId,
       location: pad.pos,
       suggestion: suggestionFor(sol, head),
       metrics: {
         dropV: worst.sagV,
-        groundRiseV: worst.riseV,
+        groundShiftV: worst.shiftV,
         roundTripV: worst.totalV,
         sagPct,
         nominalV: nominal,

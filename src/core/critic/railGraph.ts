@@ -23,6 +23,11 @@
  * The same builder serves ground nets: the return current of every load is a
  * signed injection at the load's ground pad.
  *
+ * Load direction follows the rail's polarity. A load on a positive rail draws
+ * current out of the net; on a negative rail (op voltage below 0 V) the load's
+ * current flows from ground through the part and back out into the rail, so its
+ * pad reads a negative draw, as does a ground pad returning current.
+ *
  * Numerics: zero-resistance bonds are contracted (union-find) before the solve
  * so the matrix stays well conditioned, then a sparse conjugate gradient
  * (sparse.ts) solves it. Pure core; deterministic.
@@ -605,7 +610,15 @@ export interface RailSolution {
   loads: RailLoad[]
   /** Loads the copper does not connect to the source. */
   stranded: RailLoad[]
-  /** Sum of the current the rail's loads draw (power) or return (ground). */
+  /**
+   * Sign of a load's draw on this net (see loadSign): +1 on a positive rail,
+   * -1 on a negative rail and on ground, where load current flows back in.
+   */
+  loadSign: 1 | -1
+  /**
+   * Sum of the current the rail's loads carry in the load direction: drawn from
+   * a positive rail, returned into a negative rail or into ground.
+   */
   loadAmps: number
   /** Unresolved-current parts that touch this net. */
   unresolved: string[]
@@ -647,7 +660,8 @@ export function solveRail(ctx: CriticContext, netId: number, isGround: boolean):
   return outcomeOf(ctx, netId, isGround).sol
 }
 
-function padList(pads: RailLoad[]): string {
+/** Up to four loads as "REF.PAD", then a count of the rest. */
+export function padList(pads: RailLoad[]): string {
   const shown = pads
     .slice(0, 4)
     .map((l) => `${l.pad.ref}.${l.pad.padNumber}`)
@@ -698,19 +712,36 @@ function chooseSource(graph: RailGraph): RailPad | undefined {
   return best ?? connected[0]
 }
 
-/** The draw (A) a pad puts on its net, or undefined when the op has none for it. */
-function padDraw(ctx: CriticContext, ref: string, padNumber: string, isGround: boolean, padsOnRail: number): number | undefined {
+/**
+ * The sign a load's draw has on this net: +1 on a positive rail (the load pulls
+ * current out of the net), -1 on ground and on a rail the op solves below 0 V
+ * (the load's current comes back out of the part into the net).
+ */
+function loadSign(ctx: CriticContext, netId: number, isGround: boolean): 1 | -1 {
+  if (isGround) return -1
+  const node = ctx.circuit.nets.find((n) => n.id === netId)?.spiceNode
+  const v = node !== undefined ? ctx.opResult?.nodeVoltages[node] : undefined
+  return v !== undefined && v < 0 ? -1 : 1
+}
+
+/**
+ * The draw (A) a pad puts on its net, or undefined when the op has none for it.
+ * A bare partCurrents magnitude carries no sign, so it is given the load
+ * direction of the net (`sign`) and split across the part's pads on it.
+ */
+function padDraw(ctx: CriticContext, ref: string, padNumber: string, sign: 1 | -1, padsOnRail: number): number | undefined {
   const op = ctx.opResult
   if (!op) return undefined
   if (op.padCurrents) return op.padCurrents[ref]?.[padNumber]
   const amps = Math.abs(op.partCurrents?.[ref] ?? NaN)
   if (!Number.isFinite(amps)) return undefined
-  return ((isGround ? -1 : 1) * amps) / Math.max(1, padsOnRail)
+  return (sign * amps) / Math.max(1, padsOnRail)
 }
 
 function computeRail(ctx: CriticContext, netId: number, isGround: boolean): RailOutcome {
   if (!hasBranchCurrents(ctx)) return { sol: null }
   const graph = buildRailGraph(ctx, netId)
+  const sign = loadSign(ctx, netId, isGround)
 
   // Pads that put current on this rail, grouped by part. Current can only be
   // said to go unassessed when some other part's pad is there to supply it.
@@ -723,7 +754,7 @@ function computeRail(ctx: CriticContext, netId: number, isGround: boolean): Rail
   const carriers: RailLoad[] = []
   for (const [ref, pads] of padsByRef) {
     for (const pad of pads) {
-      const amps = padDraw(ctx, ref, pad.padNumber, isGround, pads.length)
+      const amps = padDraw(ctx, ref, pad.padNumber, sign, pads.length)
       if (amps !== undefined && Number.isFinite(amps) && Math.abs(amps) >= MIN_LOAD_A) carriers.push({ pad, amps })
     }
   }
@@ -766,12 +797,11 @@ function computeRail(ctx: CriticContext, netId: number, isGround: boolean): Rail
   for (const [ref, pads] of padsByRef) {
     if (ref === source.ref) continue
     for (const pad of pads) {
-      const amps = padDraw(ctx, ref, pad.padNumber, isGround, pads.length)
+      const amps = padDraw(ctx, ref, pad.padNumber, sign, pads.length)
       if (amps === undefined || !Number.isFinite(amps) || Math.abs(amps) < MIN_LOAD_A) continue
       ;(inComp[pad.node] ? loads : stranded).push({ pad, amps })
     }
   }
-  const sign = isGround ? -1 : 1
   const loadAmps = loads.reduce((s, l) => s + Math.max(0, sign * l.amps), 0)
 
   const railRefs = new Set(graph.pads.map((p) => p.ref))
@@ -838,7 +868,9 @@ function computeRail(ctx: CriticContext, netId: number, isGround: boolean): Rail
     edgeAmps[k] = isBond(e) ? 0 : (volts[e.a] - volts[e.b]) / e.ohms
   })
 
-  return { sol: { netId, isGround, graph, source, volts, edgeAmps, loads, stranded, loadAmps, unresolved, adjacency } }
+  return {
+    sol: { netId, isGround, graph, source, volts, edgeAmps, loads, stranded, loadSign: sign, loadAmps, unresolved, adjacency },
+  }
 }
 
 // ─── path search ──────────────────────────────────────────────────────────────

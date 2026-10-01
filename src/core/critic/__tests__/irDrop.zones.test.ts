@@ -163,7 +163,7 @@ describe('IR drop with copper pours (issue #10)', () => {
     const vcc = ir.find((f) => f.netId === 1)
     expect(vcc).toBeDefined()
     expect(vcc!.metrics!.roundTripV).toBeGreaterThan(0.14)
-    expect(vcc!.metrics!.groundRiseV).toBeGreaterThan(0.06)
+    expect(vcc!.metrics!.groundShiftV).toBeGreaterThan(0.06)
     // neither leg alone is over 2% of 5 V (0.1 V), so no ground finding of its own
     expect(ir.find((f) => f.netId === 2)).toBeUndefined()
   })
