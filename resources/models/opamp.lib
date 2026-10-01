@@ -49,9 +49,17 @@
 *      model on its first pass. The rail limits are linear in the rail pins (no
 *      max/min of the rails), the drive gates sit at mid-range when the rails are
 *      at 0 V, and the clamp is switched on by a smooth rails-present measure. A
-*      follower, an inverting or non-inverting gain stage, a comparator
-*      and a Schmitt trigger therefore all solve directly, with no gmin or
-*      source stepping. An unpowered amplifier parks its output near 0 V.
+*      follower, an inverting or non-inverting gain stage and a comparator
+*      therefore all solve directly, with no gmin or source stepping. An
+*      unpowered amplifier parks its output near 0 V.
+*      The same linear first pass has a cost with positive feedback: a Schmitt
+*      trigger whose input sits inside its hysteresis band has three DC
+*      solutions, and Newton lands on the unstable one between the rails. No
+*      smooth model avoids that solution (it exists for any continuous gain
+*      curve), so the solve pipeline checks for it: src/core/solve/bistable.ts
+*      pins vpole 10 mV off, reads which way the circuit pushes it, and
+*      re-solves an unstable one from its low limit with a .nodeset on vpole.
+*      It finds the core by the node names vpole, clo, chi and vmid; keep them.
 *   6. Supply-pin current conservation: a 0 V sense source in series with rout
 *      measures the output current. Bout is referenced to the vee pin, so a sunk
 *      output current leaves through vee on its own, and a controlled source

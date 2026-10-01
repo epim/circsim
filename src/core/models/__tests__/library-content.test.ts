@@ -726,6 +726,19 @@ describe('macromodel structure: supply-pin current, pole clamp, smooth decisions
     expect(b).toMatch(/^\s*bg\s+0\s+vpole\s+i\s*=.*tanh\(\(v\(vpole\)\s*-\s*v\(clo\)\)/im)
   })
 
+  it('opamp_core: keeps the node names the solve uses to find and settle a latched op-amp', () => {
+    // src/core/solve/bistable.ts finds every op-amp core by its vpole, clo, chi
+    // and vmid nodes, pins vpole to probe stability, and re-solves with a
+    // .nodeset on vpole. Renaming any of them silently turns that check off.
+    const b = body('opamp.lib', 'opamp_core')
+    expect(b).toMatch(/^\s*blo\s+clo\s+0\s+v\s*=/im)
+    expect(b).toMatch(/^\s*bhi\s+chi\s+0\s+v\s*=/im)
+    expect(b).toMatch(/^\s*bmid\s+vmid\s+0\s+v\s*=/im)
+    expect(b).toMatch(/^\s*cp\s+vpole\s+0\b/im)
+    // The output follows vpole, so a pole parked at a limit is an output at that limit.
+    expect(b).toMatch(/^\s*bout\s+obuf\s+vee\s+v\s*=\s*v\(vpole\)\s*-\s*v\(vee\)/im)
+  })
+
   it('opamp_core and NE555 decisions are smooth: no hard comparator or clamp ternaries (issue #19)', () => {
     const noHard = (text: string, what: string): void => {
       for (const line of text.split(/\r?\n/)) {
