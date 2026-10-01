@@ -9,7 +9,7 @@ A KiCad board file carries full net connectivity. Every connected pad is tagged 
 circsim parses the board into a structured model: the net table, every footprint (reference, value, library id, layer, position, pads, and any properties like an MPN), the tracks, vias, zones, board outline, and silkscreen. From the footprints and their net-tagged pads it builds a **circuit**: a list of nets and a list of parts, where each part knows which of its pads lands on which net.
 
 ::: info Two net formats, one pipeline
-KiCad 6 to 8 boards carry a numeric net table (for example, `(net 3 "VCC")`) and tag pads by id. KiCad 9 (and the 2026 format) dropped the numeric ids entirely: nets are referenced by **name only**. circsim reads both. For name-only boards it synthesizes a stable internal id per distinct net name, so everything downstream is identical regardless of which KiCad version routed the board. It also handles the older `F.SilkS` and newer `F.Silkscreen` layer spellings.
+Boards written by KiCad 6 to 9 carry a numeric net table (for example, `(net 3 "VCC")`) and tag pads by id. KiCad 10 (file format 20260206) dropped the numeric ids entirely: nets are referenced by **name only**. circsim reads both, deciding from the file's content and not from its version stamp. For name-only boards it synthesizes a stable internal id per distinct net name, so everything downstream is identical regardless of which KiCad version routed the board. [Supported files](../reference/file-formats#kicad-version-support) lists the boards this is tested on. It also handles the older `F.SilkS` and newer `F.Silkscreen` layer spellings.
 :::
 
 ## Nets become SPICE nodes

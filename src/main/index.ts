@@ -152,14 +152,15 @@ function registerIpcHandlers(): void {
 
   /**
    * Open the "what circsim can tell you" fidelity doc.
-   * In packaged builds, open the bundled docs/what-circsim-can-tell-you.md
-   * via shell.openPath (rendered as plain text). In dev, open it from the
-   * project root. If the file is not found, fall back to a no-op (graceful).
-   * Task 28 — Spec §16 risk 7, §12.
+   * Opens the bundled docs/what-circsim-can-tell-you.html (rendered from
+   * website/docs/concepts/fidelity.md by scripts/fidelity-doc.mjs) in the
+   * default browser via shell.openPath. Packaged: <resources>/docs; dev: the
+   * project docs/ dir. If the file is not found, fall back to a no-op (graceful).
+   * Task 28 — Spec §16 risk 7, §12; issue #61.
    */
   ipcMain.handle('circsim:openDocs', async () => {
     try {
-      await shell.openPath(docPath('what-circsim-can-tell-you.md'))
+      await shell.openPath(docPath('what-circsim-can-tell-you.html'))
     } catch {
       // Non-fatal: if the doc isn't present (CI runner without a display),
       // the promise still resolves so the UI doesn't stall.
