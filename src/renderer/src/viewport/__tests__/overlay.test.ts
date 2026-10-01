@@ -17,6 +17,7 @@ import {
   type OverlayController,
   type LegendData,
 } from '../overlay'
+import { NetTintTable } from '../netTint'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -31,7 +32,7 @@ function makeNetMaterials(count: number): Map<number, THREE.MeshStandardMaterial
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-describe('OverlayController — mode switching', () => {
+describe('OverlayController: mode switching', () => {
   let overlay: OverlayController
   let netMaterials: Map<number, THREE.MeshStandardMaterial>
 
@@ -75,7 +76,7 @@ describe('OverlayController — mode switching', () => {
   })
 })
 
-describe('OverlayController — voltage tinting', () => {
+describe('OverlayController: voltage tinting', () => {
   let overlay: OverlayController
   let netMaterials: Map<number, THREE.MeshStandardMaterial>
 
@@ -137,7 +138,7 @@ describe('OverlayController — voltage tinting', () => {
   })
 })
 
-describe('OverlayController — legend data', () => {
+describe('OverlayController: legend data', () => {
   it('getLegend returns null when not in voltage mode', () => {
     const overlay = createOverlayController(makeNetMaterials(3))
     expect(overlay.getLegend()).toBeNull()
@@ -170,7 +171,7 @@ describe('OverlayController — legend data', () => {
   })
 })
 
-describe('OverlayController — performance', () => {
+describe('OverlayController: performance', () => {
   it('color-write loop for 500 nets completes in ≤ 16 ms', () => {
     const netMaterials = makeNetMaterials(500)
     const overlay = createOverlayController(netMaterials)
@@ -187,5 +188,64 @@ describe('OverlayController — performance', () => {
     const elapsed = performance.now() - start
 
     expect(elapsed).toBeLessThan(16)
+  })
+})
+
+describe('OverlayController: uniform-only writes (#77)', () => {
+  it('applyNetVoltages and setOverlay never bump a material version', () => {
+    const netMaterials = makeNetMaterials(50)
+    const overlay = createOverlayController(netMaterials)
+    const before = [...netMaterials.values()].map(m => m.version)
+
+    overlay.setOverlay('voltage')
+    const voltages = new Map<number, number>()
+    for (let i = 1; i <= 50; i++) voltages.set(i, (i / 50) * 5)
+    overlay.applyNetVoltages(voltages, 0, 5)
+    overlay.applyNetVoltages(voltages, 0, 5)
+    overlay.setOverlay('realistic')
+
+    const after = [...netMaterials.values()].map(m => m.version)
+    expect(after).toEqual(before)
+  })
+})
+
+describe('OverlayController: NetTintTable target (#57)', () => {
+  const COPPER = new THREE.Color(0xb87333)
+
+  it('tints nets through the table and restores them in realistic mode', () => {
+    const tints = new NetTintTable([1, 2, 3], COPPER)
+    const overlay = createOverlayController(tints)
+    overlay.setOverlay('voltage')
+    overlay.applyNetVoltages(new Map([[1, 0], [2, 5]]), 0, 5)
+
+    expect(tints.getColor(1)!.b).toBeGreaterThan(0.7)
+    expect(tints.getColor(2)!.r).toBeGreaterThan(0.7)
+    // net 3 was not in the map: still copper
+    expect(tints.getColor(3)!.r).toBeCloseTo(COPPER.r, 5)
+
+    overlay.setOverlay('realistic')
+    for (const id of [1, 2, 3]) {
+      expect(tints.getColor(id)!.r).toBeCloseTo(COPPER.r, 5)
+      expect(tints.getColor(id)!.g).toBeCloseTo(COPPER.g, 5)
+      expect(tints.getColor(id)!.b).toBeCloseTo(COPPER.b, 5)
+    }
+  })
+
+  it('a 1500-net tint update is far under the 16 ms spec budget', () => {
+    const ids = Array.from({ length: 1500 }, (_, i) => i + 1)
+    const tints = new NetTintTable(ids, COPPER)
+    const overlay = createOverlayController(tints)
+    overlay.setOverlay('voltage')
+    const voltages = new Map(ids.map(id => [id, (id / 1500) * 5] as [number, number]))
+    const start = performance.now()
+    overlay.applyNetVoltages(voltages, 0, 5)
+    expect(performance.now() - start).toBeLessThan(16)
+  })
+
+  it('does not tint outside voltage mode', () => {
+    const tints = new NetTintTable([1], COPPER)
+    const overlay = createOverlayController(tints)
+    overlay.applyNetVoltages(new Map([[1, 5]]), 0, 5)
+    expect(tints.getColor(1)!.r).toBeCloseTo(COPPER.r, 5)
   })
 })

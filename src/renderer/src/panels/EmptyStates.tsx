@@ -98,7 +98,6 @@ export interface NoGroundStateProps {
 export function NoGroundState({ suggestedGroundName }: NoGroundStateProps): React.ReactElement {
   return (
     <div style={guidedStyle} role="status" data-testid="no-ground-state">
-      <div style={guidedIcon}>⚡</div>
       <div style={guidedTitle}>Designate a ground net first</div>
       <div style={guidedBody}>
         circsim needs to know which net is ground (0 V reference) before it can
@@ -108,7 +107,7 @@ export function NoGroundState({ suggestedGroundName }: NoGroundStateProps): Reac
             {' '}
             The{' '}
             <strong style={netName}>{suggestedGroundName}</strong> net looks like
-            a good candidate — click it in the Ground panel on the right, or click
+            a good candidate. Click it in the Ground panel on the right, or click
             it on the board.
           </>
         ) : (
@@ -129,10 +128,9 @@ export function NoGroundState({ suggestedGroundName }: NoGroundStateProps): Reac
 export function NoSourceState(): React.ReactElement {
   return (
     <div style={guidedStyle} role="status" data-testid="no-source-state">
-      <div style={guidedIcon}>🔌</div>
       <div style={guidedTitle}>Attach a power supply or signal source</div>
       <div style={guidedBody}>
-        The circuit has no voltage source to simulate. Add a{' '}
+        The circuit has no wired voltage source to simulate. Add a{' '}
         <strong>DC Supply</strong> from the bench and draw its lead to a power rail
         (like VCC or +5V), or add a <strong>Function Generator</strong> onto an input
         net. Then press <strong>Power On</strong> or <strong>Run</strong>.
@@ -331,11 +329,6 @@ const guidedStyle: React.CSSProperties = {
   color: '#bbc',
   gap: 8,
   maxWidth: 420,
-}
-const guidedIcon: React.CSSProperties = {
-  fontSize: 32,
-  lineHeight: 1,
-  marginBottom: 4,
 }
 const guidedTitle: React.CSSProperties = {
   fontSize: 16,

@@ -4,6 +4,8 @@ The **bench shelf** sits under the 3D board. It holds your instruments as front 
 
 This is the heart of circsim. Everything here happens live: turn a knob and the simulation re-solves without a restart.
 
+Each panel lays its jacks and controls out in a single row, and the shelf scrolls sideways when the panels do not fit. Click **Hide panels** in the bench header to collapse the shelf to its header strip and give the board the room; **Show panels** brings it back. While the shelf is hidden its leads are not drawn, and circsim remembers the setting between launches.
+
 ![The bench shelf with a Ground panel and a PSU panel side by side. The PSU shows a Volts knob at 5 V, a Voltage field, a Series R field, and a red plus-jack with a lead running up to the board.](/img/bench-shelf.png)
 
 ## Add an instrument
