@@ -127,7 +127,8 @@ export interface SupplyEntry {
 /**
  * Operating-point solution fed to the sim-dependent checks (IR-drop, ampacity,
  * thermal). Built from circsim's existing ngspice operating-point path. Absent ⇒
- * those checks fall back to estimates and say so, or are skipped.
+ * those checks are skipped; a check whose own input is missing (e.g. thermal
+ * without `partPower`) reports `notAssessed` instead of running silently.
  */
 export interface OpResult {
   /** SPICE node name → DC voltage (V). */

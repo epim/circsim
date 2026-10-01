@@ -2646,8 +2646,11 @@ export function mapVectorNameToLedRef(name: string): string | null {
  * `nodeVoltages` is keyed by SPICE NODE NAME (the critic's IR/thermal math works
  * in spice-node space), translated from the store's netId→volts map via the
  * circuit's net.spiceNode. `partCurrents` (ref → amps) comes straight from
- * currentsByRef. `partPower` is left undefined — circsim does not yet harvest
- * per-part power, and the thermal check derives its own estimate without it.
+ * currentsByRef, or from the solve's branch currents when they were derived.
+ * `partPower` is left undefined on both paths: circsim does not yet derive
+ * per-part power (not even from the solved pad currents), and the thermal check
+ * does NOT estimate it on its own, so it reports "not assessed" in the Critic
+ * panel until a producer exists (#46).
  *
  * Exported for unit testing.
  */

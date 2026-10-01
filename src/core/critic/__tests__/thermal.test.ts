@@ -108,6 +108,24 @@ describe('checkThermal', () => {
     expect(noPowerReport.findings.some((f) => f.check === 'thermal')).toBe(false)
   })
 
+  it('reports not-assessed (never ran) when the OpResult carries no partPower', () => {
+    const { board, circuit } = build(50, [
+      { ref: 'Q1', x: 10, y: 10 },
+      { ref: 'Q2', x: 40, y: 40 },
+    ])
+    // Energized board: node voltages and currents, but nothing produces partPower.
+    const op: OpResult = { nodeVoltages: { n1: 5 }, partCurrents: { Q1: 0.1 } }
+    const report = runCritic(board, circuit, op)
+
+    expect(report.findings.some((f) => f.check === 'thermal')).toBe(false)
+    // Must not be recorded as having run: silence would read as "checked and clean".
+    expect(report.ranBy).not.toContain('thermal')
+    const entry = report.skipped.find((s) => s.check === 'thermal')
+    expect(entry).toBeDefined()
+    expect(entry!.reason).toContain('not assessed')
+    expect(entry!.reason).toContain('per-part power')
+  })
+
   it('names the highest-power component in the warmest-part info finding', () => {
     const { board, circuit } = build(50, [
       { ref: 'Q1', x: 12, y: 12 },

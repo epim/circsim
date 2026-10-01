@@ -7,7 +7,7 @@ The [Board Critic](../concepts/board-critic) is circsim's read-only, pre-fabrica
 You don't press a "run critic" button. The Critic audits automatically:
 
 - **When you open a board**: the static checks run immediately: floating/dangling nets, copper clearance, decoupling proximity, and loop area.
-- **After each [operating-point solve](./energize)**: the simulation-informed checks run against the real currents: ampacity and IR-drop (and thermal, which is quiet in this version).
+- **After each [operating-point solve](./energize)**: the simulation-informed checks run against the real currents: ampacity and IR-drop (thermal is not active in this version: the panel lists it as "not assessed" because circsim doesn't compute per-part power yet).
 
 So the full flow is: open the board, glance at the static findings, then **Energize** to unlock the current-dependent ones.
 

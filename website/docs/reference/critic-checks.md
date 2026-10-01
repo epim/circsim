@@ -14,7 +14,7 @@ Every finding is a **risk to check, not a verdict**, and every one carries an *"
 | Loop area | No | On board open |
 | Ampacity | **Yes** (operating point) | After each solve |
 | IR-drop | **Yes** (operating point) | After each solve |
-| Thermal | **Yes** (operating point) | After each solve |
+| Thermal | **Yes** (operating point and per-part power, not yet computed) | Not active: listed as not assessed |
 
 Before you energize, the three simulation-informed checks show as *"needs simulation"* in the panel.
 
@@ -110,8 +110,8 @@ A **first-order, relative** heat-spread proxy, not absolute temperature. It rela
 
 **Assumes:** a first-order 2D heat-spread proxy; relative units, not absolute °C.
 
-::: warning Thermal is the quietest check today
-The thermal check needs per-part power dissipation, which this version doesn't fully compute yet, so in practice it produces little output. Ampacity and IR-drop run on branch currents from the operating-point solve (every part, not only LEDs) and are the working simulation-informed checks. Read any thermal finding strictly as a *relative* placement concern, never a temperature prediction.
+::: warning Thermal is not active today
+The thermal check needs per-part power dissipation, which this version doesn't compute yet, so it does not run: the Critic panel and the copied report list it as "thermal: not assessed (no per-part power data from the simulation yet)", and "No risks flagged" does not cover heat concentration. Ampacity and IR-drop run on branch currents from the operating-point solve (every part, not only LEDs) and are the working simulation-informed checks; the thermal check does not yet draw on those currents. Read any thermal finding strictly as a *relative* placement concern, never a temperature prediction.
 :::
 
 ## Severity summary
