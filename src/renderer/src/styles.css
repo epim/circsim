@@ -1,0 +1,19 @@
+/*
+ * Global reset (issue #33). The app shell sizes itself to the window, so the
+ * default 8 px body margin must go; otherwise the 100%-tall root overflows and
+ * the whole page scrolls at every window size. The root has a minimum size
+ * (see APP_MIN_WIDTH / APP_MIN_HEIGHT in ui/layoutPrefs.ts); below it the page
+ * scrolls instead of crushing the board.
+ */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  overflow: auto;
+  background: #0c0c14;
+}

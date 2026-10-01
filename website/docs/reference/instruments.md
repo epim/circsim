@@ -31,7 +31,7 @@ A periodic source with a 50 Ω default output resistance.
 | **Duty** (knob) | 1 to 99 % | Square/pulse only |
 
 - **Jack:** yellow **out**.
-- **SPICE:** `SIN(...)` for sine, `PULSE(...)` for square/pulse; triangle is a sine approximation.
+- **SPICE:** `SIN(...)` for sine, `PULSE(...)` for square/pulse. Triangle is also a `PULSE(...)` source, with rise and fall each half a period and a negligible top width, so it is an exact linear ramp (within a few nanovolts of ideal) rather than a sine approximation.
 - **Live edit:** frequency, amplitude, and offset changes `alter` in place *for the same wave type*. Changing the wave type reloads the circuit.
 
 ## Logic Input: `LOGIC`
