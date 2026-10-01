@@ -23,7 +23,7 @@
 import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { describe, test, expect } from 'vitest'
-import { generateDeck, generateDeckWithDiagnostics, formatSpiceValue, alterPlan, instrumentSpiceName, buildLedSpiceNames, isLedPart, subcktTerminalConductivity, digitalVddNet } from '../generate'
+import { generateDeck, generateDeckWithDiagnostics, formatSpiceValue, alterPlan, instrumentSpiceName, buildLedSpiceNames, isLedPart, subcktTerminalConductivity, subcktGroundedTerminals, digitalVddNet } from '../generate'
 import type { Circuit, CircuitNet, Part } from '../../netlist/extract'
 import type { Resolution } from '../../models/types'
 import type { Instrument } from '../instruments'
@@ -1838,30 +1838,86 @@ describe('generateDeck — LM339 quad comparator from the real bundled opamp.lib
 describe('M12 — subckt terminal-conductivity analysis (real bundled opamp.lib)', () => {
   const REAL_OPAMP_LIB = readFileSync(join(process.cwd(), 'resources', 'models', 'opamp.lib'), 'utf8')
 
-  test('opamp_core: inp/inn are sense-only; out, vcc and vee are one group through the supply-current sources', () => {
+  test('opamp_core: inp/inn are sense-only; out, vcc and vee are three separate groups (issue #131)', () => {
     // Body truth: bin senses inp/inn only inside its b-source expression, so
     // neither is a branch node. The output buffer is referenced to vee (bout
-    // obuf vee, rout obuf osns, vsns osns out), and the supply-current sources
-    // (bsrc and biq) sit between vcc and vee, so out, vcc and vee conduct to one
-    // another. Both sources are scaled by the rails-present measure, so a
-    // floating rail carries no draw.
+    // obuf vee v = v(vpole) - v(vee)) with vee cancelling out of the constraint,
+    // so that source pins out to an absolute level and ties vee to nothing. The
+    // supply-current sources (bsrc and biq, between vcc and vee) are pure
+    // current sources, not DC paths. A floating V- pin must therefore not join
+    // the driven VCC island or the output net, loaded or not.
     expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'opamp_core')).toEqual([
-      ['inp'], ['inn'], ['out', 'vcc', 'vee'],
+      ['inp'], ['inn'], ['out'], ['vcc'], ['vee'],
     ])
+    expect(subcktGroundedTerminals(REAL_OPAMP_LIB, 'opamp_core')).toEqual(['out'])
+    expect(subcktGroundedTerminals(REAL_OPAMP_LIB, 'LM358')).toEqual(['out'])
   })
 
-  test('LM393 (one nesting level): inp/inn sense-only; out, vcc and vee one conductive group', () => {
+  test('LM393 (one nesting level): inp/inn sense-only; out and vee conduct, vcc is separate', () => {
     expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'LM393')).toEqual([
-      ['inp'], ['inn'], ['out', 'vcc', 'vee'],
+      ['inp'], ['inn'], ['out', 'vee'], ['vcc'],
     ])
   })
 
-  test('LM339_QUAD (two nesting levels): out1-4, vcc and vee one group via the four LM393 cells; all 8 inputs sense-only', () => {
+  test('LM339_QUAD (two nesting levels): out1-4 and vee one group via the four LM393 cells, vcc separate; all 8 inputs sense-only', () => {
     expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'LM339_QUAD')).toEqual([
       ['in1p'], ['in1n'],
-      ['out1', 'out2', 'out3', 'out4', 'vcc', 'vee'],
+      ['out1', 'out2', 'out3', 'out4', 'vee'],
       ['in2p'], ['in2n'], ['in3p'], ['in3n'], ['in4p'], ['in4n'],
+      ['vcc'],
     ])
+  })
+
+  test('b-cards: a pure current source links nothing; a current source reading its own node voltage, or any voltage source, conducts (issue #131)', () => {
+    const lib = [
+      '.subckt pure a b c',
+      'bi a b i = 2m*v(c)',
+      '.ends pure',
+      '.subckt conductance a b c',
+      'bg a b i = v(a,b)*1m',
+      '.ends conductance',
+      '.subckt conductance_one a b c',
+      'bg a b I=v(a)*1m',
+      '.ends conductance_one',
+      '.subckt volt a b c',
+      'bv a b v = 2*v(c)',
+      '.ends volt',
+    ].join('\n')
+    expect(subcktTerminalConductivity(lib, 'pure')).toEqual([['a'], ['b'], ['c']])
+    expect(subcktTerminalConductivity(lib, 'conductance')).toEqual([['a', 'b'], ['c']])
+    expect(subcktTerminalConductivity(lib, 'conductance_one')).toEqual([['a', 'b'], ['c']])
+    expect(subcktTerminalConductivity(lib, 'volt')).toEqual([['a', 'b'], ['c']])
+  })
+
+  test('b-cards: a voltage source ending in - v(n-) pins n+ and ties n- to nothing; other uses of v(n-) conduct (issue #131)', () => {
+    const lib = [
+      '.subckt cancels a b c',
+      'bv a b v = v(c) - v(b)',
+      '.ends cancels',
+      '.subckt cancels_scaled a b c',
+      'bv a b v = 2*v(c) - 1e-3 - v(B)',
+      '.ends cancels_scaled',
+      '.subckt keeps_pos a b c',
+      'bv a b v = v(c) + v(b)',
+      '.ends keeps_pos',
+      '.subckt keeps_product a b c',
+      'bv a b v = v(c) - 2*v(b)',
+      '.ends keeps_product',
+      '.subckt keeps_diff a b c',
+      'bv a b v = v(c,b)',
+      '.ends keeps_diff',
+      '.subckt keeps_other a b c',
+      'bv a b v = v(c) - v(a)',
+      '.ends keeps_other',
+    ].join('\n')
+    expect(subcktTerminalConductivity(lib, 'cancels')).toEqual([['a'], ['b'], ['c']])
+    expect(subcktGroundedTerminals(lib, 'cancels')).toEqual(['a'])
+    expect(subcktTerminalConductivity(lib, 'cancels_scaled')).toEqual([['a'], ['b'], ['c']])
+    expect(subcktGroundedTerminals(lib, 'cancels_scaled')).toEqual(['a'])
+    for (const name of ['keeps_pos', 'keeps_product', 'keeps_diff', 'keeps_other']) {
+      expect(subcktTerminalConductivity(lib, name)).toEqual([['a', 'b'], ['c']])
+      expect(subcktGroundedTerminals(lib, name)).toEqual([])
+    }
   })
 
   test('unknown subckt name → undefined (deck-gen falls back to the blanket union)', () => {
@@ -1953,10 +2009,12 @@ describe('M12 — terminal conductivity of every OTHER shipped lib (island-behav
     expect(subcktTerminalConductivity(lib('regulators.lib'), 'AMS1117-3.3')).toEqual([['vin', 'gnd', 'vout']])
   })
 
-  test('regulators.lib TL431: one full group {k,a,ref} — ref joins through the constant bref current source (pinned approximation)', () => {
-    // bshunt {k,a}; bref {ref,a} (`i = 2u`, same b-card approximation as biq).
+  test('regulators.lib TL431: {k,a} conduct; ref is a high-Z input (the constant bref current source is no DC path)', () => {
+    // bshunt {k,a} reads v(ref,a), which names its own node a, so it may be a
+    // conductance and keeps linking k-a. bref {ref,a} (`i = 2u`) is a pure
+    // current source and links nothing (issue #131).
     expect(subcktTerminalConductivity(lib('regulators.lib'), 'TL431')).toEqual([
-      ['k', 'a', 'ref'],
+      ['k', 'a'], ['ref'],
     ])
   })
 
@@ -2063,21 +2121,26 @@ describe('undriven nets: subckt-modeled chip outputs are driven (issue #43, real
    * on ground. BUF feeds nothing else. With `biasPlus` a 10k/10k divider
    * sets PLUS; without it PLUS touches only the sense-only IN+ terminal.
    */
-  function follower(subcktName: string, biasPlus: boolean) {
+  function follower(subcktName: string, biasPlus: boolean, floatVee = false, loadBuf = false) {
     const nets: CircuitNet[] = [
       { id: 1, kicadName: 'VCC', spiceNode: 'vcc', padRefs: [] },
       { id: 2, kicadName: 'PLUS', spiceNode: 'plus', padRefs: [] },
       { id: 3, kicadName: 'BUF', spiceNode: 'buf', padRefs: [] },
       { id: 4, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+      // KiCad gives an unconnected pad its own single-pad net.
+      ...(floatVee ? [{ id: 5, kicadName: 'unconnected-(U1-V-)', spiceNode: 'unconn_vee', padRefs: [] }] : []),
     ]
     const u1: Part = {
       ref: 'U1', value: subcktName, libId: 'Package_SO:SOIC-8_3.9x4.9mm_P1.27mm', layer: 'F',
-      padNet: new Map([['1', 3], ['2', 3], ['3', 2], ['4', 4], ['8', 1]]),
+      // floatVee puts pad 4 (V-) on its own unconnected net instead of ground.
+      padNet: new Map([['1', 3], ['2', 3], ['3', 2], ['4', floatVee ? 5 : 4], ['8', 1]]),
       properties: {},
     }
     const divider: Array<[string, string]> = biasPlus
       ? [['R1', 'r_r1 vcc plus 10000'], ['R2', 'r_r2 plus 0 10000']]
       : []
+    // loadBuf: a 10k load from BUF to ground, the op-amp output's own DC path.
+    if (loadBuf) divider.push(['RL', 'r_rl buf 0 10000'])
     const parts: Part[] = [
       u1,
       ...divider.map(([ref]): Part => ({ ref, value: '10k', libId: 'R', layer: 'F', padNet: new Map(), properties: {} })),
@@ -2112,13 +2175,39 @@ describe('undriven nets: subckt-modeled chip outputs are driven (issue #43, real
     (name) => {
       const { opts, result } = follower(name, true)
       expect(result.lines).toEqual(generateDeck(opts))
-      // The op-amp output buffer is referenced to the vee pin (bout obuf vee),
-      // which this board ties to ground, so BUF reaches node 0 through the
-      // subckt and needs no bleed card at all.
+      // The op-amp output buffer pins BUF to an absolute level (bout obuf vee
+      // v = v(vpole) - v(vee)), so BUF needs no bleed card at all.
       expect(result.diagnostics.floatingIslands).toEqual([])
       expect(result.lines.some(l => /^r_float_\d+ buf /.test(l))).toBe(false)
       // ... and the output stage drives BUF, so it is not an undriven net.
       expect(result.diagnostics.undrivenIslands).toEqual([])
+    },
+  )
+
+  test.each(['LM358', 'LM324', 'TL072'])(
+    '%s with V- unconnected: the floating supply pin is not hidden by the supply-current sources (issue #131)',
+    (name) => {
+      const { result } = follower(name, true, true)
+      // The model's behavioral supply-current sources (bsrc, biq) sit between vcc
+      // and vee. A current source is not a DC path, so they must not join the
+      // unconnected V- net to the driven VCC island.
+      expect(result.lines.some(l => /^x_u1 .* unconn_vee /.test(l))).toBe(true)
+      expect(result.diagnostics.undrivenIslands.flat()).toContain('unconn_vee')
+      // The bleed cards are unchanged: the island view still decides them.
+      expect(result.lines.some(l => /^r_float_\d+ unconn_vee 0 1e9$/.test(l))).toBe(true)
+    },
+  )
+
+  test.each(['LM358', 'LM324', 'TL072'])(
+    '%s with V- unconnected and OUT loaded to ground: the floating supply pin is still undriven (issue #131)',
+    (name) => {
+      const { result } = follower(name, true, true, true)
+      // OUT has its own DC path (the load), and the output buffer's vee
+      // reference cancels out of its constraint, so neither may hide V-.
+      expect(result.diagnostics.undrivenIslands.flat()).toContain('unconn_vee')
+      expect(result.diagnostics.undrivenIslands.flat()).not.toContain('buf')
+      expect(result.lines.some(l => /^r_float_\d+ unconn_vee 0 1e9$/.test(l))).toBe(true)
+      expect(result.lines.some(l => /^r_float_\d+ buf 0 1e9$/.test(l))).toBe(false)
     },
   )
 

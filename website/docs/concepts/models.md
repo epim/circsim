@@ -67,7 +67,7 @@ Each part shows a status in the **Parts** panel and, if it needs attention, in t
 | Stubbed | amber | You (or a heuristic) stubbed it open/short/interactive |
 | No model | red | Nothing matched, needs your attention |
 
-A red "no model" part contributes nothing to the simulation and appears in the fidelity banner. The [Model Doctor](../guides/model-doctor) is where you fix it: import a `.lib`, get one from an LLM and validate it against ngspice, stub it, or set an interactive-pin panel.
+A red "no model" part contributes nothing to the simulation and appears in the fidelity banner. The [Model Doctor](../guides/model-doctor) is where you fix it: import a `.lib`, get one from an LLM and validate it against ngspice, stub it, or set an interactive-pin panel. Imported and LLM-written models are [treated as code](../guides/model-doctor#models-are-code): circsim refuses any model carrying a control block or a file include.
 
 ## Related
 

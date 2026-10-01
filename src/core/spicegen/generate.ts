@@ -166,10 +166,13 @@ interface TerminalConductivity {
   /** Terminal-index groups; every terminal appears in exactly one group. */
   groups: number[][]
   /**
-   * DC view only (empty in the island view): terminal indices with an internal
-   * DC path to global ground, node "0". The subckt holds such a terminal to a
-   * ground-referenced level (an op-amp output stage), so the board net on it
-   * is driven even when no other card gives it a path to ground.
+   * Terminal indices the subckt holds to an absolute (ground-referenced)
+   * level. DC view: terminals with an internal DC path to global ground, node
+   * "0". Island view: only terminals pinned by a voltage source that cancels
+   * its own negative node (see cancelsNegativeNode); internal node "0" stays
+   * an ordinary node there. Either way the board net on such a terminal is
+   * driven (an op-amp output stage), even when no other card gives it a path
+   * to ground.
    */
   grounded: number[]
 }
@@ -678,6 +681,85 @@ function primitiveCardNodeGroups(card: string): string[][] {
 // ─── M12: per-subckt terminal conductivity ────────────────────────────────────
 
 /**
+ * True for a behavioral current source (`b<name> n+ n- i = <expr>`) whose
+ * expression never reads the voltage across its own branch (no `v(...)`
+ * argument names n+ or n-). Such a source forces a current independent of its
+ * own terminals, so it carries no DC link between them (issue #131). Anything
+ * that might be a conductance, and every `v = ...` source, answers false.
+ */
+function isPureCurrentSource(toks: string[]): boolean {
+  const expr = toks.slice(3).join(' ')
+  if (!/^i\s*=/i.test(expr)) return false
+  const own = new Set([toks[1].toLowerCase(), toks[2].toLowerCase()])
+  for (const m of expr.matchAll(/\bv\(([^)]*)\)/gi)) {
+    if (m[1].split(',').some((arg) => own.has(arg.trim().toLowerCase()))) return false
+  }
+  return true
+}
+
+/**
+ * Stand-in for "absolute ground" inside a subckt body in the island view, where
+ * internal node "0" is an ordinary node. Never a legal SPICE node name.
+ */
+const ISLAND_REF = '*ref*'
+
+/**
+ * True for a behavioral voltage source (`b<name> n+ n- v = <expr>`) whose
+ * expression carries the term `- v(n-)` at the top level, so the constraint
+ * v(n+) - v(n-) = E - v(n-) reduces to v(n+) = E: the source pins n+ to an
+ * absolute level (the opamp.lib output buffer `bout obuf vee v = v(vpole) -
+ * v(vee)`) and its negative node only carries the branch current. Its negative
+ * node is NOT tied to anything by the source, so floating it must not hide
+ * behind this card (issue #131).
+ */
+function cancelsNegativeNode(toks: string[]): boolean {
+  const expr = toks.slice(3).join(' ')
+  const m = /^v\s*=\s*(.*)$/i.exec(expr)
+  if (!m) return false
+  const neg = toks[2].toLowerCase()
+  // Split into signed top-level terms (parentheses nest; a sign after an
+  // exponent letter, as in 1e-3, is part of the number).
+  const body = m[1]
+  let depth = 0
+  let sign = 1
+  let term = ''
+  const terms: Array<{ sign: number; text: string }> = []
+  const flush = (): void => {
+    terms.push({ sign, text: term.trim() })
+    term = ''
+  }
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]
+    if (c === '(') depth++
+    else if (c === ')') depth--
+    if (depth === 0 && (c === '+' || c === '-') && term.trim() !== '' && !/[0-9.]e$/i.test(term.trim())) {
+      flush()
+      sign = c === '-' ? -1 : 1
+      continue
+    }
+    if (depth === 0 && (c === '+' || c === '-') && term.trim() === '') {
+      if (c === '-') sign = -sign
+      continue
+    }
+    term += c
+  }
+  flush()
+  const exactRef = /^v\(\s*([^)\s,]+)\s*\)$/i
+  const mentionsNeg = (text: string): boolean =>
+    [...text.matchAll(/\bv\(([^)]*)\)/gi)].some((r) => r[1].split(',').some((a) => a.trim().toLowerCase() === neg))
+  let coeff = 0
+  for (const t of terms) {
+    const ref = exactRef.exec(t.text)
+    if (ref && ref[1].toLowerCase() === neg) coeff += t.sign
+    // Any other mention of v(n-) (a product, a two-argument form) is a real
+    // dependence, so the conservative pair union stays.
+    else if (mentionsNeg(t.text)) return false
+  }
+  // Only the exact `... - v(n-)` shape cancels.
+  return coeff === -1
+}
+
+/**
  * Analog node groups of an element card INSIDE a .subckt body. Extends
  * primitiveCardNodeGroups with the shapes that appear in lib bodies but never
  * in resolve.ts primitive cards:
@@ -687,11 +769,22 @@ function primitiveCardNodeGroups(card: string): string[][] {
  *       references inside the expression (`v(inp)`, `i(vsense)`) are SENSE
  *       only and are never tokenized as nodes — the fixed slice(1,3) stops
  *       before the expression text, so `v = v(x) - v(y)` contributes nothing.
- *       KNOWN APPROXIMATION: a constant-current b-card (`i = 2u`, e.g.
- *       regulators.lib biq/bref) is an ideal current source, not true
- *       conductance, yet its branch pair unions like every other b-card.
- *       Safe direction only (merging can at most suppress a bleed the pre-M12
- *       blanket union also suppressed); pinned by the regulators.lib tests.
+ *       A PURE current source (`i = ...` whose expression never reads the
+ *       voltage across its own two nodes, e.g. the opamp.lib supply-pin sources
+ *       bsrc/biq between vcc and vee, or regulators.lib bref) forces a branch
+ *       current whatever the node voltages are, so it is NOT a DC path: each
+ *       node registers as a singleton instead of the pair unioning (issue
+ *       #131). A floating supply pin therefore stays its own island, is bled,
+ *       and is reported undriven. A current source that does read its own
+ *       node voltages (`i = v(disch,gnd)*g`) can be a conductance, so it keeps
+ *       unioning its pair, as does every voltage-source b-card.
+ *
+ *       A voltage source whose expression ends in `- v(n-)` (cancelsNegativeNode)
+ *       pins n+ to an absolute level and ties n- to nothing, so it registers
+ *       n+ against ground (global node "0" in the DC view, ISLAND_REF in the
+ *       island view) and leaves n- alone. A floating supply pin the output
+ *       buffer is referenced to therefore stays its own island even when the
+ *       output net has a DC path of its own, e.g. a load to ground (issue #131).
  *
  *   unknown letters — conservative: treat the first two node tokens as a
  *       conductive pair. Merging too much can only suppress a bleed the same
@@ -706,7 +799,11 @@ function subcktBodyCardGroups(card: string, dc = false): string[][] {
   const letter = toks[0].charAt(0).toLowerCase()
   // DC view (issue #43): a capacitor passes no DC, so it joins nothing.
   if (dc && letter === 'c') return []
-  if (letter === 'b') return [toks.slice(1, 3)]
+  if (letter === 'b') {
+    if (isPureCurrentSource(toks)) return [[toks[1]], [toks[2]]]
+    if (cancelsNegativeNode(toks)) return [[toks[1], dc ? '0' : ISLAND_REF], [toks[2]]]
+    return [toks.slice(1, 3)]
+  }
   if ('rclvidqjmegfh'.includes(letter)) return primitiveCardNodeGroups(card)
   // Unknown element letter inside a lib body: conservative two-node pair.
   return [toks.slice(1, 3)]
@@ -779,9 +876,10 @@ function terminalConductivityFor(
           for (const g of child.groups) {
             uf.link(g.map((i) => nodeToks[i]).filter((n): n is string => n !== undefined))
           }
-          // DC view: a child terminal grounded inside the child is grounded here.
+          // A child terminal grounded inside the child is grounded here ("0" in
+          // the DC view, ISLAND_REF in the island view).
           for (const i of child.grounded) {
-            if (nodeToks[i] !== undefined) uf.link([nodeToks[i], '0'])
+            if (nodeToks[i] !== undefined) uf.link([nodeToks[i], dc ? '0' : ISLAND_REF])
           }
         } else {
           uf.link(nodeToks) // cycle: conservative blanket for this instance
@@ -815,8 +913,9 @@ function terminalConductivityFor(
     groupByRoot.set(root, g)
     groups.push(g)
   })
-  // DC view: the terminals sharing an internal DC component with ground.
-  const groundRoot = dc ? uf.rootOf('0') : undefined
+  // The terminals sharing an internal component with ground (DC view) or with
+  // the absolute reference (island view).
+  const groundRoot = uf.rootOf(dc ? '0' : ISLAND_REF)
   const grounded: number[] = []
   if (groundRoot !== undefined) {
     def.terminals.forEach((term, i) => {
@@ -846,6 +945,20 @@ export function subcktTerminalConductivity(libText: string, name: string): strin
   const def = getSubcktDef(idx, 'lib', name)
   if (!def) return undefined
   return groups.map((g) => g.map((i) => def.terminals[i]))
+}
+
+/**
+ * Exported for tests: the lowercased names of the terminals of a named .subckt
+ * that the island view holds to an absolute level (a voltage source whose
+ * negative-node term cancels, see cancelsNegativeNode). Undefined when the
+ * subckt is not defined in the text.
+ */
+export function subcktGroundedTerminals(libText: string, name: string): string[] | undefined {
+  const idx = makeModelTextIndex({ lib: libText })
+  const def = getSubcktDef(idx, 'lib', name)
+  const cond = terminalConductivityFor(idx, 'lib', name)
+  if (!def || !cond) return undefined
+  return cond.grounded.map((i) => def.terminals[i].toLowerCase())
 }
 
 // ─── Current-probe helpers ─────────────────────────────────────────────────────
@@ -1568,6 +1681,10 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
     const dc = terminalConductivityFor(modelIndex, libFile, subcktName, new Set(), true)
     for (const g of dc?.groups ?? groups) islandNodes.link(g.map((i) => nodes[i]), 'dc')
     for (const i of dc?.grounded ?? []) islandNodes.link([nodes[i], '0'], 'dc')
+    // A terminal the subckt pins to an absolute level needs no bleed: it is
+    // grounded in the island view too (opamp.lib output buffer).
+    const isl = terminalConductivityFor(modelIndex, libFile, subcktName)
+    for (const i of isl?.grounded ?? []) islandNodes.link([nodes[i], '0'], 'island')
   }
 
   // ── Line 0: title (SPICE requires first line to be a title comment) ────────
