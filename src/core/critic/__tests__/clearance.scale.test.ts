@@ -120,6 +120,55 @@ describe('clearance spatial index', () => {
     }
   })
 
+  it('finds shorts on long tracks against small tracks and against each other', () => {
+    // Many short tracks plus two long crossing diagonals per layer. The grid cell follows
+    // the mean extent, so each long diagonal spans far more than MAX_CELLS_PER_CHORD cells
+    // and goes to the side list: this exercises the long-vs-short and long-vs-long loops.
+    const side = 300
+    const layers = ['F.Cu', 'In1.Cu', 'B.Cu']
+    const nets = ['LA', 'LB', 'S0', 'S1', 'S2', 'S3']
+    const r = rng(99)
+    const tracks: GenTrack[] = []
+    for (const layer of layers) {
+      for (let k = 0; k < 80; k++) {
+        const x = r() * side
+        const y = r() * side
+        const a = r() * Math.PI * 2
+        const len = 1 + r() * 4
+        tracks.push({
+          net: nets[2 + Math.floor(r() * 4)],
+          layer,
+          width: 0.2,
+          pts: [
+            [x, y],
+            [x + len * Math.cos(a), y + len * Math.sin(a)],
+          ],
+        })
+      }
+      // Two crossing long diagonals on different nets (long vs long short).
+      tracks.push({ net: 'LA', layer, width: 0.3, pts: [[0, 0], [side, side]] })
+      tracks.push({ net: 'LB', layer, width: 0.3, pts: [[0, side], [side, 0]] })
+      // Short tracks that cross or nearly touch a long diagonal (long vs short).
+      for (const t of [60, 120, 200, 250]) {
+        tracks.push({ net: 'S0', layer, width: 0.2, pts: [[t - 1, t + 1], [t + 1, t - 1]] })
+      }
+      // Near miss: copper gap 0.1 mm, under the default minimum.
+      tracks.push({ net: 'S1', layer, width: 0.2, pts: [[30, 30.65], [31, 31.65]] })
+    }
+    const board = buildBoard(tracks, nets, side)
+    const expected = bruteForceIds(board, DEFAULT_CRITIC_OPTIONS.minClearanceMm)
+    expect(expected.length).toBeLessThanOrEqual(50)
+
+    // Guard the premise: the long-vs-long pair and long-vs-short pairs are present.
+    const t = board.tracks
+    const isLong = (i: number) => Math.hypot(t[i].end.x - t[i].start.x, t[i].end.y - t[i].start.y) > 100
+    const pairs = expected.map((id) => id.match(/t(\d+)-t(\d+)/)!.slice(1).map(Number))
+    expect(pairs.filter(([i, j]) => isLong(i) && isLong(j)).length).toBe(layers.length)
+    expect(pairs.filter(([i, j]) => isLong(i) !== isLong(j)).length).toBeGreaterThanOrEqual(layers.length * 4)
+
+    expect(trackIds(board)).toEqual(expected)
+  })
+
   it('checks a 10k-track board inside a generous time bound', () => {
     const { tracks, nets } = randomTracks(10000, 1000, 7, 500)
     const board = buildBoard(tracks, nets, 1000)
