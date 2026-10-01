@@ -19,6 +19,7 @@ Task-oriented walkthroughs for specific jobs. If you're new, do the [First Light
 
 - **[Fix an unresolved part](./model-doctor)**: the Model Doctor: import, stub, or pin-map a part.
 - **[Run the Board Critic audit](./run-critic)**: the read-only pre-fab check.
+- **[Save your setup & export a report](./save-and-report)**: keep your rigging across reopens and restarts, and hand a report to someone else.
 - **[Read the warnings & fidelity banner](./warnings)**: what every honesty surface is telling you.
 
 ## See also
