@@ -203,7 +203,7 @@ const NON_DEVICE_REFDES = new Set([
  * True when a value-derived match may be accepted for a part with this refdes:
  * it may unless the refdes names a class that is never a library device.
  */
-function valueMatchAllowed(ref: string): boolean {
+export function valueMatchAllowed(ref: string): boolean {
   return !NON_DEVICE_REFDES.has(refdesPrefix(ref))
 }
 

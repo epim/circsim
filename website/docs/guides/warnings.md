@@ -8,7 +8,7 @@ They stack near the top of the window, most-urgent first.
 
 The one you'll see most. It appears whenever the simulation is running with incomplete information.
 
-- **"Results approximate: …"** *(amber)*: one or more parts are **unresolved** or **stubbed**. The voltages and waveforms are correct for the *modeled* part of the circuit, but the real board may differ wherever an unmodeled part matters.
+- **"Results approximate: …"** *(amber)*: one or more parts are **unresolved** or **stubbed** (a microcontroller modeled as a [supply-load stub](../concepts/models#supply-load-stubs) is stubbed). The voltages and waveforms are correct for the *modeled* part of the circuit, but the real board may differ wherever an unmodeled part matters.
 - **"Open by design: …"** *(grey-blue)*: the only affected parts are documented opens (a part with no meaningful SPICE model). Lower-key, because this is expected, not a problem.
 
 The banner lists the affected parts and links to **open Model Doctor** (jumps to the first one) and **What can circsim tell you?** ([the fidelity page](../concepts/fidelity)). If many parts are affected it collapses to a count.

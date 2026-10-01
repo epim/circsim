@@ -50,7 +50,7 @@ To keep the promise sharp, circsim deliberately does **not**:
 
 - edit schematics or boards, route, or run DRC;
 - do signal-integrity, EM, or crosstalk analysis, or model trace parasitics in the simulation;
-- run MCU firmware (microcontrollers are [interactive-pin stubs](./models#stubs-and-interactive-pins));
+- run MCU firmware (microcontrollers are [supply-load stubs, or interactive pins](./models#stubs-and-interactive-pins) if you choose);
 - import Altium, IPC-2581, or Gerbers (KiCad only, for now);
 - talk to the cloud: it is fully offline, and the "ask your LLM" helper is copy-and-paste, not an API call.
 

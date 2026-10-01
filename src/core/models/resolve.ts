@@ -6,14 +6,14 @@
  * Tier cascade (first hit wins):
  *   1 — Schematic Sim.* fields (R/C/L/V/I primitives + SUBCKT)
  *   2 — Built-in primitive inference (R/C/L from refdes prefix + parseValue)
- *   3 — Bundled library match [seam — library param, not yet implemented]
- *   4 — User .lib import [not yet implemented]
- *   5 — LLM-assist paste [not yet implemented]
- *   6 — Stub (open/short/interactive-pins) — fallback for everything else
- *
- * Task 12 implements tiers 1, 2, and 6.
- * Tiers 3 and 4 are clean seams: the library and userLib parameters exist
- * but are currently unused (returns unresolved for now).
+ *   3 - Library match: the bundled library, and the user's own models, which
+ *       the store injects ahead of the bundled entries as tier-3 entries
+ *       (tier 4 .lib import and tier 5 LLM paste both bind a model that way,
+ *       by MPN, so there is no separate resolver for them)
+ *   6 - Stub: automatic supply-load or interactive-pins stubs for controllers
+ *       and similar parts (stubRules.ts), the connector open stub, and the
+ *       user's Model Doctor stub overrides (open/short/interactive-pins)
+ *   Parts that reach the end unclaimed are `unresolved` (tier 6, no model).
  *
  * No imports from electron, react, or three. Model validation is injected
  * as a callback (validateModel) — the actual ngspice call is wired by the
@@ -35,6 +35,7 @@ import {
   type SchematicPin,
 } from './libraryMatch'
 import type { PartDescriptor } from './libraryMatch'
+import { resolveStubPart } from './stubRules'
 
 // ─── BOM type seam ───────────────────────────────────────────────────────────
 
@@ -954,13 +955,17 @@ function resolveFromTiers(
     }
   }
 
-  // ── Tier 4: User .lib [seam] ──────────────────────────────────────────────
-  // Not yet implemented (Task 15 seam: user bindings lookup will go here).
+  // ── Tiers 4 and 5: user .lib import and LLM paste ─────────────────────────
+  // Both bind a model to an MPN, and the store feeds those bindings in as
+  // library entries ahead of the bundled ones, so they are resolved in tier 3.
 
-  // ── Tier 5: LLM-assist paste [seam] ──────────────────────────────────────
-  // Not yet implemented.
+  // ── Tier 6: automatic stubs ───────────────────────────────────────────────
+  // A controller, addressable LED or USB-serial bridge with no model becomes a
+  // supply-load stub (or interactive pins), never an unexplained red part.
+  const stub = resolveStubPart(part, circuit, library, simInfo?.pins)
+  if (stub) return stub
 
-  // ── Tier 6: Stub (fallback for everything unresolvable) ───────────────────
+  // ── Nothing claimed the part ──────────────────────────────────────────────
   return {
     ref: part.ref,
     status: 'unresolved',
