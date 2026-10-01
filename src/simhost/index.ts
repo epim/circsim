@@ -12,11 +12,12 @@
  *  - device-token lowercasing before alter (Spec §7.4 gotcha 1)
  *  - the haltOwner state machine (Spec §7.4.3, HaltCoordinator)
  *  - runOp + opResult key normalization + gmin/src-step retry ladder (Spec §6.1, §8.8)
- *  - runTransient via `bg_tran <tstep> <tstop> uic` streaming → sampleBatcher → `samples`
+ *  - runTransient via `bg_tran <tstep> <tstop> uic`; samples are READ from the
+ *    plot vectors every 16 ms (no per-timepoint callback, issue #25) → `samples`
  *  - bounded bench windows: tstop = W (default 30 s); on window end OR RSS>1.5 GB,
  *    halt → destroy all → reload → restart at t=0 → emit `benchRestarted` (Spec §7.5)
  *  - pacing: 50 ms loop holding realtimeFactor ≈ 1 (or 'max'); report achieved
- *    factor every 250 ms (Spec §7.5)
+ *    factor every 250 ms (Spec §7.5); the 16 ms sample tick runs on its own timer
  *  - alter batching: bg_halt → alters → bg_resume, 30 ms coalesce window (Spec §7.4.3)
  *  - convergence pattern-match on SendChar text → convergenceFailure (Spec §7.4.6)
  *  - the XSPICE `.cm` startup smoke deck (Spec §7.2)
@@ -24,11 +25,11 @@
 
 import { HaltCoordinator } from './haltCoordinator'
 import { NgspiceFfiEngine, ngspiceResourcesAvailable } from './ngspiceFfi'
-import { SampleBatcher } from './sampleBatcher'
 import type { EngineEvent, SpiceEngine } from './engine'
 import {
   isScaleVectorName,
   normalizeVectorKey,
+  type LatestSnapshot,
   type OpSolveMethod,
   type SimCommand,
   type SimEvent
@@ -57,8 +58,52 @@ const PACING_INTERVAL_MS = 50
 const STATUS_REPORT_MS = 250
 /** Alter coalesce window so a knob drag batches into one halt/resume (Spec §7.4.3). */
 const ALTER_COALESCE_MS = 30
-/** Sample-flush age threshold (Spec §6.1). */
-const FLUSH_AGE_MS = 16
+/**
+ * Sample tick (Spec §6.1, issue #78): how often new plot points are read and
+ * flushed to the renderer. Its own timer, NOT the 50 ms pacing tick. 15 rather
+ * than 16 on purpose: the Windows timer grid is 15.6 ms, so a 16 ms interval
+ * lands on every second grid point (31 ms, measured) while 15 ms lands on every
+ * one (15.6 ms), keeping the documented "flushed within 16 ms".
+ */
+const SAMPLE_INTERVAL_MS = 15
+/** Cadence of the `latest` snapshot of unwatched vectors (the copper tint and LED glow rate). */
+const BULK_INTERVAL_MS = 33
+/** Most plot points one `samples` batch carries (Spec §6.1: 4096 points). */
+const MAX_ROWS_PER_BATCH = 4096
+/**
+ * Least time a started or resumed background run is left alone before the next
+ * bg_halt. A thread halted while it is still starting up (a pause, an alter
+ * batch or a pacing halt right behind a bg_resume or bg_tran) never settles:
+ * ngspice either hangs in bg_halt (seconds, observed 6 s) or crashes on the
+ * resume after it. With the first run each bg_tran also waits for the run's
+ * SendInitData, the signal that the thread is going.
+ */
+const MIN_RUN_AFTER_START_MS = 50
+/**
+ * Settle time between a completed bg_halt and the next bg_resume. bg_halt
+ * returns once ngspice's running flag drops, which is a little BEFORE the
+ * background thread has finished unwinding; a bg_resume issued straight away
+ * starts the next thread on top of the dying one and crashes ngspice (a
+ * segfault in a few percent to most halt/resume cycles once the simulation is
+ * fast, measured with a 10 us RC deck; at 100 ms and more it did not occur in
+ * 20 runs). Slow simulations never hit it, which is why it only shows now.
+ */
+const RESUME_GAP_MS = 120
+/** Longest the sample tick waits for a bg_resume to announce itself (SendInitData) before reading again. */
+const RESUME_SETTLE_MAX_MS = 500
+/** Back-to-back batches one tick may emit to catch up when the plot is far ahead. */
+const MAX_BATCHES_PER_TICK = 8
+/**
+ * Real-time pacing holds the SIM back only to bound how far it runs ahead of
+ * what has been delivered: pacing halts the background thread once the plot is
+ * this many wall-seconds ahead, and releases it below the low mark. (A halt
+ * takes ngspice about 100 ms to complete, so halting at every tick could not
+ * pace smoothly; instead the points are RELEASED to the renderer on the wall
+ * clock, see pollSamples.) A knob turned now lands in the sim at the head of
+ * the plot, so this lead is also the latency before the board shows it.
+ */
+const PACING_LEAD_HIGH_S = 0.3
+const PACING_LEAD_LOW_S = 0.15
 
 /** ngspice convergence-failure signatures (Spec §7.4.6). */
 const CONVERGENCE_PATTERNS = [
@@ -97,6 +142,8 @@ export interface SimHostOptions {
   now?: () => number
   /** Disable the internal pacing/flush timers (unit tests drive ticks directly). */
   disableTimers?: boolean
+  /** Settle time between a completed bg_halt and the next bg_resume, ms (see runResume). */
+  resumeGapMs?: number
 }
 
 export class SimHost {
@@ -137,16 +184,61 @@ export class SimHost {
   /** Halt-ownership state machine (Spec §7.4.3). */
   private halt: HaltCoordinator
 
-  /** Transient streaming state. */
-  private batcher = new SampleBatcher({ maxAgeMs: FLUSH_AGE_MS })
+  /** Transient sampling state (null until SendInitData says the plot exists). */
+  private sampler: {
+    /** The scale vector of the run, e.g. "time". */
+    scale: string
+    /** Every other vector of the run, in ngspice's order. */
+    names: string[]
+    /** Plot points already delivered (index of the next point to read). */
+    cursor: number
+    /** this.now() of the last `latest` snapshot (-Infinity: none yet). */
+    lastBulkAt: number
+    /** watchVersion the two lists below were resolved against. */
+    watchVersion: number
+    /** Names delivered as full series, and the rest as `latest` values. */
+    watched: string[]
+    bulk: string[]
+  } | null = null
+  /**
+   * Lower-cased vector names the renderer wants as full series (the `watch`
+   * command); null means every vector (the default until the first `watch`).
+   */
+  private watch: Set<string> | null = null
+  private watchVersion = 0
+  /** The pace the next run starts at (the last setPace; 1x until one arrives). */
+  private paceSetting: number | 'max' = 1
+  /**
+   * this.now() of the last bg_resume while its SendInitData has not arrived yet
+   * (null: none pending). A resume starts ngspice's thread afresh, which
+   * re-initializes the analysis (it announces itself with SendInitData), and
+   * the plot must not be read until that has happened.
+   */
+  private bgSettlingSince: number | null = null
+  /** this.now() when the background thread was last started (bg_tran) or resumed. */
+  private lastBgStartAt = -Infinity
+  private readonly resumeGapMs: number
+  /** Serializes the bg_halt / bg_resume commands the halt coordinator asks for. */
+  private engineChain: Promise<void> = Promise.resolve()
+  /** this.now() when the last bg_halt command completed. */
+  private haltDoneAt = -Infinity
   private vectorsEmitted = false
 
   /** Active transient run parameters (null when not running a tran). */
   private tran: {
     tstep: number
     tstop: number
-    /** sim-time of the latest sample seen this window. */
+    /** sim-time of the newest point DELIVERED to the renderer this window. */
     simTime: number
+    /** sim-time of the newest point ngspice has computed (>= simTime under pacing). */
+    head: number
+    /**
+     * Pacing anchor: the delivered sim-time `sim` at wall-clock `wall` (ms).
+     * Points are released while their time <= sim + (now - wall) * pace, so a
+     * pause, a pace change or a slow stretch never builds a debt that would
+     * later be repaid as a burst.
+     */
+    anchor: { wall: number; sim: number }
     /** wall-clock ms when the window started. */
     windowStartWall: number
     /** sim-time at which this bg_tran's tstop sits (= min(tstop, W)). */
@@ -167,8 +259,9 @@ export class SimHost {
   private pendingAlters: string[] = []
   private alterTimer: NodeJS.Timeout | null = null
 
-  /** Periodic timers (pacing/flush + status report). */
+  /** Periodic timers (pacing + status report, and the separate sample tick). */
   private pacingTimer: NodeJS.Timeout | null = null
+  private sampleTimer: NodeJS.Timeout | null = null
   private statusTimer: NodeJS.Timeout | null = null
   private lastStatusAt = 0
 
@@ -195,18 +288,23 @@ export class SimHost {
     this.rssBytes = opts.rssBytes ?? (() => process.memoryUsage().rss)
     this.now = opts.now ?? (() => Date.now())
 
+    this.resumeGapMs = opts.resumeGapMs ?? RESUME_GAP_MS
+
+    // The coordinator flips its state synchronously; the matching ngspice
+    // commands run strictly in request order on engineChain, and a resume
+    // waits for the old thread to be gone (see runResume).
     this.halt = new HaltCoordinator({
       halt: () => {
-        void this.engine.command('bg_halt', false)
+        this.engineChain = this.engineChain.then(() => this.runHalt())
       },
       resume: () => {
-        void this.engine.command('bg_resume', false)
+        this.engineChain = this.engineChain.then(() => this.runResume())
       }
     })
 
     // Wire the engine event stream now (registration only — no init required), so
-    // unit tests that drive a stub engine without start() still receive char/
-    // data/initData events.
+    // unit tests that drive a stub engine without start() still receive char/stat/
+    // initData events.
     this.engineUnsub = this.engine.on((ev: EngineEvent) => this.onEngineEvent(ev))
   }
 
@@ -220,10 +318,10 @@ export class SimHost {
   }
 
   /**
-   * Handle one EngineEvent. Runs on the FFI callback frame for char/stat/data/
+   * Handle one EngineEvent. Runs on the FFI callback frame for char/stat/
    * initData — must stay cheap and never call back into ngspice (Spec §7.4 #2).
-   * The sampleBatcher.push() here is just array appends; flushes are emitted from
-   * the JS-thread pacing timer, not from here.
+   * Samples are not delivered here: the sample tick reads them from the plot
+   * once initData has said the plot exists.
    */
   private onEngineEvent(ev: EngineEvent): void {
     switch (ev.type) {
@@ -252,22 +350,27 @@ export class SimHost {
         this.noteProgress()
         break
       case 'initData':
-        if (this.tran) {
+        // ngspice repeats SendInitData on every bg_resume (an alter batch, a
+        // pacing halt) although the run continues in the SAME plot: only the
+        // first one after the run starts (sampler still null) opens a plot.
+        // Restarting the read cursor on a resume would replay the whole history.
+        this.bgSettlingSince = null
+        if (this.tran && !this.sampler) {
           const scale = ev.names.find(isScaleVectorName) ?? 'time'
-          this.batcher.setVectors(ev.names, scale)
+          const names = ev.names.filter((n) => n !== scale)
+          this.sampler = {
+            scale,
+            names,
+            cursor: 0,
+            lastBulkAt: -Infinity,
+            watchVersion: -1,
+            watched: [],
+            bulk: []
+          }
           if (!this.vectorsEmitted) {
-            this.emit({ type: 'vectors', names: this.batcher.getVectorNames() })
+            this.emit({ type: 'vectors', names })
             this.vectorsEmitted = true
           }
-        }
-        this.noteProgress()
-        break
-      case 'data':
-        if (this.tran) {
-          const t = ev.row[ev.scaleName]
-          if (Number.isFinite(t)) this.tran.simTime = t
-          const flush = this.batcher.push(ev.row)
-          if (flush) this.emit(flush.event, flush.transfer)
         }
         this.noteProgress()
         break
@@ -299,6 +402,7 @@ export class SimHost {
     }
     this.tran = null
     try {
+      await this.waitBgSettled()
       await this.engine.command('bg_halt', false)
       await this.waitForHalt()
       const deadline = Date.now() + 500
@@ -345,6 +449,8 @@ export class SimHost {
         break
       case 'resume':
         this.enqueue('resume', async () => {
+          // The time spent paused must not be repaid as a burst.
+          this.reanchorPacing()
           this.halt.requestResume('user')
         })
         break
@@ -355,7 +461,19 @@ export class SimHost {
         break
       case 'setPace':
         this.enqueue('setPace', async () => {
-          if (this.tran) this.tran.pace = cmd.realtimeFactor
+          // Remembered even with no run active: the app sends setPace BEFORE
+          // runTransient, and the run must start at the pace the user chose.
+          this.paceSetting = cmd.realtimeFactor
+          if (this.tran) {
+            this.tran.pace = cmd.realtimeFactor
+            this.reanchorPacing()
+          }
+        })
+        break
+      case 'watch':
+        this.enqueue('watch', async () => {
+          this.watch = new Set(cmd.vectors.map((v) => v.toLowerCase()))
+          this.watchVersion++
         })
         break
       case 'runAc':
@@ -480,7 +598,7 @@ export class SimHost {
     tstep: number,
     tstop: number,
     wallNow: number,
-    pace: number | 'max' = 1
+    pace: number | 'max' = this.paceSetting
   ): Promise<void> {
     // Bench window: the effective tstop is the smaller of the request and W.
     // When the request exceeds W the run is "continuous" and restarts at the
@@ -488,7 +606,10 @@ export class SimHost {
     const windowStop = Math.min(tstop, this.benchWindowSeconds)
     const continuous = tstop > this.benchWindowSeconds
 
-    this.batcher.reset()
+    // No sampling until this run's SendInitData arrives: the previous plot
+    // (or none) is not the one bg_tran is about to create, and reading a plot
+    // that is being built or torn down is unsafe.
+    this.sampler = null
     this.vectorsEmitted = false
     this.halt.clear()
 
@@ -496,6 +617,8 @@ export class SimHost {
       tstep,
       tstop,
       simTime: 0,
+      head: 0,
+      anchor: { wall: wallNow, sim: 0 },
       windowStartWall: wallNow,
       windowStop,
       continuous,
@@ -504,6 +627,7 @@ export class SimHost {
     }
 
     // bg_tran returns immediately (background thread) — non-blocking is correct.
+    this.bgSettlingSince = this.lastBgStartAt = this.now()
     await this.engine.command(`bg_tran ${formatNum(tstep)} ${formatNum(windowStop)} uic`, false)
 
     this.lastStatusAt = wallNow
@@ -511,21 +635,171 @@ export class SimHost {
   }
 
   /**
-   * One pacing/flush tick (Spec §7.5). Drives: time-based sample flush, real-time
-   * pacing (halt/resume to hold realtimeFactor), bench-window restart on window
-   * end or RSS guard, and the periodic achieved-factor status report.
+   * One sample tick (Spec §6.1, issue #78): read the plot points added since
+   * the last tick and emit them as `samples` batches. Runs on its own 16 ms
+   * timer, so the renderer sees samples at the documented cadence whatever the
+   * 50 ms pacing tick is doing. Public so unit tests can step it.
+   */
+  sampleTick(): void {
+    // A queue item (loadCircuit's `destroy all`, an op, a bench restart) may be
+    // rebuilding the plot on another thread, and a bg_resume is still starting
+    // the simulation thread: never read while either is in progress.
+    if (!this.tran || !this.sampler || this.draining) return
+    if (this.bgSettlingSince !== null) {
+      // Bounded: a resume that never announces itself (nothing left to run)
+      // must not silence the stream for good.
+      if (this.now() - this.bgSettlingSince < RESUME_SETTLE_MAX_MS) return
+      this.bgSettlingSince = null
+    }
+    for (let i = 0; i < MAX_BATCHES_PER_TICK; i++) {
+      if (this.pollSamples(false) < MAX_ROWS_PER_BATCH) break
+    }
+  }
+
+  /**
+   * Emit everything still unread, however much there is, ignoring pacing (a
+   * run's tail before it finishes, restarts or stops). Callers are the
+   * end-of-run paths, which are not rebuilding the plot, so unlike sampleTick
+   * there is no queue check.
+   */
+  private drainSamples(): void {
+    if (!this.tran || !this.sampler) return
+    // Always refresh the snapshot: the last point of the run is what the tint settles on.
+    this.sampler.lastBulkAt = -Infinity
+    while (this.pollSamples(true) >= MAX_ROWS_PER_BATCH) {
+      /* keep reading while full batches come back */
+    }
+  }
+
+  /**
+   * Restart the pacing clock from the delivered sim-time, now. Called when the
+   * pace changes or the user resumes, so the new rate applies from here.
+   */
+  private reanchorPacing(): void {
+    if (this.tran) this.tran.anchor = { wall: this.now(), sim: this.tran.simTime }
+  }
+
+  /**
+   * Read the new points from the plot and emit one `samples` event: full series
+   * for the watched vectors, and (when due) the values of every other vector at
+   * the newest delivered point. Returns the number of points delivered (0:
+   * nothing emitted).
+   *
+   * Pacing (`all` false, pace not 'max'): ngspice may run ahead of real time, but
+   * points are delivered only up to the pacing clock, so the renderer sees a
+   * steady stream at `pace` x real time however bursty the simulation is. While
+   * the user has paused, nothing is delivered. `all` ignores both (see
+   * drainSamples).
+   *
+   * The reads happen under ngSpice_LockRealloc so the background thread cannot
+   * move a vector while it is copied. Points are only taken up to the shortest
+   * watched vector, since ngspice appends the vectors of one timepoint one after
+   * the other and a read can land between two of them.
+   */
+  private pollSamples(all: boolean): number {
+    const t = this.tran
+    const s = this.sampler
+    if (!t || !s) return 0
+    const paced = !all && t.pace !== 'max'
+    if (paced && this.halt.isUserPaused()) return 0
+    this.resolveWatched(s)
+
+    const engine = this.engine
+    const now = this.now()
+    let simTime: Float64Array
+    let columns: Float64Array[]
+    let latest: LatestSnapshot | undefined
+    let rows: number
+    let behind = false
+    engine.lockVectors()
+    try {
+      const headRead = engine.readVector(s.scale, -1, 1)
+      if (!headRead) return 0
+      if (headRead.length < s.cursor) {
+        // The plot is shorter than what was already delivered: ngspice started
+        // a new one under the same run. Read it from its beginning.
+        s.cursor = 0
+      }
+      if (Number.isFinite(headRead.data[0])) t.head = headRead.data[0]
+      const available = headRead.length - s.cursor
+      if (available <= 0) return 0
+      const time = engine.readVector(s.scale, s.cursor, Math.min(available, MAX_ROWS_PER_BATCH))
+      if (!time || time.data.length === 0) return 0
+      rows = time.data.length
+      if (paced) {
+        const limit = t.anchor.sim + ((now - t.anchor.wall) / 1000) * (t.pace as number)
+        rows = countAtMost(time.data, rows, limit)
+        // Everything computed so far is already due: the sim is the slow side.
+        behind = rows === available
+        if (rows === 0) return 0
+      }
+      const reads = s.watched.map((name) => engine.readVector(name, s.cursor, rows))
+      for (const r of reads) if (r) rows = Math.min(rows, r.data.length)
+      if (rows === 0) return 0
+      simTime = rows === time.data.length ? time.data : time.data.slice(0, rows)
+      columns = reads.map((r) => {
+        if (!r) return new Float64Array(rows).fill(NaN) // unreadable vector: NaN, like a missing value
+        return r.data.length === rows ? r.data : r.data.slice(0, rows)
+      })
+      if (s.bulk.length > 0 && now - s.lastBulkAt >= BULK_INTERVAL_MS) {
+        // Each unwatched vector at the newest DELIVERED point, so the tint and
+        // the scope trace show the same instant.
+        const at = s.cursor + rows - 1
+        const values = new Float64Array(s.bulk.length)
+        for (let i = 0; i < s.bulk.length; i++) {
+          const r = engine.readVector(s.bulk[i], at, 1) ?? engine.readVector(s.bulk[i], -1, 1)
+          values[i] = r && r.data.length > 0 ? r.data[0] : NaN
+        }
+        latest = { vectorNames: s.bulk, values }
+        s.lastBulkAt = now
+      }
+    } finally {
+      engine.unlockVectors()
+    }
+
+    s.cursor += rows
+    const last = simTime[rows - 1]
+    if (Number.isFinite(last)) {
+      t.simTime = last
+      // Behind real time: restart the pacing clock here, so catching up later
+      // never releases a burst.
+      if (behind) t.anchor = { wall: now, sim: last }
+    }
+    this.noteProgress()
+    const transfer: ArrayBuffer[] = [simTime.buffer as ArrayBuffer, ...columns.map((c) => c.buffer as ArrayBuffer)]
+    if (latest) transfer.push(latest.values.buffer as ArrayBuffer)
+    this.emit(
+      { type: 'samples', vectorNames: s.watched, columns, simTime, ...(latest ? { latest } : {}) },
+      transfer
+    )
+    return rows
+  }
+
+  /** Split the run's vectors into watched (full series) and bulk (latest only). */
+  private resolveWatched(s: NonNullable<SimHost['sampler']>): void {
+    if (s.watchVersion === this.watchVersion) return
+    s.watchVersion = this.watchVersion
+    if (this.watch === null) {
+      s.watched = s.names
+      s.bulk = []
+      return
+    }
+    const watch = this.watch
+    s.watched = s.names.filter((n) => watch.has(n.toLowerCase()))
+    s.bulk = s.names.filter((n) => !watch.has(n.toLowerCase()))
+  }
+
+  /**
+   * One pacing tick (Spec §7.5). Drives: real-time pacing (halt/resume to hold
+   * realtimeFactor), bench-window restart on window end or RSS guard, and the
+   * periodic achieved-factor status report. Sample flushing is the separate
+   * sampleTick.
    *
    * Public + parameterless-by-clock so unit tests can step it deterministically.
    */
   pacingTick(): void {
     if (!this.tran) return
     const t = this.tran
-
-    // (1) Time-based sample flush (size-based flushes happen inline on push).
-    if (this.batcher.shouldFlushByAge()) {
-      const flush = this.batcher.flush()
-      if (flush) this.emit(flush.event, flush.transfer)
-    }
 
     // (2) Bench-window handling (§7.5).
     //   - RSS guard always forces a restart of the (continuous) window.
@@ -534,11 +808,13 @@ export class SimHost {
     const memoryHit = this.rssBytes() > RSS_GUARD_BYTES
     const windowHit = t.simTime >= t.windowStop && t.windowStop > 0
     if (memoryHit) {
+      this.drainSamples()
       void this.restartBenchWindow('memory')
       return
     }
     if (windowHit) {
       if (t.continuous) {
+        this.drainSamples()
         void this.restartBenchWindow('window-elapsed')
       } else if (!t.finished && !this.engine.isRunning()) {
         // Finite run reached its tstop and the bg thread has stopped → finalize:
@@ -550,15 +826,16 @@ export class SimHost {
       return
     }
 
-    // (3) Real-time pacing. Skip while the user has paused (their pause outranks).
+    // (3) Real-time pacing. Points are released to the renderer on the wall
+    // clock by pollSamples; here the sim is only held back (halt, owner 'pacing')
+    // while it is more than PACING_LEAD_HIGH_S of wall time ahead of what has
+    // been delivered, and let go again below PACING_LEAD_LOW_S. A user pause
+    // outranks all of it.
     if (!this.halt.isUserPaused() && t.pace !== 'max') {
-      const wallElapsedS = (this.now() - t.windowStartWall) / 1000
-      const targetSimTime = wallElapsedS * (t.pace as number)
-      if (t.simTime > targetSimTime) {
-        // Sim is ahead of wall-clock → throttle by halting (owner 'pacing').
+      const leadWallS = (t.head - t.simTime) / t.pace
+      if (leadWallS > PACING_LEAD_HIGH_S) {
         this.halt.requestHalt('pacing')
-      } else if (this.halt.getOwner() === 'pacing') {
-        // Sim has fallen back to/behind target → release the pacing halt.
+      } else if (leadWallS < PACING_LEAD_LOW_S && this.halt.getOwner() === 'pacing') {
         this.halt.requestResume('pacing')
       }
     } else if (t.pace === 'max' && this.halt.getOwner() === 'pacing') {
@@ -595,9 +872,11 @@ export class SimHost {
     const { tstep, tstop, pace } = this.tran
     // Suspend the windowed run so the timers don't re-trigger mid-restart.
     this.tran = null
+    this.sampler = null
     this.stopPeriodicTimers()
 
     this.enqueue('benchRestart', async () => {
+      await this.waitBgSettled()
       await this.engine.command('bg_halt', false)
       await this.waitForHalt()
       await this.engine.command('destroy all', false)
@@ -616,21 +895,23 @@ export class SimHost {
    * restart. `tran` is retained (marked finished) so stray ticks no-op.
    */
   private finalizeFiniteRun(): void {
-    const flush = this.batcher.flush()
-    if (flush) this.emit(flush.event, flush.transfer)
+    this.drainSamples()
     this.reportStatus()
     this.halt.clear()
     this.stopPeriodicTimers()
   }
 
   private stopTransient(): void {
-    void this.engine.command('bg_halt', false)
+    // Through the chain: a resume still waiting out its settle gap must not run
+    // after this halt (runResume also sees tran gone).
+    this.engineChain = this.engineChain.then(() => this.runHalt())
     this.halt.clear()
+    // Flush whatever remains so the renderer sees the tail. Reading a halting
+    // plot is safe: the reads hold the realloc lock and the vectors only grow.
+    this.drainSamples()
     this.tran = null
+    this.sampler = null
     this.stopPeriodicTimers()
-    // Flush whatever remains so the renderer sees the tail.
-    const flush = this.batcher.flush()
-    if (flush) this.emit(flush.event, flush.transfer)
   }
 
   // ── convergence detection (Spec §7.4.6) ────────────────────────────────────
@@ -690,6 +971,11 @@ export class SimHost {
   }
 
   private async doLoadCircuit(deckLines: string[]): Promise<void> {
+    // A watch belongs to the deck it was sent for: a new deck starts with every
+    // vector watched again, so a consumer that never sends one (the finite-run
+    // SolveEngine.runTran) gets full series whatever the bench did before.
+    this.watch = null
+    this.watchVersion++
     if (this.deckLoaded) {
       await this.engine.command('destroy all', false) // Spec §7.4 gotcha 5
     }
@@ -799,6 +1085,54 @@ export class SimHost {
     }
   }
 
+  /**
+   * Wait until the background run started last is going (it announced itself
+   * with SendInitData) and has been left alone MIN_RUN_AFTER_START_MS, so a halt
+   * never lands on a thread that is still starting. Bounded; no-op when the
+   * settle gap is disabled (unit tests).
+   */
+  private async waitBgSettled(): Promise<void> {
+    if (this.resumeGapMs <= 0) return
+    const deadline = this.now() + RESUME_SETTLE_MAX_MS
+    while (this.bgSettlingSince !== null && this.now() < deadline) await sleep(5)
+    const wait = this.lastBgStartAt + MIN_RUN_AFTER_START_MS - this.now()
+    if (wait > 0) await sleep(wait)
+  }
+
+  /** bg_halt, as ordered on engineChain. Never rejects: the chain must keep going. */
+  private async runHalt(): Promise<void> {
+    await this.waitBgSettled()
+    try {
+      await this.engine.command('bg_halt', false)
+    } catch {
+      /* engine gone: nothing left to halt */
+    }
+    this.haltDoneAt = this.now()
+  }
+
+  /**
+   * bg_resume, as ordered on engineChain: wait until the thread that was halted
+   * has reported itself stopped and RESUME_GAP_MS have passed since bg_halt
+   * completed (see RESUME_GAP_MS), then resume. Skipped if the run was stopped
+   * or replaced in the meantime.
+   */
+  private async runResume(): Promise<void> {
+    if (!this.tran) return
+    if (this.resumeGapMs > 0) {
+      const deadline = this.now() + 500
+      while (this.bgThreadRunning && this.now() < deadline) await sleep(5)
+      const wait = this.haltDoneAt + this.resumeGapMs - this.now()
+      if (wait > 0) await sleep(wait)
+      if (!this.tran) return
+    }
+    this.bgSettlingSince = this.lastBgStartAt = this.now()
+    try {
+      await this.engine.command('bg_resume', false)
+    } catch {
+      this.bgSettlingSince = null
+    }
+  }
+
   // ── haltOwner accessors (tests) ────────────────────────────────────────────
 
   getHaltOwner(): import('./haltCoordinator').HaltOwner {
@@ -873,12 +1207,18 @@ export class SimHost {
     if (this.disableTimers || this.pacingTimer) return
     this.pacingTimer = setInterval(() => this.pacingTick(), PACING_INTERVAL_MS)
     if (typeof this.pacingTimer.unref === 'function') this.pacingTimer.unref()
+    this.sampleTimer = setInterval(() => this.sampleTick(), SAMPLE_INTERVAL_MS)
+    if (typeof this.sampleTimer.unref === 'function') this.sampleTimer.unref()
   }
 
   private stopPeriodicTimers(): void {
     if (this.pacingTimer) {
       clearInterval(this.pacingTimer)
       this.pacingTimer = null
+    }
+    if (this.sampleTimer) {
+      clearInterval(this.sampleTimer)
+      this.sampleTimer = null
     }
     if (this.statusTimer) {
       clearInterval(this.statusTimer)
@@ -977,6 +1317,23 @@ export function buildAlterCommand(cmd: Extract<SimCommand, { type: 'alter' }>): 
     return `alter ${device} ${cmd.param} = ${cmd.value}`
   }
   return `alter ${device} = ${cmd.value}`
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * How many leading elements (of the first `n`) of the ascending `times` are
+ * <= `limit`. Sim time only moves forward, so this is a binary search.
+ */
+export function countAtMost(times: Float64Array, n: number, limit: number): number {
+  let lo = 0
+  let hi = n
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (times[mid] <= limit) lo = mid + 1
+    else hi = mid
+  }
+  return lo
 }
 
 /**

@@ -28,7 +28,20 @@ The SPICE deck is loaded into ngspice **from memory**: every model definition is
 4. The result comes back tagged with the **method** it succeeded by. A `direct` solve is trustworthy; a `gmin`, `source`, or transient fallback means the numbers may be unreliable, and circsim shows you a caveat rather than presenting shaky voltages as fact.
 5. Net voltages tint the copper, float as labels, and drive the LED glow; the operating-point currents feed the simulation-informed [Board Critic checks](./critic-checks).
 
-Pressing **Run** instead starts a **transient** simulation streaming to the scope. It runs from the circuit's initial state (so you watch it "come alive"), streams samples to the oscilloscope, paces itself toward real time, and (to bound memory on a long continuous run) restarts in ~30-second windows, keeping your scope history.
+Pressing **Run** instead starts a **transient** simulation streaming to the scope. It runs from the circuit's initial state (so you watch it "come alive"), streams samples to the oscilloscope, paces itself to the Pace setting, and (to bound memory on a long continuous run) restarts in ~30-second windows, keeping your scope history.
+
+### How the live bench keeps up with real time {#live-sample-channel}
+
+Two choices decide whether the live bench can hold 1× real time, and both used to cap it well below 1× (about 0.02× on the 555 sample and 0.15× on a lantern-class board):
+
+- **Samples are read from ngspice's result vectors, not pushed per timepoint.** ngspice can call back into the app once for every accepted time step, but each call crosses the process boundary and decodes every saved vector, which cost more than solving the step itself. circsim registers no per-step callback. Instead, every 15 ms the engine host reads the new points straight out of ngspice's result vectors in one bulk copy (while ngspice holds those vectors still) and sends them to the app as one batch, so samples reach the scope about 60 times a second. The scope probes' nets are sent as full time series; every other net is sent as its newest value about 30 times a second, which is what tints the copper and drives the LED glow.
+- **The time step follows the signals on the bench.** The step is `min(1 / (200 × fastest function-generator frequency), 100 µs)`, so a bench with no fast source runs at 100 µs. ngspice still refines below the step by itself wherever the circuit needs it (an edge, a switching node), so the step only bounds the quiet stretches. A function generator makes the step smaller, and a very fast one can put real time out of reach again, which is physics rather than overhead.
+
+Pacing works on delivery rather than on the solver: ngspice may run a little ahead, and the host releases its points to the app on the wall clock, so `1×` is a steady stream instead of fast bursts and pauses. The solver is halted only when it gets more than about 0.3 s ahead, which also bounds how long a knob turn waits before the board shows it.
+
+Pausing, a knob turn (which halts the solver for a moment) and the pacing halt all go through one ordered queue. ngspice's background thread must never be halted while it is still starting, and a resumed thread needs a moment before it is halted again, so circsim spaces halts and resumes by a fixed settle time (about 50 to 120 ms). Without it a fast simulation crashed ngspice on the resume after such a halt.
+
+On measured benches (a 555 astable at the default step, a lantern-shaped board of about 70 vectors) the achieved factor is far above 1×, so `1×` is held rather than missed; the integration test `realtime.integration.test.ts` pins that.
 
 ::: info AC analysis
 An AC (frequency-sweep) analysis is scaffolded in the protocol but not implemented in this version. Today circsim does DC operating point and transient.

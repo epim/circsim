@@ -13,7 +13,9 @@ Attach as many as you like: each gets its own color and its own trace.
 
 ## Run it
 
-Press **`Run`**. circsim streams a live transient simulation and the scope starts drawing. Use the toolbar **Pace** control to run at `0.1×` (slow enough to watch a fast signal), `1×` (real time), or `max` (as fast as it solves). Press **`Pause`** to freeze, **`Resume`** (or `Run`) to continue.
+Press **`Run`**. circsim streams a live transient simulation and the scope starts drawing. Use the toolbar **Pace** control to run at `0.1×` (slow enough to watch a fast signal), `1×` (real time), or `max` (as fast as it solves). The pace you pick before pressing Run is the pace the run starts at. Press **`Pause`** to freeze, **`Resume`** (or `Run`) to continue.
+
+On a typical board `1×` is held steadily (a 1 Hz blinker takes one second per blink). If the readout next to Pace shows less than the pace you asked for, the circuit itself is the limit: a fast function generator needs a finer time step, and a stiff or switching circuit makes ngspice take many small steps. See [how the live bench keeps up](../reference/architecture#live-sample-channel).
 
 ::: info Why it "comes alive"
 The transient starts from the circuit's initial state rather than a pre-solved DC point, so you watch capacitors charge and oscillators start up: the "power on and see it come alive" moment. For very long runs, circsim restarts the window every ~30 seconds to bound memory; your scope history is kept.
