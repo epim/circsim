@@ -179,29 +179,36 @@ describe('clearance spatial index', () => {
       const board = buildBoard(tracks, nets, side)
       return buildContext(board, extract(board), undefined, DEFAULT_CRITIC_OPTIONS)
     }
+    // Each timed sample is a batch of INNER checks so the small board costs
+    // roughly ten milliseconds per sample, well above timer and scheduler noise
+    // (one check of it is about a millisecond). Both sizes use the same batch.
+    const INNER = 15
     const timeCheck = (ctx: ReturnType<typeof prepare>, reps: number) => {
       let best = Infinity
       for (let r = 0; r < reps; r++) {
         const t0 = performance.now()
-        const findings = checkClearance(ctx)
+        let findings: ReturnType<typeof checkClearance> = []
+        for (let k = 0; k < INNER; k++) findings = checkClearance(ctx)
         best = Math.min(best, performance.now() - t0)
         expect(Array.isArray(findings)).toBe(true)
       }
       return best
     }
     const smallCtx = prepare(1250, 1000 / Math.sqrt(8))
-    const bigCtx = prepare(10000, 1000)
+    const bigCtx = prepare(40000, 2000) // 32x the tracks at the same density
     timeCheck(smallCtx, 1) // warm the JIT so the small run is not the cold one
     const small = timeCheck(smallCtx, 5)
-    const big = timeCheck(bigCtx, 3)
+    const big = timeCheck(bigCtx, 4)
 
     // Intent: the indexed check stayed far from the old O(n squared) scan, which
     // was 500+ ms at 10k tracks. No absolute millisecond bound: CI runners are
     // up to 5x slower than a dev machine, so compare two sizes on the same
-    // machine. 8x the tracks costs about 8x the time when indexed and about 64x
-    // when quadratic; a ratio under 30 passes with headroom for noise and still
-    // fails on the quadratic scan.
-    const ratio = big / Math.max(small, 0.05)
-    expect(ratio).toBeLessThan(30)
+    // machine. 32x the tracks costs about 32x the time when indexed, plus cache
+    // effects at the larger size (measured 74 to 78 locally), and about 1000x
+    // when quadratic. The bound of 400 is over 5x the highest measured ratio, so
+    // a loaded runner does not trip it, and it still fails on the quadratic scan
+    // with a wide margin (the step is large precisely so that it does).
+    const ratio = big / small
+    expect(ratio).toBeLessThan(400)
   }, 60000)
 })

@@ -22,6 +22,8 @@
 
 import React, { useMemo, useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
+import Term from '../ui/Term'
+import DocsLink from '../ui/docsLink'
 import type { CircuitNet } from '../../../core/netlist/extract'
 import {
   rankGroundCandidates,
@@ -87,17 +89,27 @@ export default function GroundSetup(): React.ReactElement | null {
 
   return (
     <div style={containerStyle}>
-      <div style={sectionTitleStyle}>Ground &amp; Power</div>
+      <div style={sectionTitleStyle}>
+        Ground &amp; Power{' '}
+        <DocsLink to="guides/ground-and-supply" testId="ground-docs-link" style={{ fontWeight: 400, fontSize: 11 }}>
+          What is this?
+        </DocsLink>
+      </div>
 
       {/* Ground assignment */}
       <div style={groundRowStyle}>
-        <span style={labelStyle}>Ground:</span>
+        <span style={labelStyle}>
+          <Term id="ground" capital showTechnical={false} />:
+        </span>
         {groundNet ? (
-          <span style={confirmedStyle} title={`SPICE node: ${groundNet.spiceNode}`}>
+          <span
+            style={confirmedStyle}
+            title={`Ground net. The simulator calls it node ${groundNet.spiceNode}.`}
+          >
             {groundNet.kicadName}
           </span>
         ) : (
-          <span style={missingStyle}>NOT SET — Run disabled</span>
+          <span style={missingStyle}>Not set: Power On and Run stay disabled until you pick one</span>
         )}
       </div>
 
@@ -196,18 +208,20 @@ export default function GroundSetup(): React.ReactElement | null {
         <div style={groundRowStyle}>
           <span style={labelStyle}>Schematic:</span>
           {schematicFileName ? (
-            <span style={confirmedStyle} title="Sim.* fields sourced from this schematic">
+            <span style={confirmedStyle} title="Simulation settings (Sim.* fields) come from this schematic">
               {schematicFileName}
             </span>
           ) : (
-            <span style={missingStyle}>No schematic — no Sim.* fields</span>
+            <span style={missingStyle}>
+              No schematic attached: no <Term id="simFields" />
+            </span>
           )}
         </div>
         <button
           data-testid="attach-schematic-btn"
           style={changeGroundBtnStyle}
           onClick={() => void attachSchematic()}
-          title="Attach a .kicad_sch to load its Sim.* fields (for boards whose schematic isn't a sibling of the .kicad_pcb)"
+          title="Attach a .kicad_sch schematic to load its simulation settings (Sim.* fields) and exact pin names. Use this when the schematic is not saved next to the .kicad_pcb."
         >
           {schematicFileName ? 'Replace schematic…' : 'Attach schematic…'}
         </button>
@@ -309,6 +323,7 @@ const sectionTitleStyle: React.CSSProperties = {
 const groundRowStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
+  flexWrap: 'wrap',
   gap: 6,
   marginBottom: 4,
 }

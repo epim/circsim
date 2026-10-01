@@ -15,6 +15,12 @@
  *  - Callbacks NEVER call back into ngspice; they only push EngineEvents onto a
  *    listener list which the orchestrator (index.ts) drains from JS-thread
  *    frames (Spec §7.4 gotcha 2).
+ *  - NO per-timepoint SendData callback is registered (NULL is passed to
+ *    ngSpice_Init). Each accepted timepoint used to cross the FFI boundary from
+ *    ngspice's thread (about 18 us) and get decoded vector by vector (about
+ *    0.8 us each), which alone capped the bench near 0.5x real time at a 10 us
+ *    step (issue #25). Samples are instead read from the plot vectors in bulk
+ *    at display rate (readVector), under ngSpice_LockRealloc.
  */
 
 import koffi, { type LibraryHandle } from 'koffi'
@@ -25,7 +31,8 @@ import path from 'node:path'
 import type {
   EngineEvent,
   EngineEventListener,
-  SpiceEngine
+  SpiceEngine,
+  VectorRead
 } from './engine'
 
 // ─── platform / path resolution ──────────────────────────────────────────────
@@ -180,29 +187,20 @@ function registerTypes(): void {
   })
   koffi.pointer('pvector_info', koffi.type('vector_info'))
 
-  // sharedspice.h transient-streaming structs (verified field layout against
-  // ngspice 46 via live FFI probe — see scripts/probe-senddata.mjs):
-  //   typedef struct vecvalues {
-  //     char* name; double creal; double cimag; bool is_scale; bool is_complex;
-  //   } vecvalues, *pvecvalues;
-  //   typedef struct vecvaluesall {
-  //     int veccount; int vecindex; pvecvalues* vecsa;
-  //   } vecvaluesall, *pvecvaluesall;
-  koffi.struct('vecvalues', {
-    name: 'char*',
-    creal: 'double',
-    cimag: 'double',
-    is_scale: 'bool',
-    is_complex: 'bool'
+  // Same layout as vector_info with the two pointers we never dereference as
+  // opaque void*, so one koffi.decode returns just (v_realdata, v_length) with
+  // no string conversion of v_name. Used by the per-tick vector reads.
+  koffi.struct('vector_info_raw', {
+    v_name: 'void*',
+    v_type: 'int',
+    v_flags: 'short',
+    v_realdata: 'void*',
+    v_compdata: 'void*',
+    v_length: 'int'
   })
-  koffi.pointer('pvecvalues', koffi.type('vecvalues'))
-  koffi.struct('vecvaluesall', {
-    veccount: 'int',
-    vecindex: 'int',
-    vecsa: 'pvecvalues*'
-  })
-  koffi.pointer('pvecvaluesall', koffi.type('vecvaluesall'))
 
+  // sharedspice.h SendInitData structs (verified field layout against ngspice 46
+  // via live FFI probe):
   //   typedef struct vecinfo {
   //     int number; char* vecname; bool is_real; void* pdvec; void* pdvecscale;
   //   } vecinfo, *pvecinfo;
@@ -227,13 +225,14 @@ function registerTypes(): void {
   })
   koffi.pointer('pvecinfoall', koffi.type('vecinfoall'))
 
-  // Callback prototypes (sharedspice.h). SendData/SendInitData carry the structs
-  // above; the FFI callbacks decode them into plain JS rows / name lists for the
-  // orchestrator (Task 10 transient streaming).
+  // Callback prototypes (sharedspice.h). SendInitData carries the vecinfoall
+  // struct above; the FFI callback decodes it into a name list for the
+  // orchestrator. CsSendData is declared only so ngSpice_Init's signature is
+  // complete: circsim passes NULL for it (see the header note).
   koffi.proto('int CsSendChar(char* output, int libId, void* user)')
   koffi.proto('int CsSendStat(char* status, int libId, void* user)')
   koffi.proto('int CsControlledExit(int exitStatus, bool immediate, bool quitOnExit, int libId, void* user)')
-  koffi.proto('int CsSendData(pvecvaluesall data, int vecCount, int libId, void* user)')
+  koffi.proto('int CsSendData(void* data, int vecCount, int libId, void* user)')
   koffi.proto('int CsSendInitData(pvecinfoall data, int libId, void* user)')
   koffi.proto('int CsBGThreadRunning(bool notRunning, int libId, void* user)')
   typesRegistered = true
@@ -241,56 +240,23 @@ function registerTypes(): void {
 
 const POINTER_SIZE = koffi.sizeof('void*')
 
-/**
- * Minimal shape of koffi.decode used by the SendData row decoder (injectable).
- * Loose by design: koffi.decode is heavily overloaded; the decoder below only ever
- * calls decode(ptr, offset, 'type') and decode(ptr, 'type'), so a permissive
- * callable lets both the real koffi.decode and a test fake satisfy it.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type DecodeFn = (ptr: any, offsetOrType: any, type?: any) => any
+const EMPTY_F64 = new Float64Array(0)
 
 /**
- * Decode one `vecvaluesall` timepoint into a `{ name → value }` row, RESILIENT
- * PER ENTRY (Spec §7.4 transient streaming; silent-data-loss guard).
- *
- * Each vector entry is decoded inside its OWN try/catch. This matters because a
- * single exotic/unreadable entry (e.g. a device-internal current vector from
- * `.save @d1[i]`) can throw mid-decode. If one failure aborted the whole loop we
- * would discard the ENTIRE timepoint — node voltages and working currents
- * included — i.e. total, silent data loss even though ngspice computed the row
- * correctly. Instead, a failing entry is simply skipped (its key absent → the
- * downstream SampleBatcher maps it to NaN by name lookup, preserving column
- * order), and the remaining vectors still stream. The happy path (no throws) is
- * unchanged: every entry's `name → creal` lands in the row exactly as before.
- *
- * Extracted as a pure function (decoder injected) so the per-entry resilience is
- * unit-testable without a live libngspice — see ngspiceFfi.senddata.test.ts.
+ * koffi array type that decodes straight into a Float64Array (the 'Typed'
+ * hint), cached by element count: poll slices repeat the same few lengths, and
+ * building an array type per vector per tick would dominate the read.
  */
-export function decodeVecvaluesallRow(
-  veccount: number,
-  vecsa: unknown,
-  decode: DecodeFn
-): { row: Record<string, number>; scaleName: string } {
-  const row: Record<string, number> = {}
-  let scaleName = 'time'
-  for (let i = 0; i < veccount; i++) {
-    try {
-      const vvPtr = decode(vecsa, i * POINTER_SIZE, 'pvecvalues')
-      if (!vvPtr) continue
-      const vv = decode(vvPtr, 'vecvalues') as {
-        name: string
-        creal: number
-        is_scale: boolean
-      }
-      const name = String(vv.name)
-      row[name] = vv.creal
-      if (vv.is_scale) scaleName = name
-    } catch {
-      /* one bad vector entry must not drop the whole timepoint row */
-    }
+const doubleArrayTypes = new Map<number, ReturnType<typeof koffi.array>>()
+function doubleArrayType(count: number): ReturnType<typeof koffi.array> {
+  let t = doubleArrayTypes.get(count)
+  if (!t) {
+    // Bounded: a runaway count (one-off huge reads) must not pin types forever.
+    if (doubleArrayTypes.size >= 4096) doubleArrayTypes.clear()
+    t = koffi.array('double', count, 'Typed')
+    doubleArrayTypes.set(count, t)
   }
-  return { row, scaleName }
+  return t
 }
 
 // ─── engine-command serialization ─────────────────────────────────────────────
@@ -412,6 +378,16 @@ export class NgspiceFfiEngine implements SpiceEngine {
     this.fn.ngSpice_AllVecs = lib.func('char** ngSpice_AllVecs(char* plotname)')
     this.fn.ngGet_Vec_Info = lib.func('pvector_info ngGet_Vec_Info(char* vecname)')
     this.fn.ngSpice_running = lib.func('bool ngSpice_running()')
+    // Vector memory lock for live reads (sharedspice.h, ngspice >= 34). Bound
+    // defensively: a library without them cannot be read live safely, so the
+    // reads fall back to unlocked (still correct once the run is halted).
+    try {
+      this.fn.ngSpice_LockRealloc = lib.func('void ngSpice_LockRealloc()')
+      this.fn.ngSpice_UnlockRealloc = lib.func('void ngSpice_UnlockRealloc()')
+    } catch {
+      this.fn.ngSpice_LockRealloc = undefined
+      this.fn.ngSpice_UnlockRealloc = undefined
+    }
 
     // (3) Register callbacks. They ONLY enqueue (via emit) — never call back into
     // ngspice (Spec §7.4 gotcha 2).
@@ -445,26 +421,6 @@ export class NgspiceFfiEngine implements SpiceEngine {
       },
       koffi.pointer('CsControlledExit')
     )
-
-    // SendData fires once per accepted timepoint with all saved vector values.
-    // Decode the vecvaluesall struct into a plain row and emit a 'data' event.
-    // This runs on ngspice's background thread frame — keep it cheap and never
-    // call back into ngspice (Spec §7.4 gotcha 2). The orchestrator's
-    // sampleBatcher does the buffering/flush.
-    const cbSendData = koffi.register((dataPtr: unknown) => {
-      try {
-        if (!dataPtr) return 0
-        const all = koffi.decode(dataPtr, 'vecvaluesall') as {
-          veccount: number
-          vecsa: unknown
-        }
-        const { row, scaleName } = decodeVecvaluesallRow(all.veccount, all.vecsa, koffi.decode)
-        this.emit({ type: 'data', row, scaleName })
-      } catch {
-        /* a decode hiccup must not crash the FFI callback frame */
-      }
-      return 0
-    }, koffi.pointer('CsSendData'))
 
     // SendInitData fires once when a run starts, carrying the vector list.
     const cbSendInitData = koffi.register((infoPtr: unknown) => {
@@ -504,7 +460,6 @@ export class NgspiceFfiEngine implements SpiceEngine {
       cbSendChar,
       cbSendStat,
       cbControlledExit,
-      cbSendData,
       cbSendInitData,
       cbBGRunning
     )
@@ -513,7 +468,7 @@ export class NgspiceFfiEngine implements SpiceEngine {
       cbSendChar,
       cbSendStat,
       cbControlledExit,
-      cbSendData,
+      null, // SendData: samples are read from the plot vectors, see the header note
       cbSendInitData,
       cbBGRunning,
       null
@@ -604,6 +559,34 @@ export class NgspiceFfiEngine implements SpiceEngine {
     if (!vi.v_realdata || vi.v_length <= 0) return undefined
     const arr = koffi.decode(vi.v_realdata, koffi.array('double', vi.v_length)) as number[]
     return Float64Array.from(arr)
+  }
+
+  readVector(name: string, from: number, maxCount: number): VectorRead | undefined {
+    this.ensureInit()
+    const ptr = this.fn.ngGet_Vec_Info(name)
+    if (!ptr) return undefined
+    const vi = koffi.decode(ptr, 'vector_info_raw') as { v_realdata: unknown; v_length: number }
+    const length = vi.v_length
+    if (!vi.v_realdata || length <= 0) return undefined
+    const start = from < 0 ? Math.max(0, length + from) : Math.min(from, length)
+    const count = Math.max(0, Math.min(length - start, maxCount))
+    if (count === 0) return { length, data: EMPTY_F64 }
+    if (count === 1) {
+      const v = koffi.decode(vi.v_realdata, start * 8, 'double') as number
+      return { length, data: Float64Array.of(v) }
+    }
+    const data = koffi.decode(vi.v_realdata, start * 8, doubleArrayType(count)) as Float64Array
+    return { length, data }
+  }
+
+  lockVectors(): void {
+    this.ensureInit()
+    this.fn.ngSpice_LockRealloc?.()
+  }
+
+  unlockVectors(): void {
+    this.ensureInit()
+    this.fn.ngSpice_UnlockRealloc?.()
   }
 
   isRunning(): boolean {

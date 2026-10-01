@@ -23,9 +23,11 @@ interface DragKnobProps {
   /** Logarithmic scale (useful for freq) */
   log?: boolean
   testId?: string
+  /** Tooltip on the label: the technical term and a plain definition (issue #73). */
+  hint?: string
 }
 
-export function DragKnob({ value, min, max, step, label, unit, onChange, log, testId }: DragKnobProps): React.ReactElement {
+export function DragKnob({ value, min, max, step, label, unit, onChange, log, testId, hint }: DragKnobProps): React.ReactElement {
   const startRef = useRef<{ y: number; v: number } | null>(null)
 
   const clamp = useCallback((v: number) => Math.max(min, Math.min(max, v)), [min, max])
@@ -90,7 +92,7 @@ export function DragKnob({ value, min, max, step, label, unit, onChange, log, te
         <span style={knobTextStyle}>{displayValue}</span>
         {unit && <span style={knobUnitStyle}>{unit}</span>}
       </div>
-      <div style={knobLabelStyle}>{label}</div>
+      <div style={knobLabelStyle} title={hint}>{label}</div>
     </div>
   )
 }
@@ -105,9 +107,11 @@ interface NumericFieldProps {
   min?: number
   max?: number
   testId?: string
+  /** Tooltip on the label: the technical term and a plain definition (issue #73). */
+  hint?: string
 }
 
-export function NumericField({ label, value, unit, onChange, min, max, testId }: NumericFieldProps): React.ReactElement {
+export function NumericField({ label, value, unit, onChange, min, max, testId, hint }: NumericFieldProps): React.ReactElement {
   const [text, setText] = useState(String(value))
   useEffect(() => setText(String(value)), [value])
 
@@ -124,7 +128,7 @@ export function NumericField({ label, value, unit, onChange, min, max, testId }:
 
   return (
     <div style={fieldRowStyle}>
-      <label style={fieldLabelStyle}>{label}</label>
+      <label style={fieldLabelStyle} title={hint}>{label}</label>
       <div style={fieldInputWrapStyle}>
         <input
           type="text"

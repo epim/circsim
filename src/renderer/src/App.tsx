@@ -30,6 +30,7 @@ import ExportReport from './panels/ExportReport'
 import { NoBoardState } from './panels/EmptyStates'
 import GuidedStateHost from './panels/GuidedStateHost'
 import { AppStoreProvider, useApp, useAppStoreApi } from './store/storeContext'
+import OpenProgressBar from './boardOpen/OpenProgressBar'
 import type { AppStore } from './store/appStore'
 import { resolutionSummary } from './store/appStore'
 import { openProjectFromPath, classifyFile, droppedFilePath } from './ipc/fileOpen'
@@ -37,6 +38,9 @@ import type { PickEvent } from './viewport/picking'
 import type { SceneManager } from './viewport/scene'
 import type { OverlayMode } from './viewport/overlay'
 import { showNetsTabCue } from './ui/tabCues'
+import VoltageLegend from './ui/VoltageLegend'
+import { openDocsPage } from './ui/docsLink'
+import { termTitle } from './ui/glossary'
 import {
   APP_MIN_HEIGHT, APP_MIN_WIDTH, DOCK_COLLAPSED_H, DOCK_HEIGHT, MIN_VIEWPORT_H, useCollapsed,
 } from './ui/layoutPrefs'
@@ -56,6 +60,7 @@ function Shell(): React.ReactElement {
   const opVoltages = useApp(s => s.opVoltages)
   const voltageRange = useApp(s => s.voltageRange)
   const parseError = useApp(s => s.parseError)
+  const opening = useApp(s => s.openProgress !== null)
   const viewerOnly = useApp(s => s.viewerOnly)
   const resolutions = useApp(s => s.resolutions)
 
@@ -136,7 +141,10 @@ function Shell(): React.ReactElement {
         window.circsim.fileExists,
         window.circsim.readSidecar,
       )
-      store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+      // The worker-based open (issue #55): parse, extract, resolve and audit run
+      // off the UI thread while the progress strip shows; the setup-file restore
+      // and its note are part of that open, as in the sync path.
+      void store.getState().openBoard(opened.boardText, opened.boardFileName, {
         schematicText: opened.schematicText,
         schematicFileName: opened.schematicFileName,
         bomText: opened.bomText,
@@ -188,7 +196,7 @@ function Shell(): React.ReactElement {
         undefined,
         window.circsim.fileExists,
       )
-      store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+      void store.getState().openBoard(opened.boardText, opened.boardFileName, {
         schematicText: opened.schematicText,
         schematicFileName: opened.schematicFileName,
         bomText: opened.bomText,
@@ -209,7 +217,7 @@ function Shell(): React.ReactElement {
         undefined,
         window.circsim.fileExists,
       )
-      store.getState().openBoardFromText(opened.boardText, opened.boardFileName, {
+      void store.getState().openBoard(opened.boardText, opened.boardFileName, {
         schematicText: opened.schematicText,
         schematicFileName: opened.schematicFileName,
         bomText: opened.bomText,
@@ -269,7 +277,7 @@ function Shell(): React.ReactElement {
           await openBoardPath(path)
         } else {
           const text = await boardFile.text()
-          store.getState().openBoardFromText(text, boardFile.name)
+          void store.getState().openBoard(text, boardFile.name)
         }
         return
       }
@@ -305,9 +313,17 @@ function Shell(): React.ReactElement {
         {board && (
           <span style={{ fontSize: 12, color: '#9ab' }}>
             {summary.total} parts · {summary.ok} ok
-            {summary.stubbed > 0 && ` · ${summary.stubbed} stubbed`}
+            {summary.stubbed > 0 && (
+              <span title={termTitle('stub')} data-testid="header-stubbed">
+                {` · ${summary.stubbed} ${summary.stubbed === 1 ? 'placeholder' : 'placeholders'}`}
+              </span>
+            )}
             {summary.documentedOpen > 0 && ` · ${summary.documentedOpen} open by design`}
-            {summary.unresolved > 0 && ` · ${summary.unresolved} unresolved`}
+            {summary.unresolved > 0 && (
+              <span title={termTitle('unresolved')} data-testid="header-unresolved">
+                {` · ${summary.unresolved} with no model`}
+              </span>
+            )}
           </span>
         )}
         <FidelityBadge />
@@ -318,6 +334,14 @@ function Shell(): React.ReactElement {
         )}
         <button
           style={{ ...toolbarBtn, marginLeft: 'auto' }}
+          onClick={() => void openDocsPage('')}
+          data-testid="docs-btn"
+          title="Open the circsim documentation (guides, glossary, and what the results mean) in your browser"
+        >
+          Docs
+        </button>
+        <button
+          style={toolbarBtn}
           onClick={() => setAboutOpen(true)}
           data-testid="about-btn"
           title="Licenses & provenance"
@@ -330,6 +354,8 @@ function Shell(): React.ReactElement {
 
       {/* Simulation toolbar: Power On · Run/Pause · pace · overlay (Spec §11). */}
       <Toolbar overlay={overlay} onOverlay={setOverlay} />
+
+      <OpenProgressBar />
 
       {parseError && (
         <div style={errorCardStyle}>
@@ -370,7 +396,7 @@ function Shell(): React.ReactElement {
                   voltageRange={voltageRange}
                   overlay={overlay}
                 />
-              ) : (
+              ) : opening ? null : (
                 <NoBoardState
                   onOpen={handleOpen}
                   onOpenSample={handleOpenSample}
@@ -379,6 +405,15 @@ function Shell(): React.ReactElement {
                   onOpenRecent={path => void handleOpenRecent(path)}
                   onClearRecent={handleClearRecent}
                   notice={recentNotice}
+                />
+              )}
+              {/* Voltage legend (issue #70): the scale for the copper tint, with
+                  min/max volts, whenever the Voltage overlay is showing results.
+                  The 0..5 V fallback mirrors the tint effect in Viewport. */}
+              {board && overlay === 'voltage' && opVoltages && (
+                <VoltageLegend
+                  min={(voltageRange ?? { min: 0, max: 5 }).min}
+                  max={(voltageRange ?? { min: 0, max: 5 }).max}
                 />
               )}
               {/* Plain-language dark-LED coach (non-blocking overlay). */}

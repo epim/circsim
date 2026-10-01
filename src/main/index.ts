@@ -12,10 +12,19 @@
  *  - CSP: allows worker-src blob: for troika-three-text (Spec §5).
  */
 
-import { app, BrowserWindow, ipcMain, dialog, shell, net } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, net } from 'electron'
 import { join } from 'path'
 import { copyFile, readFile, rename, stat, unlink, writeFile } from 'fs/promises'
+import { release } from 'os'
+import { deflateRawSync } from 'zlib'
 import { createProductionSupervisor, unwrapPort } from './simhostSupervisor'
+import { buildMenuTemplate, docsPageUrl } from './docsLinks'
+import {
+  MainDiagnostics,
+  assembleBundle,
+  sanitizeBundleName,
+  validateRendererFiles
+} from './diagnosticsBundle'
 import { openFidelityDocs } from './openDocs'
 import { sidecarPathFor } from '../core/persist/paths'
 import { MAX_SIDECAR_BYTES } from '../core/persist/sidecar'
@@ -33,6 +42,9 @@ interface ModelIndex {
 // ─── Globals ──────────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null
+
+/** SimHost output and exits this session, for the diagnostics bundle (issue #26). */
+const mainDiagnostics = new MainDiagnostics()
 
 /**
  * Base for bundled resources/docs.
@@ -279,6 +291,53 @@ function registerIpcHandlers(): void {
   })
 
   /**
+   * Save the diagnostics bundle (issue #26): the renderer sends the files it
+   * gathered (decks, log, board hash, resolutions), main adds the environment,
+   * the SimHost output and the crash history, asks where to save, and writes a
+   * zip. Resolves `{ saved: false }` when the user cancels the dialog.
+   */
+  ipcMain.handle(
+    'circsim:saveDiagnosticsBundle',
+    async (_event, payload: { suggestedName?: unknown; files?: unknown }) => {
+      try {
+        const rendererFiles = validateRendererFiles(payload?.files)
+        const defaultPath = join(app.getPath('documents'), sanitizeBundleName(payload?.suggestedName))
+        const dialogOpts: Electron.SaveDialogOptions = {
+          title: 'Save diagnostic bundle',
+          defaultPath,
+          filters: [{ name: 'Zip archive', extensions: ['zip'] }]
+        }
+        const picked = mainWindow
+          ? await dialog.showSaveDialog(mainWindow, dialogOpts)
+          : await dialog.showSaveDialog(dialogOpts)
+        if (picked.canceled || !picked.filePath) return { saved: false }
+        const environment = {
+          app: app.getVersion(),
+          packaged: app.isPackaged,
+          electron: process.versions.electron,
+          chromium: process.versions.chrome,
+          node: process.versions.node,
+          platform: process.platform,
+          arch: process.arch,
+          osRelease: release()
+        }
+        const zip = assembleBundle(
+          rendererFiles,
+          [
+            { name: 'environment.json', text: JSON.stringify(environment, null, 2) + '\n' },
+            ...mainDiagnostics.files()
+          ],
+          { deflateRaw: (d) => deflateRawSync(d) }
+        )
+        await writeFile(picked.filePath, zip)
+        return { saved: true, path: picked.filePath }
+      } catch (err) {
+        return { saved: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  /**
    * Return the absolute path to the bundled sample project's .kicad_pcb file.
    * In dev: <appRoot>/resources/sample/blinker-555.kicad_pcb.
    * Packaged: <resourcesPath>/sample/blinker-555.kicad_pcb (via extraResources).
@@ -313,6 +372,16 @@ function registerIpcHandlers(): void {
       isOnline: () => net.isOnline()
     })
   )
+
+  /**
+   * Open one page of the public docs site in the system browser (issue #73).
+   * The renderer sends only a slug; docsPageUrl() validates it and pins the
+   * origin, so the renderer cannot open an arbitrary URL. Resolves false for a
+   * bad slug or when the OS refuses.
+   */
+  ipcMain.handle('circsim:openDocsPage', async (_event, slug: unknown) => {
+    return openDocsSlug(slug)
+  })
 
   /**
    * Return the licensing texts surfaced in the About dialog (Task 27, Spec §14):
@@ -412,10 +481,42 @@ function registerIpcHandlers(): void {
   })
 }
 
+/** Open a validated docs slug in the system browser; false when invalid or refused. */
+async function openDocsSlug(slug: unknown): Promise<boolean> {
+  const url = docsPageUrl(slug)
+  if (!url) return false
+  try {
+    await shell.openExternal(url)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Replace Electron's default menu with one whose Help entries open the docs (issue #73). */
+function installAppMenu(): void {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(
+      buildMenuTemplate({
+        isMac: process.platform === 'darwin',
+        appName: app.getName(),
+        isPackaged: app.isPackaged,
+        openDocsPage: slug => {
+          void openDocsSlug(slug)
+        },
+        openExternal: url => {
+          void shell.openExternal(url).catch(() => undefined)
+        },
+      }),
+    ),
+  )
+}
+
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
   registerIpcHandlers()
+  installAppMenu()
 
   mainWindow = createWindow()
 
@@ -434,9 +535,11 @@ app.whenReady().then(async () => {
   // notification via contextBridge (not the dead MessagePort — Spec §6.1).
   const supervisor = await createProductionSupervisor({
     simhostPath,
-    onSimhostCrashed: ({ willRespawn }) => {
+    onChildOutput: (stream, text) => mainDiagnostics.recordOutput(stream, text),
+    onSimhostCrashed: (payload) => {
+      mainDiagnostics.recordCrash(payload)
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('circsim:simhostCrashed', { willRespawn })
+        mainWindow.webContents.send('circsim:simhostCrashed', payload)
       }
     }
   })

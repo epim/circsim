@@ -45,6 +45,8 @@ const t555Lib = libLines('timer555.lib')
 const mosfetLib = libLines('mosfet.lib')
 const diodesLib = libLines('diodes.lib')
 const powerIcLib = libLines('power-ic.lib')
+const stubsLib = libLines('stubs.lib')
+const optoLib = libLines('opto.lib')
 
 interface IndexEntry {
   id: string
@@ -233,11 +235,29 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
               ? mosfetLib
               : e.model.file === 'power-ic.lib'
                 ? powerIcLib
-                : t555Lib
+                : e.model.file === 'stubs.lib'
+                  ? stubsLib
+                  : e.model.file === 'opto.lib'
+                    ? optoLib
+                    : t555Lib
       // A minimal bias deck per class. All subckts get rails + a probe load.
       let deck: string[]
       const name = e.model.name
-      if (e.model.file === 'opamp.lib' && name !== 'LM393' && name !== 'LM339_QUAD') {
+      if (name === 'MCP6002' || name === 'NE5532') {
+        // Dual op-amps (terminals inap inan outa inbp inbn outb vcc vee): both channels as followers.
+        deck = ['* dual op', 'vcc vcc 0 dc 12', 'vin in 0 dc 6', `x1 in out out in out2 out2 vcc 0 ${name}`, ...lib, '.op', '.end']
+      } else if (name === 'AP2112K-3.3') {
+        // LDO with enable (terminals vin gnd vout en): enable tied to the input.
+        deck = ['* ldo en', 'vin vin 0 dc 5', `x1 vin 0 vout vin ${name}`, 'rl vout 0 200', ...lib, '.op', '.end']
+      } else if (name === 'TP4056') {
+        deck = ['* charger', 'vcc vcc 0 dc 5', 'vb bat 0 dc 3.7', 'rprog prog 0 1.2k', `x1 vcc bat prog 0 vcc chrg stdby 0 ${name}`, 'rc vcc chrg 10k', 'rs vcc stdby 10k', ...lib, '.op', '.end']
+      } else if (e.model.file === 'stubs.lib') {
+        // Supply-load stub (terminals vdd gnd).
+        deck = ['* supply-load stub', 'vdd vdd 0 dc 5', `x1 vdd 0 ${name}`, ...lib, '.op', '.end']
+      } else if (e.model.file === 'opto.lib') {
+        // Optocoupler (terminals a k c e): LED driven from a source and a resistor, output pulled up.
+        deck = ['* opto', 'vin in 0 dc 5', 'rin in a 330', 'vcc vcc 0 dc 5', 'rl vcc c 4.7k', `x1 a 0 c 0 ${name}`, ...lib, '.op', '.end']
+      } else if (e.model.file === 'opamp.lib' && name !== 'LM393' && name !== 'LM339_QUAD') {
         deck = ['* op', 'vcc vcc 0 dc 12', 'vin in 0 dc 6', `x1 in out out vcc 0 ${name}`, ...lib, '.op', '.end']
       } else if (name === 'LM393') {
         deck = ['* cmp', 'vcc vcc 0 dc 5', 'rpu vcc out 10k', 'vp p 0 dc 3', 'vn n 0 dc 1', `x1 p n out vcc 0 ${name}`, ...lib, '.op', '.end']
@@ -642,7 +662,7 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
     expect(r.v['s']).toBeLessThan(1.2)
   }, 60_000)
 
-  it('NE555 astable: period within 20% of 0.693*(R1+2R2)*C', async () => {
+  it('NE555 astable: period within 3% of 0.693*(R1+2R2)*C and duty within 2 points of (R1+R2)/(R1+2R2) (issue #68)', async () => {
     const R1 = 1e3
     const R2 = 10e3
     const C = 100e-9
@@ -669,14 +689,33 @@ describe.skipIf(!haveNgspice)('Task 14b — IC + digital library in real ngspice
       measured = periods.reduce((a, b) => a + b, 0) / periods.length
     }
     const relErr = Math.abs(measured - expected) / expected
+    // Duty cycle: fraction of the time the output is high between the second and
+    // last rising edge (whole periods only, skipping the start-up cycle).
+    let duty = NaN
+    if (edges.length >= 3) {
+      const first = edges[1]
+      const last = edges[edges.length - 1]
+      let high = 0
+      for (let i = 1; i < out.length; i++) {
+        if (r.t[i] <= first || r.t[i - 1] >= last) continue
+        if (out[i] >= 2.5) high += r.t[i] - r.t[i - 1]
+      }
+      duty = high / (last - first)
+    }
+    const expectedDuty = (R1 + R2) / (R1 + 2 * R2)
     // eslint-disable-next-line no-console
     console.log(
       `\n[NE555] rising edges=${edges.length} measured period=${(measured * 1e3).toFixed(3)} ms ` +
-        `expected=${(expected * 1e3).toFixed(3)} ms relErr=${(relErr * 100).toFixed(1)} %\n`
+        `expected=${(expected * 1e3).toFixed(3)} ms relErr=${(relErr * 100).toFixed(1)} % ` +
+        `duty=${(duty * 100).toFixed(1)} % expected=${(expectedDuty * 100).toFixed(1)} %\n`
     )
     expect(r.errs).toEqual([])
     expect(edges.length).toBeGreaterThanOrEqual(3)
-    expect(relErr).toBeLessThan(0.2)
+    // The fidelity page promises "within a few percent". The gate is 3 percent
+    // (the datasheet's maximum initial timing error); the measured error is 1.6
+    // percent, so a regression toward the old 20 percent gate fails here first.
+    expect(relErr).toBeLessThan(0.03)
+    expect(Math.abs(duty - expectedDuty)).toBeLessThan(0.02)
   }, 90_000)
 
   it('NE555 astable: no spurious output edges at solver steps 2 us to 50 us (review of PR #118)', async () => {

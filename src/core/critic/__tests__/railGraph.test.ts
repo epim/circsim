@@ -245,8 +245,10 @@ describe('scale', () => {
 
   it('solves a 1950-node track rail with a pour in time that does not grow cubically', () => {
     timeSolve(10, 4, 1) // warm the JIT so the small run is not the cold one
-    const small = timeSolve(20, 15, 3)
-    const big = timeSolve(40, 60, 1)
+    // Best of 5 and 3: the small solve is already several milliseconds (above
+    // timer noise), and best-of-N on both sides discards scheduler hiccups.
+    const small = timeSolve(20, 15, 5)
+    const big = timeSolve(40, 60, 3)
     expect(small.sol).not.toBeNull()
     expect(big.sol).not.toBeNull()
     expect(big.sol!.loads.length).toBeGreaterThanOrEqual(55)
@@ -256,9 +258,10 @@ describe('scale', () => {
     // millisecond bound: CI runners are up to 5x slower than a dev machine, so
     // compare two sizes on the same machine. Going from a 20 x 20 to a 40 x 40
     // grid quadruples the node count: the sparse solve costs a small multiple of
-    // 4x to 8x, dense elimination would cost 4^3 = 64x. A ratio under 40 passes
-    // with headroom for noise and still fails on cubic-in-nodes growth.
-    const ratio = big.best / Math.max(small.best, 0.05)
+    // 4x to 8x (measured 4 to 6 locally), dense elimination would cost 4^3 = 64x.
+    // The bound of 40 is 5x the expected ratio of 8, so a loaded runner does not
+    // trip it, and it still fails on cubic-in-nodes growth (about 64).
+    const ratio = big.best / small.best
     expect(ratio).toBeLessThan(40)
   })
 })

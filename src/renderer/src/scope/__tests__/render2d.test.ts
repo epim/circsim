@@ -22,6 +22,7 @@ import {
   autoScale,
   timeToPixel,
   computeVisibleWindow,
+  drawScope,
 } from '../render2d'
 
 // ─── synthetic signal helpers ────────────────────────────────────────────────
@@ -294,5 +295,65 @@ describe('computeVisibleWindow', () => {
     })
     expect(window.tStart).toBeCloseTo(0, 8)
     expect(window.tEnd).toBeCloseTo(1.0, 8)
+  })
+})
+
+// ─── drawScope ───────────────────────────────────────────────────────────────
+
+/**
+ * A canvas context that records the horizontal extent each trace stroke covers
+ * (the sum of the x spans of its lineTo segments). Only the calls drawScope
+ * makes are implemented.
+ */
+function recordingCtx(): { ctx: CanvasRenderingContext2D; coveredBy: Map<string, number> } {
+  const coveredBy = new Map<string, number>()
+  let x = 0
+  let pathCover = 0
+  const ctx = {
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 1,
+    font: '',
+    fillRect() {},
+    fillText() {},
+    setLineDash() {},
+    beginPath() { pathCover = 0 },
+    moveTo(nx: number) { x = nx },
+    lineTo(nx: number) { pathCover += Math.abs(nx - x); x = nx },
+    stroke() {
+      const key = String(ctx.strokeStyle)
+      coveredBy.set(key, (coveredBy.get(key) ?? 0) + pathCover)
+    },
+  }
+  return { ctx: ctx as unknown as CanvasRenderingContext2D, coveredBy }
+}
+
+describe('drawScope', () => {
+  it('draws a connected trace when samples are sparser than pixel columns', () => {
+    // 100 µs steps under a 1 ms/div window on a 750 px canvas: one sample every
+    // 7.5 columns. A trace that breaks at every empty column draws only
+    // zero-length segments, which is a blank scope (issue #25 raised tstep).
+    const width = 750
+    const tEnd = 10e-3
+    const n = 101
+    const times = new Float64Array(n)
+    const values = new Float64Array(n)
+    for (let i = 0; i < n; i++) {
+      times[i] = (i * tEnd) / (n - 1)
+      values[i] = 4.42
+    }
+    const decimated = minMaxDecimate(times, values, 0, tEnd, width)
+    const { ctx, coveredBy } = recordingCtx()
+    drawScope({
+      ctx,
+      width,
+      height: 200,
+      tStart: 0,
+      tEnd,
+      traces: [{ spec: { probeId: 'p', color: '#00ff00', vMin: 3.92, vMax: 4.92 }, decimated }],
+      showGrid: false,
+    })
+    // The stroke spans nearly the whole window, not a set of dots.
+    expect(coveredBy.get('#00ff00') ?? 0).toBeGreaterThan(width * 0.95)
   })
 })

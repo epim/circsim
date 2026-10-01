@@ -58,7 +58,7 @@ Every control drives the running simulation immediately.
 
 ### DC Supply (`PSU`)
 - **Volts** knob (0 V to 30 V) and a matching **Voltage** field: drag the knob or type a value.
-- **Series R**: the supply's internal resistance (default 0.1 Ω). Raise it to model a current-limited or weak source.
+- **Source R** (series resistance): the supply's internal resistance (default 0.1 Ω). Raise it to model a current-limited or weak source.
 - Jack: red **+**. (Return is through your designated ground.)
 - A supply that Energize attached for you carries an amber *"Auto-attached"* note until you touch it.
 
@@ -72,15 +72,15 @@ Every control drives the running simulation immediately.
 
 ### Logic Input (`LOGIC`)
 - **LO / HI** toggle: drives the net to 0 or to your high level.
-- **V High**: the logic-high voltage (default 3.3 V; set it to match your rail).
+- **High level** (V High): the logic-high voltage (default 3.3 V; set it to match your rail).
 - Jack: purple **out**.
 
 ### Potentiometer (`POT`)
-- **Rheostat / Divider** mode toggle.
-  - **Rheostat** (2 terminals A, W): a variable resistor, the classic dimmer wiring.
-  - **Divider** (3 terminals A, W, Lo): a true three-terminal voltage divider; W is the wiper tap.
+- **Variable resistor / Voltage divider** mode toggle.
+  - **Variable resistor** (a rheostat; 2 terminals A, W): a variable resistor, the classic dimmer wiring.
+  - **Voltage divider** (3 terminals A, W, Lo): a true three-terminal voltage divider; W is the wiper tap.
 - **Wiper** knob: 0% to 100%.
-- **Total R**: the full end-to-end resistance (default 10 kΩ).
+- **Total resistance** (Total R): the full end-to-end resistance (default 10 kΩ).
 - Switching modes keeps the A and W wires and only adds or drops the Lo terminal.
 
 ### V Probe / I Probe

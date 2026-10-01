@@ -20,6 +20,7 @@ import { useApp, useAppStoreApi } from '../store/storeContext'
 // useApp/useAppStoreApi power the connected wrapper; CriticPanelView is store-free.
 import type { Finding, Severity, CriticReport } from '../../../core/critic/types'
 import { severityCssColor } from '../viewport/criticOverlay'
+import { TEXT_HINT } from '../ui/palette'
 
 const ORDER: Severity[] = ['error', 'warn', 'info']
 
@@ -378,7 +379,7 @@ const skippedWrapStyle: React.CSSProperties = {
   gap: 2,
 }
 const skippedItemStyle: React.CSSProperties = {
-  color: '#6c7689',
+  color: TEXT_HINT,
   fontSize: 11,
 }
 const copyBtnStyle: React.CSSProperties = {

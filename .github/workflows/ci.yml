@@ -221,6 +221,37 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
+  # Docs build: the same install and build the Docs workflow (docs.yml) runs on
+  # master, minus Pages configure and deploy. The site installs only website/'s
+  # own dependencies (no repo-root npm ci), so a site change that reaches for
+  # root devDependencies (for example a TS data loader that makes esbuild
+  # resolve the root tsconfig) fails here before merge, not after.
+  # ===========================================================================
+  docs-build:
+    name: Docs build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # lastUpdated needs full history
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run docs:build
+
+  # ===========================================================================
   # KiCad load job: every fixture and bundled sample must load in a real KiCad
   # (issue #24). The fixtures use board format version 20260206, which KiCad 9
   # cannot read, so this installs KiCad 10 from the KiCad PPA (Ubuntu 24.04).

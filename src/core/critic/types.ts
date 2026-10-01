@@ -109,9 +109,26 @@ export const DEFAULT_CRITIC_OPTIONS: CriticOptions = {
 }
 
 /**
+ * Where a bench supply (or the ground clip) enters a net, from the lead's copper
+ * position. The copper checks use it as the source of the rail solve instead of
+ * guessing the entry pad (issue #47).
+ */
+export interface SupplyEntry {
+  /** Board net the lead is attached to. */
+  netId: number
+  /**
+   * Where the lead was clipped, KiCad board coordinates in mm. Absent when the
+   * supply is attached but no position was recorded (a v0 setup file, a clip made
+   * without a pick point): the check then guesses and says so.
+   */
+  pos?: { x: number; y: number }
+}
+
+/**
  * Operating-point solution fed to the sim-dependent checks (IR-drop, ampacity,
  * thermal). Built from circsim's existing ngspice operating-point path. Absent ⇒
- * those checks fall back to estimates and say so, or are skipped.
+ * those checks are skipped; a check whose own input is missing (e.g. thermal
+ * without `partPower`) reports `notAssessed` instead of running silently.
  */
 export interface OpResult {
   /** SPICE node name → DC voltage (V). */
@@ -139,6 +156,14 @@ export interface OpResult {
    * zero-current.
    */
   unresolvedRefs?: string[]
+  /**
+   * Bench supply entries (and the ground clip), one per attached lead. The
+   * IR-drop and ampacity solves enter a rail at the pad nearest the lead's
+   * position. A rail with no entry, or an entry without a position, falls back to
+   * the connector/widest-copper heuristic and the finding says it guessed. When
+   * several entries name one net the first is used.
+   */
+  supplyEntries?: SupplyEntry[]
   /** Power (W) dissipated by a part, keyed by ref (P = Σ|V·I| across its pads). */
   partPower?: Record<string, number>
 }

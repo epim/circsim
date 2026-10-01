@@ -20,6 +20,8 @@
 import React from 'react'
 import { baseName } from '../../../core/persist/paths'
 import { btnPrimary, btnSecondary } from '../ui/buttonStyles'
+import { TEXT_HINT } from '../ui/palette'
+import DocsLink from '../ui/docsLink'
 
 // ─── Parse-error card ─────────────────────────────────────────────────────────
 
@@ -190,8 +192,8 @@ export function NoBoardState({
           Open…
         </button>
       </div>
-      <div style={{ color: '#555', marginTop: 10, fontSize: 12 }}>
-        The sample project is a 555 blinker — the full simulation flow in one
+      <div style={{ color: TEXT_HINT, marginTop: 10, fontSize: 12 }}>
+        The sample project is a 555 blinker: the full simulation flow in one
         click. First Light is a one-LED dimmer if you want the smallest possible
         start.
       </div>
@@ -224,6 +226,17 @@ export function NoBoardState({
           ))}
         </div>
       )}
+      <div style={{ color: TEXT_HINT, marginTop: 8, fontSize: 12 }}>
+        New to circsim?{' '}
+        <DocsLink to="start/first-run" testId="first-run-docs-link">
+          Read your first five minutes
+        </DocsLink>{' '}
+        or look up a term in the{' '}
+        <DocsLink to="guides/glossary" testId="first-run-glossary-link">
+          glossary
+        </DocsLink>
+        .
+      </div>
     </div>
   )
 }

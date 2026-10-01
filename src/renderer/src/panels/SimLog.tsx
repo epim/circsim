@@ -13,6 +13,7 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
+import { TEXT_HINT } from '../ui/palette'
 
 type LevelFilter = 'all' | 'warn' | 'error'
 
@@ -108,7 +109,7 @@ const scrollStyle: React.CSSProperties = {
   minHeight: 0,
 }
 const emptyStyle: React.CSSProperties = {
-  color: '#555',
+  color: TEXT_HINT,
   fontStyle: 'italic',
 }
 const segBtn: React.CSSProperties = {

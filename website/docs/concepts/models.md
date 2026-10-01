@@ -13,7 +13,8 @@ circsim resolves every part through a **tiered pipeline**. The first tier that p
 3. **Primitive inference**: a reference starting with `R`, `C`, or `L` plus a parseable value becomes a resistor, capacitor, or inductor directly. (Values like `DNP`, `N/A`, or `TBD` are treated as "not fitted" and stubbed open.) The value reader accepts the spellings real boards and BOM exports use: `10k`, `4k7`, `4,7k` (decimal comma), `10 kΩ` and `10 kOhm` (spaces, omega or Ohm), `100nF`, `100NF`, `4.7µF` and `4.7μF` (micro sign or Greek mu, any case of u/n/p), `1e-9` (exponent form), and ratings after the value (`100nF/50V`). Case matters only for M: `M` is mega and `m` is milli, so `2m2` is 2.2 milli and `2M2` is 2.2 mega. A thousands-style comma such as `1,000` is ambiguous between a European decimal and a thousands separator, so it is not read at all.
 4. **The bundled model library**: the main path. circsim matches the part against its [built-in library](../reference/model-library) of diodes, LEDs, transistors, op-amps, the 555, logic, regulators, and more.
 5. **Your imported `.lib`/`.sub` files**: models you [import through the Model Doctor](../guides/model-doctor#import-a-lib) are prepended to the library, so your model for a given part number beats the bundled one.
-6. **Stub fallback**: anything still unmatched is flagged for you (red "no model," or a documented "open by design").
+6. **Automatic stubs**: a microcontroller, module, addressable LED or USB-serial bridge that no model claimed is stubbed for you, by name, as a [supply-load stub](#supply-load-stubs) (amber, never green). A crystal becomes a documented open.
+7. **Nothing matched**: anything still unmatched is flagged for you (red "no model").
 
 ### Matching against the library
 
@@ -41,7 +42,7 @@ Some behavioral models are deliberately *simplified operating-point stubs*: a ba
 
 ### Digital logic
 
-The 74HC and CD4000 logic families use **behavioral digital models** (built on ngspice's XSPICE extension, which lets a real logic gate live inside an analog simulation). The gate does the right truth table with datasheet-typical thresholds and delays. Schmitt-trigger parts (the 74HC14, CD40106) carry true hysteresis, so an *RC astable* (an oscillator made from just a resistor, a capacitor, and one gate) built around one actually oscillates.
+The 74HC and CD4000 logic families use **behavioral digital models** (built on ngspice's XSPICE extension, which lets a real logic gate live inside an analog simulation). The gate does the right truth table with datasheet-typical thresholds, and the plain gates carry datasheet-typical delays (the [fidelity page](./fidelity) says which timing is gated and which is not). Schmitt-trigger parts (the 74HC14, CD40106) carry true hysteresis, so an *RC astable* (an oscillator made from just a resistor, a capacitor, and one gate) built around one actually oscillates.
 
 Every gate output has a finite drive: roughly 40 ohm and 25 mA for 74HC at 5 V, roughly 400 ohm and 3 mA for CD4000 at 5 V (both scale with the rail). A logic pin wired straight to an LED, a relay coil, or a heavy load therefore sags toward the load instead of holding the rail. The active-low clear, preset, and master-reset pins of the 74HC74, 74HC164, and 74HC595 behave as active-low, so tying them high leaves the register free to clock.
 
@@ -51,10 +52,22 @@ Some parts *can't* be modeled, and circsim represents them honestly rather than 
 
 - **Open stub**: the part's pins are left electrically open. Right for a part that isn't fitted, or one you want to remove from the simulation.
 - **Short stub**: the pins are tied together. Useful for modeling a jumper, a fitted zero-ohm, or a closed switch.
+- **Supply-load stub (automatic)**: the default for a recognized microcontroller, module, addressable LED or USB-serial bridge. See [below](#supply-load-stubs).
 - **Interactive pins**: the model for microcontrollers and other complex digital ICs. There's no SPICE model and **the firmware does not run**. Instead, each pin becomes a control you drive by hand: set it high, low, or high-impedance, or watch its voltage. This lets you answer "if GPIO5 goes high, does the LED turn on?" without pretending to simulate the chip. Drive the pins from the [Interactive Pins panel](../guides/model-doctor#interactive-pins).
 - **Documented open**: a known part that circsim deliberately doesn't model because there's no meaningful SPICE analog (a USB-PD negotiation controller, say). It shows as grey "open by design," not red "unresolved," and carries a note explaining why.
 
 Connectors get special treatment: a bare-board connector is electrically open (power arrives through your bench instruments, not the connector), so J/P parts resolve to a clean open stub with an "ok" status rather than nagging you.
+
+### Supply-load stubs {#supply-load-stubs}
+
+circsim recognizes the common controllers by name, from the MPN property (or the BOM MPN), the value field, or the footprint name: ESP32 and ESP8266 modules, STM32 (F1, F4, and the C0/F0/G0/L0/L4 low-power series), ATmega and ATtiny (and Arduino Nano/Uno/Pro Mini modules), RP2040 (and the Pico module), nRF52, SAMD21, CH32V003 and MSP430, plus WS2812B / NeoPixel LEDs and the CH340 USB-serial bridge. Each becomes a **supply-load stub**: a two-terminal load from the part's supply pad to its ground pad that draws the family's datasheet supply current once the rail is above the part's minimum operating voltage, and does nothing else. The rail sags and loads like the real board, so the regulator, the supply's series resistance and the copper see the current; the part's logic and pins are not simulated.
+
+- The supply and ground pads come from the attached schematic's power-input pin names when there is one, then from a datasheet pinout where the stub has one (CH340, WS2812B), then from the names of the nets on the part's pads (`+3V3`, `VCC`, `GND`).
+- The part is **stubbed** (amber), never ok, and its card in the Model Doctor says what it was modeled as, the current, and the pads it chose.
+- If the family is recognized but no datasheet figure is bundled for it (an STM32 of another series, a PIC, an LPC), or its supply pads cannot be identified, the part becomes **interactive pins** with no supply current, and the warning says why. circsim does not invent a load.
+- A library match made only from the part's refdes and package (an IC in a generic SOIC-8) does not count: an ATtiny85 or CH32V003 on an 8-pin package, or an ATtiny84 on a SOIC-14, is stubbed rather than given an unrelated model or left ambiguous. Names that merely share a prefix with a controller family (the MAX3232 and MAX3221 RS-232 transceivers, nRF24L01 radios) are not treated as controllers.
+- A library match by MPN or value, or a model you imported, always wins over a stub, and so does your own Model Doctor choice. Choosing **Interactive pins** in the Model Doctor replaces the supply load with the pin panel, and the part then draws nothing.
+- The currents are one working figure per family (an ESP32 at 100 mA is its Wi-Fi receive current, an ATmega at 10 mA is 16 MHz at 5 V), not the part's worst case. A lit WS2812B draws up to 60 mA; the stub is its 1 mA idle current, so add the lit load as a bench current load if it matters. See the [model library](../reference/model-library#automatic-stubs) for every figure and its source.
 
 ## What you see, and what to do
 
@@ -64,7 +77,7 @@ Each part shows a status in the **Parts** panel and, if it needs attention, in t
 | --- | --- | --- |
 | OK | green | Modeled, or intentionally open (connector) |
 | Open by design | grey | A documented part with no meaningful model |
-| Stubbed | amber | You (or a heuristic) stubbed it open/short/interactive |
+| Stubbed (shown as "placeholder" in the Model Doctor) | amber | You stubbed it open/short/interactive, or an automatic rule modeled it as a [supply-load stub](#supply-load-stubs) |
 | No model | red | Nothing matched, needs your attention |
 
 A diode or LED on a JLCPCB / EasyEDA footprint, with no schematic to name its pins, has a green dot (it has a model), but its footprint name cannot say which pad is the anode: circsim simulates it with KiCad's default and names it in the sim log with a [`pinmap-unverified: polarity` warning](../guides/warnings#polarity-unverified) when the board opens. See [the diode-polarity trap](../reference/pin-maps#diode-polarity).

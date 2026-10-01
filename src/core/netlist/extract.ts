@@ -13,7 +13,8 @@
  * Rules:
  *   - Nets with 0 pads are omitted (they exist in the board header but are unused).
  *   - The designated ground net maps to SPICE node "0".
- *   - Pads with no netId emit a 'floating-pad' warning.
+ *   - Pads with no netId emit a 'floating-pad' warning, except pads whose
+ *     schematic pin is flagged no-connect (pintype "...+no_connect").
  *   - Nets with only one pad emit a 'single-pad-net' warning.
  *   - SPICE node name algorithm: see spiceNames.ts.
  *
@@ -21,6 +22,7 @@
  */
 
 import type { BoardModel } from '../kicad/types'
+import { isNoConnectPad } from '../kicad/board'
 import { buildSpiceNames } from './spiceNames'
 
 // ─── normative interfaces (spec §8.3) ────────────────────────────────────────
@@ -97,6 +99,9 @@ export function extract(board: BoardModel, opts: ExtractOptions = {}): Circuit {
 
     for (const pad of footprint.pads) {
       if (pad.netId === undefined) {
+        // A pad whose schematic pin is flagged no-connect is open on purpose
+        // (the pin type reads "...+no_connect"): not a finding (#49).
+        if (isNoConnectPad(pad)) continue
         // Floating pad — no net connection
         warnings.push({
           kind: 'floating-pad',

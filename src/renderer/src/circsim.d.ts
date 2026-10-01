@@ -28,6 +28,21 @@ interface CircsimPlatformPaths {
 
 interface CircsimCrashedPayload {
   willRespawn: boolean
+  /** The SimHost child's exit code; null when Electron did not report one. */
+  exitCode: number | null
+  /** 'watchdog' for exit code 86 (a stuck solve), 'crashed' for anything else. */
+  reason: 'watchdog' | 'crashed'
+}
+
+interface CircsimDiagnosticsBundleRequest {
+  suggestedName: string
+  files: { name: string; text: string }[]
+}
+
+interface CircsimDiagnosticsBundleResult {
+  saved: boolean
+  path?: string
+  error?: string
 }
 
 type CircsimOpenDocsResult =
@@ -81,6 +96,13 @@ declare global {
       getSimPort(): Promise<MessagePort>
       onSimhostCrashed(cb: (payload: CircsimCrashedPayload) => void): () => void
       platformPaths(): Promise<CircsimPlatformPaths>
+      /**
+       * Save the diagnostics bundle (issue #26) as a zip via a native save
+       * dialog. main adds the environment, SimHost output and crash history.
+       */
+      saveDiagnosticsBundle(
+        req: CircsimDiagnosticsBundleRequest,
+      ): Promise<CircsimDiagnosticsBundleResult>
       getSampleProjectPath(): Promise<string>
       /**
        * Absolute path to the bundled "First Light" demo .kicad_pcb (minimal DC
@@ -94,6 +116,12 @@ declare global {
        * banner and About panel (Task 28, Spec §12, §16 risk 7).
        */
       openDocs(): Promise<CircsimOpenDocsResult>
+      /**
+       * Open one page of the public docs site in the system browser by slug
+       * (e.g. 'guides/energize'). Resolves true when the OS accepted the open.
+       * Optional so tests and non-Electron previews can omit it (issue #73).
+       */
+      openDocsPage?(slug: string): Promise<boolean>
       /**
        * Licensing texts for the About dialog (Task 27, Spec §14): app license,
        * verbatim ngspice COPYING, model-library provenance, docs/licensing.md.

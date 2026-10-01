@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { SimHost } from '../index'
-import type { EngineEvent, EngineEventListener, SpiceEngine } from '../engine'
+import type { EngineEvent, EngineEventListener, SpiceEngine, VectorRead } from '../engine'
 import type { SimEvent } from '../protocol'
 
 class StubEngine implements SpiceEngine {
@@ -35,6 +35,11 @@ class StubEngine implements SpiceEngine {
   vectorData(): Float64Array | undefined {
     return undefined
   }
+  readVector(): VectorRead | undefined {
+    return undefined
+  }
+  lockVectors(): void {}
+  unlockVectors(): void {}
   isRunning(): boolean {
     return false
   }

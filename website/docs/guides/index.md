@@ -21,6 +21,8 @@ Task-oriented walkthroughs for specific jobs. If you're new, do the [First Light
 - **[Run the Board Critic audit](./run-critic)**: the read-only pre-fab check.
 - **[Save your setup & export a report](./save-and-report)**: keep your rigging across reopens and restarts, and hand a report to someone else.
 - **[Read the warnings & fidelity banner](./warnings)**: what every honesty surface is telling you.
+- **[Glossary](./glossary)**: every technical term the app uses, in plain words.
+- **[Save a diagnostic bundle](./diagnostics)**: one zip of decks, log, board hash, and versions to attach to a bug report.
 
 ## Automating
 

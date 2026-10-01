@@ -4,7 +4,7 @@ Every instrument you can add from the [bench shelf](../guides/bench-and-leads), 
 
 All instruments start **unwired**: their net terminals are unconnected and they don't appear in the simulation until you draw a lead to a net (or, for the current probe, clamp a component). Editing any parameter while the board is energized triggers a live re-solve.
 
-## DC Supply: `PSU`
+## DC Supply: `PSU` (shown as "Power supply (PSU)")
 
 A constant-voltage source with a series resistance.
 
@@ -12,7 +12,7 @@ A constant-voltage source with a series resistance.
 | --- | --- | --- |
 | **Volts** (knob) | 0 to 30 V, step 0.1 | Same value as the Voltage field |
 | **Voltage** (field) | 0 to 30 V | Type an exact value |
-| **Series R** | ≥ 0.001 Ω, default 0.1 Ω | The supply's internal resistance; raise it to model a weak/limited source |
+| **Source R** (series resistance) | ≥ 0.001 Ω, default 0.1 Ω | The supply's internal resistance; raise it to model a weak/limited source |
 
 - **Jack:** red **+**. Return is through your designated ground.
 - **SPICE:** a voltage source and a series resistor spliced between a synthetic internal node and your net, so the net keeps its name for the voltage overlay.
@@ -41,7 +41,7 @@ A digital high/low driver, for poking logic inputs and MCU-stub pins.
 | Control | Range / default | Notes |
 | --- | --- | --- |
 | **LO / HI** toggle | | Drives 0 or the high level |
-| **V High** | 0 to 30 V, default 3.3 V | Set it to match your logic rail |
+| **High level** (V High) | 0 to 30 V, default 3.3 V | Set it to match your logic rail |
 
 - **Jack:** purple **out**.
 - **SPICE:** a DC source (level = V High when HI, else 0) with a 50 Ω series resistor.
@@ -53,9 +53,9 @@ A variable resistor, in two modes.
 
 | Control | Range / default | Notes |
 | --- | --- | --- |
-| **Rheostat / Divider** | rheostat default | Mode toggle |
+| **Variable resistor / Voltage divider** | variable resistor (rheostat) default | Mode toggle |
 | **Wiper** (knob) | 0 to 100 % | Wiper position |
-| **Total R** | ≥ 1 Ω, default 10 kΩ | End-to-end resistance |
+| **Total resistance** (Total R) | ≥ 1 Ω, default 10 kΩ | End-to-end resistance |
 
 - **Rheostat** (2 terminals, **A** + **W**): a single variable resistor between A and W, value = `Total R × wiper%`. This is the classic dimmer wiring.
 - **Divider** (3 terminals, **A** + **W** + **Lo**): a true voltage divider. An upper resistor A→W of `Total R × (1 − wiper%)` and a lower resistor W→Lo of `Total R × wiper%`, with W as the tap.

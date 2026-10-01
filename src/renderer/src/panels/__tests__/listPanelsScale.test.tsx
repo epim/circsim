@@ -135,7 +135,7 @@ describe('ModelDoctor on a board with many problem parts', () => {
       <ModelDoctor />,
     )
     expect((html.match(/data-collapsed="true"/g) ?? []).length).toBe(problems.length - 1)
-    expect((html.match(/Import \.lib/g) ?? []).length).toBe(1)
+    expect((html.match(/Import model file \(\.lib\)/g) ?? []).length).toBe(1)
     expect(html).toMatch(new RegExp(`data-ref="${target}"[^>]*data-selected="true"`))
   })
 })
