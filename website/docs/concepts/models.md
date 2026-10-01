@@ -62,7 +62,7 @@ Each part shows a status in the **Parts** panel and, if it needs attention, in t
 | --- | --- | --- |
 | OK | green | Modeled, or intentionally open (connector) |
 | Open by design | grey | A documented part with no meaningful model |
-| Stubbed | amber | You (or a heuristic) stubbed it open/short/interactive |
+| Stubbed (shown as "placeholder" in the Model Doctor) | amber | You (or a heuristic) stubbed it open/short/interactive |
 | No model | red | Nothing matched, needs your attention |
 
 A red "no model" part contributes nothing to the simulation and appears in the fidelity banner. The [Model Doctor](../guides/model-doctor) is where you fix it: import a `.lib`, get one from an LLM and validate it against ngspice, stub it, or set an interactive-pin panel.

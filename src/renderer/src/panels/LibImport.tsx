@@ -132,7 +132,7 @@ export default function LibImport({
   return (
     <div style={panelStyle} data-testid="lib-import-panel">
       <div style={headerStyle}>
-        <span style={titleStyle}>Import .lib — {mpn}</span>
+        <span style={titleStyle}>Import model file (.lib): {mpn}</span>
         <button style={closeBtnStyle} onClick={onClose} aria-label="Close">
           ✕
         </button>

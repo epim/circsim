@@ -228,6 +228,16 @@ contextBridge.exposeInMainWorld('circsim', {
   },
 
   /**
+   * Open one page of the public docs site in the system browser, by slug
+   * (`guides/energize`, `concepts/models#stubs-and-interactive-pins`). Main
+   * validates the slug and pins the origin. Resolves true when the OS accepted
+   * the open (issue #73).
+   */
+  openDocsPage: (slug: string): Promise<boolean> => {
+    return ipcRenderer.invoke('circsim:openDocsPage', slug) as Promise<boolean>
+  },
+
+  /**
    * Return the licensing texts for the About dialog (Task 27, Spec §14):
    * app version + license, the verbatim ngspice COPYING text, the bundled
    * model-library provenance statement, and docs/licensing.md.

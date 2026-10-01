@@ -22,7 +22,7 @@ A **net** is everything that's electrically connected together: think of it as o
 
 circsim is one screen, three columns, dark by design:
 
-- **Left** has the **Parts** list (every component, color-dotted by whether it has a model) and, below it, the **Model Doctor** (only appears when a part needs attention).
+- **Left** has the **Parts** list (every component, with a dot and a text label saying whether it has a model: OK, Stubbed, No model, or Open by design) and, below it, the **Model Doctor** (only appears when a part needs attention).
 - **Center** has the **3D board**, the **bench shelf** underneath it, and the **scope + logs** dock along the bottom.
 - **Right** has **Ground & Power** (where you designate the ground and supply nets) and the **Board Critic** (the read-only pre-fab audit).
 
@@ -35,7 +35,7 @@ Press **`⚡ Energize`**.
 Energize is the one-click "make it work" button. Behind the scenes it designates a ground net, clips a 5 V supply onto the board's power rail if you haven't attached one, and runs a **DC operating-point** solve: the steady-state voltage everywhere. Then:
 
 - Every net gets a floating **voltage label** on the board.
-- The copper **tints by voltage** (the overlay auto-switches to `Voltage`: blue is low, red is high).
+- The copper **tints by voltage** (the overlay auto-switches to `Voltage`). A **Copper voltage** scale appears at the bottom right of the board with the lowest and highest voltage printed under it; dark violet is the low end and yellow is the high end. The scale is built so it still reads for red-green color blindness: lighter always means higher.
 - Any **LED lights up** at a brightness that tracks its actual current.
 
 That "rail at 4.98 V, output at 2.49 V" readout is the reassurance moment: your board is doing something, and you can see *where*.
@@ -54,8 +54,11 @@ A DC operating point is a single frozen instant. To watch the 555 actually oscil
 
 Press **`Pause`** to freeze and scrub; **`Run`** again to resume.
 
+Stuck on a word? The dotted-underlined terms in the app show a plain definition when you hover or focus them, with a link to the matching docs page. The **Docs** button in the header and the **Help** menu open this site in your browser, and the [glossary](../guides/glossary) lists every term in one place.
+
 ## Where to go next
 
 - **[Tutorial: First Light](./first-light)**: the full guided walkthrough on the simplest possible board: energize an LED, then dial a potentiometer and watch it dim.
 - **[Use the bench & draw leads](../guides/bench-and-leads)** lets you add supplies, generators, and probes, and wire them onto the board.
+- **[Glossary](../guides/glossary)**: every technical term the app uses, in plain words.
 - **[What can circsim tell you?](../concepts/fidelity)**: read this before you trust any number. It's the honest account of the tool's limits.

@@ -41,6 +41,7 @@ import {
   drawScope,
   type CursorPoint,
 } from '../scope/render2d'
+import { TEXT_HINT } from '../ui/palette'
 
 // ─── constants ────────────────────────────────────────────────────────────────
 
@@ -567,7 +568,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   hint: {
     marginLeft: 'auto',
-    color: '#6e7681',
+    color: TEXT_HINT,
     fontSize: 11,
   },
   canvasWrap: {
@@ -590,7 +591,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    color: '#484f58',
+    color: TEXT_HINT,
     fontSize: 13,
     pointerEvents: 'none',
   },

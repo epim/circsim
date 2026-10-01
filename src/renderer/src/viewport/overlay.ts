@@ -8,8 +8,8 @@
  *
  * OverlayController:
  *   setOverlay(mode)                  — switch between 'realistic'|'voltage'|'highlight'
- *   applyNetVoltages(voltages,min,max) — in voltage mode, lerp each net's material color
- *                                         blue→red for min→max voltage
+ *   applyNetVoltages(voltages,min,max): in voltage mode, color each net's material
+ *                                         along the viridis ramp for min→max voltage
  *   getMode()                          — return current mode
  *   getLegend()                        — return legend data (null outside voltage mode)
  *   dispose()                          — restore all materials
@@ -21,21 +21,29 @@
  *   - Each net has one MeshStandardMaterial cloned from the copper base.
  *   - In voltage mode we directly write .color on each net's material.
  *   - In realistic mode we restore the copper base color.
- *   - Blue (0,0,1) at min voltage, red (1,0,0) at max voltage (spec §10.2).
+ *   - Viridis ramp, violet at min voltage to yellow at max (spec §10.2, issue #70).
  *
  * Spec §10.2, §10.3
  */
 
 import * as THREE from 'three'
+import { voltageRampRgb } from '../ui/voltageRamp'
 
 // ─── colour constants ─────────────────────────────────────────────────────────
 
 /** Copper base color (must match copperGeometry.ts) */
 const COPPER_COLOR = new THREE.Color(0xb87333)
 
-/** Voltage overlay: cold = blue (min), hot = red (max) */
-const VOLTAGE_COLD = new THREE.Color(0x0000ff)   // blue
-const VOLTAGE_HOT  = new THREE.Color(0xff0000)   // red
+/**
+ * Voltage overlay ramp: viridis, violet (min) to yellow (max). Shared with the
+ * on-screen legend through ui/voltageRamp so the strip always matches the
+ * board (issue #70: the old blue-to-red lerp was unreadable for red-green
+ * color deficiency and had no legend).
+ */
+function setRampColor(target: THREE.Color, t: number): THREE.Color {
+  const [r, g, b] = voltageRampRgb(t)
+  return target.setRGB(r / 255, g / 255, b / 255, THREE.SRGBColorSpace)
+}
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -51,7 +59,7 @@ export interface LegendStop {
 export interface LegendData {
   minVolts: number
   maxVolts: number
-  /** Ordered array of stops from min (blue) to max (red). */
+  /** Ordered array of stops from min (violet) to max (yellow). */
   stops: LegendStop[]
 }
 
@@ -91,7 +99,7 @@ function buildLegend(minVolts: number, maxVolts: number): LegendData {
   for (let i = 0; i < LEGEND_STOP_COUNT; i++) {
     const t = i / (LEGEND_STOP_COUNT - 1)
     const volts = minVolts + t * (maxVolts - minVolts)
-    const color = new THREE.Color().lerpColors(VOLTAGE_COLD, VOLTAGE_HOT, t)
+    const color = setRampColor(new THREE.Color(), t)
     stops.push({ volts, color })
   }
   return { minVolts, maxVolts, stops }
@@ -157,8 +165,8 @@ export function createOverlayController(
         // Clamp t to [0, 1]
         const t = Math.max(0, Math.min(1, (volts - minVolts) / safeRange))
 
-        // Lerp blue → red
-        col.lerpColors(VOLTAGE_COLD, VOLTAGE_HOT, t)
+        // Viridis ramp, violet (min) to yellow (max)
+        setRampColor(col, t)
         mat.color.copy(col)
         mat.needsUpdate = true
       }

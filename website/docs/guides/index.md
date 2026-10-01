@@ -20,6 +20,7 @@ Task-oriented walkthroughs for specific jobs. If you're new, do the [First Light
 - **[Fix an unresolved part](./model-doctor)**: the Model Doctor: import, stub, or pin-map a part.
 - **[Run the Board Critic audit](./run-critic)**: the read-only pre-fab check.
 - **[Read the warnings & fidelity banner](./warnings)**: what every honesty surface is telling you.
+- **[Glossary](./glossary)**: every technical term the app uses, in plain words.
 
 ## See also
 

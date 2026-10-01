@@ -12,10 +12,11 @@
  *  - CSP: allows worker-src blob: for troika-three-text (Spec §5).
  */
 
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron'
 import { join } from 'path'
 import { readFile, stat } from 'fs/promises'
 import { createProductionSupervisor, unwrapPort } from './simhostSupervisor'
+import { buildMenuTemplate, docsPageUrl } from './docsLinks'
 
 /** Shape of resources/models/index.json (only the fields we read here). */
 interface ModelIndex {
@@ -167,6 +168,16 @@ function registerIpcHandlers(): void {
   })
 
   /**
+   * Open one page of the public docs site in the system browser (issue #73).
+   * The renderer sends only a slug; docsPageUrl() validates it and pins the
+   * origin, so the renderer cannot open an arbitrary URL. Resolves false for a
+   * bad slug or when the OS refuses.
+   */
+  ipcMain.handle('circsim:openDocsPage', async (_event, slug: unknown) => {
+    return openDocsSlug(slug)
+  })
+
+  /**
    * Return the licensing texts surfaced in the About dialog (Task 27, Spec §14):
    *  - appVersion + appLicense (MIT)
    *  - ngspiceCopying: the verbatim ngspice COPYING file shipped beside the
@@ -260,10 +271,42 @@ function registerIpcHandlers(): void {
   })
 }
 
+/** Open a validated docs slug in the system browser; false when invalid or refused. */
+async function openDocsSlug(slug: unknown): Promise<boolean> {
+  const url = docsPageUrl(slug)
+  if (!url) return false
+  try {
+    await shell.openExternal(url)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Replace Electron's default menu with one whose Help entries open the docs (issue #73). */
+function installAppMenu(): void {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(
+      buildMenuTemplate({
+        isMac: process.platform === 'darwin',
+        appName: app.getName(),
+        isPackaged: app.isPackaged,
+        openDocsPage: slug => {
+          void openDocsSlug(slug)
+        },
+        openExternal: url => {
+          void shell.openExternal(url).catch(() => undefined)
+        },
+      }),
+    ),
+  )
+}
+
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
   registerIpcHandlers()
+  installAppMenu()
 
   mainWindow = createWindow()
 

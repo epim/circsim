@@ -14,7 +14,7 @@ Use Energize to get going; use Power On once you're driving the bench on purpose
 When the solve lands:
 
 - **Voltage labels** float over every net on the board.
-- The copper **tints by voltage**: the overlay auto-switches to `Voltage` the first time (blue = low, red = high). Switch back to `Realistic` or `Highlight` in the toolbar any time.
+- The copper **tints by voltage**: the overlay auto-switches to `Voltage` the first time. A **Copper voltage** legend at the bottom right of the board prints the lowest and highest voltage and the color between them (dark violet = low, yellow = high; lighter always means higher, so it works for red-green color blindness too). Switch back to `Realistic` or `Highlight` in the toolbar any time.
 - **LEDs glow** at a brightness driven by their real forward current.
 - The **Net Voltages** tab (bottom-right) lists every net's voltage, and shows a yellow dot cue the first time results land.
 
@@ -22,7 +22,7 @@ The classic reassurance is a rail reading close to what you set ("5 V rail at 4.
 
 ## Read it honestly
 
-circsim tells you *how* it solved, because that governs how much to trust the numbers. If the solve needed a **numerical fallback** (*gmin-stepping* or *source-stepping*, two techniques the solver falls back on when a straight solve won't settle, or a transient assist), a **caveat** appears: *"Check these voltages."* A fallback op can report a misleading 0.000 V on nets it couldn't resolve, so treat those numbers as suspect. A clean direct solve carries no caveat. (You don't need to know how those techniques work, just that seeing the caveat means "double-check.")
+circsim tells you *how* it solved, because that governs how much to trust the numbers. If the solve needed a **numerical fallback** (a *gentler solve*, called *gmin stepping*, or a *ramped solve*, called *source stepping*, two techniques the solver falls back on when a straight solve won't settle, or a transient assist), a **caveat** appears: *"Check these voltages."* A fallback op can report a misleading 0.000 V on nets it couldn't resolve, so treat those numbers as suspect. A clean direct solve carries no caveat. (You don't need to know how those techniques work, just that seeing the caveat means "double-check.")
 
 If the solve fails entirely, you get a plain-language card explaining the likely cause (a missing DC path to ground, a floating node, or an unstable feedback loop) rather than a raw ngspice error. See [reading the warnings](./warnings).
 

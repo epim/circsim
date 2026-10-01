@@ -4,7 +4,7 @@ Before circsim can solve a circuit it needs to know two things: which net is **g
 
 ## Designate ground
 
-Ground becomes SPICE node `0`: the reference for the whole simulation. A circuit with no ground can't be solved, so **Power On stays disabled until ground is set** (Energize sets it for you).
+Ground becomes SPICE node `0`: the reference for the whole simulation. A circuit with no ground can't be solved, so **Power On stays disabled until ground is set** (Energize sets it for you). Until then the panel reads *"Not set: Power On and Run stay disabled until you pick one"*.
 
 circsim suggests a ground net from the net names (`GND`, `AGND`, `VSS`, `0V`, …). To confirm or change it:
 
@@ -24,7 +24,7 @@ Power enters the simulation through a bench instrument, not through the board's 
 - **Suggested supply nets** appear as chips (best candidate first). Click one to clip a **5 V, 0.1 Ω DC supply** onto that net. A net that's already supplied shows a **✓**. Click it to edit the supply instead of stacking a second one.
 - If your rail isn't suggested (an unusual name), click **Choose…** and pick any net from the full list.
 
-The supply shows up as a **PSU** front panel on the [bench shelf](./bench-and-leads), where you can adjust its voltage, series resistance, or re-route its lead.
+The supply shows up as a **Power supply (PSU)** front panel on the [bench shelf](./bench-and-leads), where you can adjust its voltage, series resistance, or re-route its lead.
 
 ## Or just Energize
 

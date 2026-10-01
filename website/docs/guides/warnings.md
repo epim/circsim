@@ -8,24 +8,24 @@ They stack near the top of the window, most-urgent first.
 
 The one you'll see most. It appears whenever the simulation is running with incomplete information.
 
-- **"Results approximate: …"** *(amber)*: one or more parts are **unresolved** or **stubbed**. The voltages and waveforms are correct for the *modeled* part of the circuit, but the real board may differ wherever an unmodeled part matters.
+- **"Results approximate: …"** *(amber)*: one or more parts are **unresolved** (no model found) or **stubbed** (running as a placeholder). The voltages and waveforms are correct for the *modeled* part of the circuit, but the real board may differ wherever an unmodeled part matters.
 - **"Open by design: …"** *(grey-blue)*: the only affected parts are documented opens (a part with no meaningful SPICE model). Lower-key, because this is expected, not a problem.
 
 The banner lists the affected parts and links to **open Model Doctor** (jumps to the first one) and **What can circsim tell you?** ([the fidelity page](../concepts/fidelity)). If many parts are affected it collapses to a count.
 
 You can **minimize** it (the **»** button) to a compact header badge (**⚠ N approximate** or **ⓘ N open by design**) and click the badge to bring it back. You can't fully dismiss it, and it re-expands on its own if the set of affected parts changes: hiding it entirely would misrepresent the simulation. To make it go away for real, [resolve or stub the parts](./model-doctor).
 
-## "Check these voltages": the operating-point caveat
+## "Check these voltages": the operating-point caveat {#op-caveat}
 
-*(persistent, appears after a fallback solve)* The [operating point](./energize) converged, but only through a **numerical fallback**: *gmin-stepping* or *source-stepping* (solver techniques that ease a stubborn circuit toward a solution when a direct solve won't settle), or a transient assist, rather than a clean direct solve. You don't need to understand those methods; the point is that a fallback op can report a misleading `0.000 V` on nets it couldn't resolve, so treat the voltages as suspect and look for the underlying cause (a floating node, a missing ground path). A clean solve shows no caveat.
+*(persistent, appears after a fallback solve)* The [operating point](./energize) converged, but only through a **numerical fallback**: a *gentler solve* (*gmin stepping*) or a *ramped solve* (*source stepping*) (solver techniques that ease a stubborn circuit toward a solution when a direct solve won't settle), or a transient assist, rather than a clean direct solve. You don't need to understand those methods; the point is that a fallback op can report a misleading `0.000 V` on nets it couldn't resolve, so treat the voltages as suspect and look for the underlying cause (a floating node, a missing ground path). A clean solve shows no caveat.
 
-## "The simulator couldn't find a stable solution"
+## "The simulator couldn't find a stable solution" {#convergence}
 
-*(dismissable card)* The solve failed outright. This is usually a **numerical** problem, not a broken circuit. circsim names the likely culprit in plain language and often points at the specific net or part. Common fixes: designate the [correct ground](./ground-and-supply), stub an [unresolved part](./model-doctor), or check for a floating node. Expand **Show raw ngspice log** if you want the engine's own output.
+*(dismissable card)* The solve failed outright. This is usually a **numerical** problem, not a broken circuit. circsim names the likely culprit in plain language and often points at the specific net or part. Common fixes: designate the [correct ground](./ground-and-supply), stub an [unresolved part](./model-doctor), or check for a floating node. Expand **Show the simulator's full log** (the raw ngspice log) if you want the engine's own output.
 
-## "Check this rail": a gated-off rail
+## "Check this rail": a gated-off rail {#rail-note}
 
-*(amber)* A digital chip's VDD net measured near 0 V at the operating point, so circsim used the family-default logic swing instead, which means logic thresholds may be wrong if that rail is actually powered during a transient. Type the real rail voltage into the inline field and click **Set rail voltage** to fix it. See [rail sensing](../reference/architecture#rail-sensing).
+*(amber)* The chip power pin (VDD) of a digital chip reads about 0 V in the steady-state measurement (the operating point), so circsim used the family-default logic swing instead, which means logic thresholds may be wrong if that rail is actually powered during a live run (a transient simulation). Type the real rail voltage into the inline field and click **Set rail voltage** to fix it. See [rail sensing](../reference/architecture#rail-sensing).
 
 ## "Pin map corrected from schematic"
 

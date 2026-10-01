@@ -76,3 +76,40 @@ describe('PartsPanel — documented-open badge (M9)', () => {
     expect(html.match(/status-badge-grey/g)).toHaveLength(1)
   })
 })
+
+describe('PartsPanel - status is not color-only (issue #70)', () => {
+  const resolutions: Resolution[] = [
+    { ref: 'R1', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'r_r1 a b 10k' } },
+    { ref: 'U1', status: 'documented-open', tier: 3, warnings: [], model: { kind: 'stub', mode: 'open' } },
+    { ref: 'U2', status: 'stubbed', tier: 6, warnings: [], model: { kind: 'stub', mode: 'short' } },
+    { ref: 'U9', status: 'unresolved', tier: 6, warnings: [] },
+  ]
+  const parts = [part('R1', '10k'), part('U1', 'CH224K'), part('U2', 'X'), part('U9', 'MYSTERY99')]
+  const html = renderPanel(parts, resolutions)
+
+  it('every row carries a visible text label for its status', () => {
+    expect(html).toMatch(/data-testid="status-label-ok"[^>]*>OK</)
+    expect(html).toMatch(/data-testid="status-label-amber"[^>]*>Stubbed</)
+    expect(html).toMatch(/data-testid="status-label-red"[^>]*>No model</)
+    expect(html).toMatch(/data-testid="status-label-grey"[^>]*>Open by design</)
+  })
+
+  it('the four dots differ by shape, not only by color', () => {
+    const shapeOf = (badge: string): string => {
+      const m = html.match(new RegExp(`style="([^"]*)"[^>]*data-testid="status-badge-${badge}"`))
+      expect(m).not.toBeNull()
+      // Drop the color-carrying declarations; what is left is the shape.
+      return m![1]
+        .split(';')
+        .filter(d => d && !/^(background|border-color)\s*:/.test(d.trim()))
+        .join(';')
+    }
+    const shapes = ['ok', 'amber', 'red', 'grey'].map(shapeOf)
+    expect(new Set(shapes).size).toBe(4)
+  })
+
+  it('the tooltip explains the status in plain language', () => {
+    expect(html).toContain('placeholder')
+    expect(html).toContain('contributes nothing to the simulation')
+  })
+})

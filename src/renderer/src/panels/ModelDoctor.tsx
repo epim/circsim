@@ -5,7 +5,8 @@
  * resolution status ≠ ok. Per part:
  *   - amber/red status pill + warnings (grey "open by design" + informational
  *     why-note for documented opens — M9)
- *   - actions: [Stub open] [Stub short] [Interactive pins] [Import .lib…] [Ask your LLM]
+ *   - actions: [Ignore this part] [Replace with a wire] [Interactive pins] [Import model file]
+ *     [Ask your LLM] (plain-language labels, technical terms in tooltips: issue #73)
  *   - a pin-map editor: a table mapping each pad number ↔ model terminal name
  *
  * Every change re-runs resolveAll via the store and flags `deckDirty`
@@ -26,6 +27,9 @@ import LibImport from './LibImport'
 import type { PadInfo } from '../../../core/models/llmPrompt'
 import type { LlmAssistProps } from './LlmAssist'
 import type { LibImportProps } from './LibImport'
+import { TEXT_HINT } from '../ui/palette'
+import { termTitle } from '../ui/glossary'
+import DocsLink from '../ui/docsLink'
 
 export interface ModelDoctorHandlers {
   /** Open the .lib import flow for a part (Task 25). */
@@ -65,6 +69,9 @@ export default function ModelDoctor(props: ModelDoctorHandlers): React.ReactElem
       <div style={headerStyle}>
         Model Doctor
         <span style={countStyle}>{problems.length}</span>
+        <DocsLink to="guides/model-doctor" testId="doctor-docs-link" style={{ marginLeft: 8, fontWeight: 400, fontSize: 11 }}>
+          What is this?
+        </DocsLink>
       </div>
       <div style={bodyStyle}>
         {problems.map(res => {
@@ -79,6 +86,8 @@ export default function ModelDoctor(props: ModelDoctorHandlers): React.ReactElem
 
 export interface DoctorMenuItem {
   label: string
+  /** Tooltip with the technical term and a plain definition (issue #73). */
+  hint?: string
   onSelect: () => void
 }
 
@@ -154,6 +163,7 @@ function MenuItemButton({
   return (
     <button
       role="menuitem"
+      title={item.hint}
       style={hover ? { ...menuItemStyle, background: '#3a2f4a' } : menuItemStyle}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -308,12 +318,19 @@ function DoctorRow({
             ...pillStyle,
             background: isOpenByDesign ? '#95a5a6' : isStubbed ? '#f1c40f' : '#e74c3c',
           }}
+          title={
+            isOpenByDesign
+              ? 'Open by design: this part is deliberately not simulated.'
+              : isStubbed
+                ? termTitle('stub')
+                : termTitle('unresolved')
+          }
         >
-          {isOpenByDesign ? 'open by design' : isStubbed ? 'stubbed' : 'no model'}
+          {isOpenByDesign ? 'open by design' : isStubbed ? 'placeholder' : 'no model'}
         </span>
         <strong>{res.ref}</strong>
         <span style={{ color: '#aaa' }}>{part.value || '—'}</span>
-        <span style={{ color: '#777', fontSize: 11 }}>{part.libId}</span>
+        <span style={{ color: TEXT_HINT, fontSize: 11 }}>{part.libId}</span>
       </div>
 
       {/* M9: the why-not-modeled note — informational, not an error. */}
@@ -332,24 +349,38 @@ function DoctorRow({
       )}
 
       <div style={actionsStyle}>
-        <button style={btnStyle} onClick={handleImportLib}>
-          Import .lib…
+        <button
+          style={btnStyle}
+          onClick={handleImportLib}
+          title="Import a SPICE model file (.lib) for this part, for example one downloaded from the manufacturer"
+        >
+          Import model file (.lib)…
         </button>
         <button
           style={{ ...btnStyle, background: (pinEditorOpen || forcePinMapOpen) ? '#2c4a2c' : undefined }}
           onClick={() => { setPinEditorOpen(o => !o); setForcePinMapOpen(false) }}
+          title={termTitle('pinMap')}
         >
-          {pinEditorOpen ? 'Hide pin map' : 'Pin map'}
+          {pinEditorOpen ? 'Hide pin matching' : 'Pin matching'}
         </button>
-        <button style={btnStyle} onClick={() => store.getState().stubPart(res.ref, 'open')}>
-          Stub open
+        <button
+          style={btnStyle}
+          onClick={() => store.getState().stubPart(res.ref, 'open')}
+          title={termTitle('stubOpen')}
+          data-testid="doctor-stub-open"
+        >
+          Ignore this part
         </button>
         <DoctorMoreMenu
           open={moreOpen}
           onToggle={() => setMoreOpen(o => !o)}
           onClose={() => setMoreOpen(false)}
           items={[
-            { label: 'Stub short', onSelect: () => store.getState().stubPart(res.ref, 'short') },
+            {
+              label: 'Replace with a wire',
+              hint: termTitle('stubShort'),
+              onSelect: () => store.getState().stubPart(res.ref, 'short'),
+            },
             { label: 'Interactive pins', onSelect: () => store.getState().stubPart(res.ref, 'interactive-pins') },
             { label: 'Ask your LLM', onSelect: handleAskLlm },
           ]}
@@ -439,7 +470,9 @@ function PinMapEditor({ part, res }: { part: Part; res: Resolution }): React.Rea
 
   return (
     <div style={pinEditorStyle}>
-      <div style={pinEditorHeaderStyle}>Pin map — pad ↔ model terminal</div>
+      <div style={pinEditorHeaderStyle} title={termTitle('pinMap')}>
+        Pin matching: which board pad goes to which model terminal
+      </div>
       <datalist id={listId}>
         {terminalCandidates.map(name => (
           <option key={name} value={name} />
