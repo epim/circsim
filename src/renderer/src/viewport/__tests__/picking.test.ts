@@ -909,7 +909,7 @@ describe('createPicker: instanced component boxes', () => {
 // ─── scale: pick cost on the 1500-part, 20000-track board (#58) ───────────────
 
 describe('createPicker: pick cost at scale (#58)', () => {
-  it('60 hover picks across the synthetic big board average under 5 ms each', () => {
+  it('a hover pick on the synthetic big board costs a small fraction of raycasting all of it', () => {
     const board = makeSyntheticBoard(BIG_BOARD)
     const picker = createPicker(() => {})
     const a = assembleBoard(board, picker)
@@ -928,10 +928,37 @@ describe('createPicker: pick cost at scale (#58)', () => {
     let s = 12345
     const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296 }
     const pts = Array.from({ length: 60 }, () => ({ x: rnd() * 2 - 1, y: rnd() * 2 - 1 }))
-    const start = performance.now()
-    for (const p of pts) picker.onPointerMove(p, cam)
-    const perMove = (performance.now() - start) / pts.length
-    // Pre-fix this was about 25 ms per move here (11.8 ms in the issue).
-    expect(perMove).toBeLessThan(5)
+
+    // Indexed hover pick: mean per move over 60 positions, best of 3 passes.
+    let indexed = Infinity
+    for (let rep = 0; rep < 3; rep++) {
+      const start = performance.now()
+      for (const p of pts) picker.onPointerMove(p, cam)
+      indexed = Math.min(indexed, (performance.now() - start) / pts.length)
+    }
+
+    // Reference on the same board, camera and machine: the triangle-by-triangle
+    // raycast of every copper and component mesh that hover picking used before
+    // #58. Ten positions are enough, it is the slow side.
+    const rc = new THREE.Raycaster()
+    const refPts = pts.slice(0, 10)
+    const refStart = performance.now()
+    let refHits = 0
+    for (const p of refPts) {
+      rc.setFromCamera(new THREE.Vector2(p.x, p.y), cam)
+      refHits += rc.intersectObjects([a.copperGroup, a.componentGroup], true).length
+    }
+    const brute = (performance.now() - refStart) / refPts.length
+    expect(refHits).toBeGreaterThan(0) // the reference really walks geometry
+
+    // Intent: hover picking resolves copper through the spatial index instead of
+    // scanning every primitive (about 25 ms per move before the fix, 11.8 ms in
+    // the issue). No absolute millisecond bound: CI runners are up to 5x slower
+    // than a dev machine, so compare against the full raycast on the same
+    // runner, where its speed cancels. The indexed pick is a few thousandths of
+    // the full cast; requiring under a tenth passes with about 25x headroom and
+    // still fails when a pick falls back to scanning the board.
+    const ratio = indexed / Math.max(brute, 0.001)
+    expect(ratio).toBeLessThan(0.1)
   })
 })

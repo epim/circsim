@@ -250,17 +250,13 @@ describe('parseSexpr – real-world KiCad patterns', () => {
 // ─── performance ─────────────────────────────────────────────────────────────
 
 describe('parseSexpr – performance', () => {
-  it('parses a 1 MB synthetic file in < 500 ms', () => {
-    // Generate a synthetic ~1 MB KiCad-style file
+  /** A synthetic KiCad-style file: `fps` footprints with nested pads plus 10 tracks per footprint. */
+  function synthetic(fps: number): string {
     const lines: string[] = ['(kicad_pcb (version 20221018)']
-
-    // Add many net declarations
     for (let i = 0; i < 1000; i++) {
       lines.push(`  (net ${i} "NET_${i}")`)
     }
-
-    // Add many footprints with nested pads
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < fps; i++) {
       lines.push(`  (footprint "Resistor_SMD:R_0805_2012Metric" (layer "F.Cu")`)
       lines.push(`    (at ${i * 2} 10 0)`)
       lines.push(`    (fp_text reference "R${i}" (at 0 -1.65) (layer "F.SilkS"))`)
@@ -271,24 +267,46 @@ describe('parseSexpr – performance', () => {
       lines.push(`      (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) (net ${(i + 1) % 1000} "NET_${(i + 1) % 1000}"))`)
       lines.push(`  )`)
     }
-
-    // Add many track segments
-    for (let i = 0; i < 2000; i++) {
+    for (let i = 0; i < fps * 10; i++) {
       lines.push(`  (segment (start ${i * 0.5} 10) (end ${i * 0.5 + 0.5} 10) (width 0.25) (layer "F.Cu") (net ${i % 1000}))`)
     }
-
     lines.push(')')
+    return lines.join('\n')
+  }
 
-    const text = lines.join('\n')
-    // Ensure we actually have at least 1 MB
-    const sizeKB = Buffer.byteLength(text, 'utf8') / 1024
-    expect(sizeKB).toBeGreaterThan(100) // at minimum 100 KB for this test to be valid
+  /** Best-of-N wall time (ms) to parse `text`, plus the last result. */
+  function timeParse(text: string, reps: number): { best: number; result: SExpr } {
+    let best = Infinity
+    let result: SExpr = []
+    for (let r = 0; r < reps; r++) {
+      const t0 = performance.now()
+      result = parseSexpr(text)
+      best = Math.min(best, performance.now() - t0)
+    }
+    return { best, result }
+  }
 
-    const start = performance.now()
-    const result = parseSexpr(text)
-    const ms = performance.now() - start
+  it('parses a large synthetic file in time linear in its size', () => {
+    const smallText = synthetic(50)
+    const bigText = synthetic(400)
+    // Guard the premise: the big input is large and about 8x the small one.
+    expect(Buffer.byteLength(bigText, 'utf8') / 1024).toBeGreaterThan(100)
+    const growth = bigText.length / smallText.length
+    expect(growth).toBeGreaterThan(4)
 
-    expect(Array.isArray(result)).toBe(true)
-    expect(ms).toBeLessThan(500)
+    parseSexpr(smallText) // warm the JIT so the small run is not the cold one
+    const small = timeParse(smallText, 5)
+    const big = timeParse(bigText, 5)
+    expect(Array.isArray(small.result)).toBe(true)
+    expect(Array.isArray(big.result)).toBe(true)
+
+    // Intent: guard against a parser that goes super-linear (string slicing per
+    // token, repeated array copies). No absolute millisecond bound: CI runners
+    // are up to 5x slower than a dev machine, so compare two sizes on the same
+    // machine. A linear parser scales time by about `growth` (about 7x); a
+    // quadratic one by growth^2 (about 50x). Allowing 3x the size growth passes
+    // with wide headroom for noise and still fails on quadratic behavior.
+    const ratio = big.best / Math.max(small.best, 0.05)
+    expect(ratio).toBeLessThan(growth * 3)
   })
 })
