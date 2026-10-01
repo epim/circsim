@@ -372,12 +372,14 @@ export function drawScope(input: ScopeDrawInput): void {
     ctx.lineWidth = 1.5
     ctx.beginPath()
 
+    // Consecutive samples are joined even across empty pixel columns, as a
+    // scope in vector mode does: when the time base is finer than the sim step
+    // (100 us steps under 1 ms/div, issue #25) most columns hold no sample, and
+    // breaking the path at each of them left only zero-length segments, which
+    // is a blank trace. Only a column with no sample at all is skipped.
     let pathStarted = false
     for (let col = 0; col < pixelWidth; col++) {
-      if (isNaN(mins[col])) {
-        pathStarted = false
-        continue
-      }
+      if (isNaN(mins[col])) continue
       const x = (col / pixelWidth) * width
       const yMin = valueToPixel(mins[col], spec.vMin, spec.vMax, height)
       const yMax = valueToPixel(maxs[col], spec.vMin, spec.vMax, height)

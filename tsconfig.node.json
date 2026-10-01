@@ -3,12 +3,17 @@
   "include": [
     "electron.vite.config.*",
     "vite.simhost.config.*",
+    "vite.cli.config.*",
+    "src/cli/**/*",
     "src/main/**/*",
     "src/preload/**/*",
     "src/simhost/**/*",
     "src/core/**/*",
     "scripts/**/*",
     "test/**/*"
+  ],
+  "exclude": [
+    "src/main/__tests__/respawn.integration.test.ts"
   ],
   "compilerOptions": {
     "composite": true,

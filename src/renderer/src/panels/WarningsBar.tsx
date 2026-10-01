@@ -10,14 +10,21 @@
  *     an expandable raw ngspice log section. Dismissable.
  *   - Op fallback caveat: persistent + non-dismissable while the latest
  *     operating point came from a fallback rung (gmin/source/transient-op) —
- *     its voltages, especially 0.000 V readings, may be unreliable (F1).
+ *     its voltages, especially 0.000 V readings, may be unreliable (F1). The
+ *     banner reads in plain language; which rung ran sits behind a Details
+ *     disclosure so solver vocabulary is never the first thing a user sees.
+ *   - Undriven nets: nets with no path to ground and no driver, which the deck
+ *     holds at 0 V through a 1 GOhm bleed. Listed by name so a bled 0 V is never
+ *     mistaken for a measurement (issue #43). Cleared by any deck-dirtying edit.
  *   - Board outline warnings (#50): load-time diagnostics from the Edge.Cuts
  *     stitcher (no outline found, open chain, unsupported primitive). Persistent
  *     for the loaded board; without them the 3D view just shows copper floating
  *     in space or a bounding-box substrate with no explanation.
  *   - Bench-restart toast: brief "bench restarted" notice (window/memory), with
  *     the sequential-logic caveat when digital parts are present. Dismissable.
- *   - Crash toast: SimHost crashed — auto-recovering. Dismissable.
+ *   - Crash toast: SimHost crashed. Auto-recovering, or (fatal, after 5 rapid
+ *     crashes) stopped, with the instruction to quit and reopen circsim.
+ *     Dismissable.
  *
  * UI-only; the derived banner list + toast/card STATE are unit-tested in the
  * store (fidelityBannerItems, ingestEvent → benchRestartToast/convergenceCard).
@@ -31,9 +38,12 @@ import {
   opCaveatMessage,
   isFidelityMinimized,
   type AppStore,
+  type AppState,
   type RailNote,
 } from '../store/appStore'
 import { SCHEMATIC_PINMAP_PREFIX } from '../../../core/models/libraryMatch'
+import type { ConvergenceCulprit } from '../store/convergenceCulprit'
+import { openDocsAndReport } from './docsLink'
 
 /**
  * Apply a manual rail-voltage override (from the gated-off note's inline entry)
@@ -56,6 +66,33 @@ export function _applyRailOverride(
 /** Stable empty list so the no-board case does not allocate per render. */
 const NO_WARNINGS: readonly string[] = []
 
+/**
+ * Select the part or net a convergence failure named, so the card turns the
+ * diagnosis into a click (#71). A part is revealed in the Model Doctor (nonce
+ * based, so it works twice in a row) and selected in the viewport; a net is
+ * selected by its KiCad name. Returns false, changing nothing, when the label
+ * maps to no board net (an unmapped SPICE node name). Exported for unit tests.
+ */
+export function _revealCulprit(store: AppStore, culprit: ConvergenceCulprit): boolean {
+  if (culprit.kind === 'part') {
+    store.getState().revealInDoctor(culprit.label)
+    return true
+  }
+  const net = culpritNet(store.getState().circuit, culprit)
+  if (!net) return false
+  store.getState().selectNet(net.id)
+  return true
+}
+
+/** The board net a net culprit refers to, or undefined (part culprit / unmapped). */
+function culpritNet(
+  circuit: AppState['circuit'],
+  culprit: ConvergenceCulprit,
+): { id: number } | undefined {
+  if (culprit.kind !== 'net') return undefined
+  return circuit?.nets.find(n => n.kicadName === culprit.label)
+}
+
 export default function WarningsBar(): React.ReactElement | null {
   const store = useAppStoreApi()
   const resolutions = useApp(s => s.resolutions)
@@ -64,6 +101,7 @@ export default function WarningsBar(): React.ReactElement | null {
   const crashNotice = useApp(s => s.crashNotice)
   const opCaveat = useApp(s => s.opCaveat)
   const railNotes = useApp(s => s.railNotes)
+  const undrivenNets = useApp(s => s.undrivenNets)
   const fidelityMinimizedSig = useApp(s => s.fidelityMinimizedSig)
   const board = useApp(s => s.board)
   const outlineWarnings = board ? board.outline.warnings : NO_WARNINGS
@@ -86,6 +124,13 @@ export default function WarningsBar(): React.ReactElement | null {
   )
 
   const [rawOpen, setRawOpen] = useState(false)
+  // #62: set when the "What can circsim tell you?" link could not open anything.
+  const [docsMessage, setDocsMessage] = useState<string | null>(null)
+  const circuit = useApp(s => s.circuit)
+  const openDocs = (): void => {
+    if (typeof window === 'undefined') return
+    void openDocsAndReport(window.circsim, setDocsMessage)
+  }
 
   // "open Model Doctor": the Doctor drawer (left dock) is already visible
   // whenever problems exist; revealInDoctor selects the first problem part and
@@ -102,6 +147,7 @@ export default function WarningsBar(): React.ReactElement | null {
     crashNotice ||
     opCaveat ||
     railNotes.length > 0 ||
+    undrivenNets.length > 0 ||
     schematicPinNotes.length > 0 ||
     outlineWarnings.length > 0
   if (!anything) return null
@@ -111,10 +157,20 @@ export default function WarningsBar(): React.ReactElement | null {
       {/* ── Crash toast ───────────────────────────────────────────────────── */}
       {crashNotice && (
         <div style={crashStyle}>
-          <strong>Simulator restarted.</strong>{' '}
-          {crashNotice.willRespawn
-            ? 'The simulation engine crashed and is recovering automatically.'
-            : 'The simulation engine crashed and could not be restarted.'}
+          {crashNotice.willRespawn ? (
+            <>
+              <strong>Simulator restarted.</strong>{' '}
+              The simulation engine crashed and is recovering automatically.
+            </>
+          ) : (
+            <>
+              <strong>Simulator stopped.</strong>{' '}
+              The simulation engine crashed repeatedly and could not be restarted.{' '}
+              <strong data-testid="crash-restart-hint">Quit and reopen circsim</strong> to
+              simulate again; your board file is untouched.
+            </>
+          )}
+          {crashNotice.pausedRunLost && ' Your paused run was lost; press Run to start it again.'}
           <button style={dismissBtn} onClick={() => store.setState({ crashNotice: null })}>
             ×
           </button>
@@ -154,11 +210,14 @@ export default function WarningsBar(): React.ReactElement | null {
           {convergenceCard.culprit && (
             <div style={{ marginTop: 4 }} data-testid="convergence-culprit">
               The simulator reported trouble converging around{' '}
-              <span style={refStyle}>
-                {convergenceCard.culprit.kind === 'net'
-                  ? `net "${convergenceCard.culprit.label}"`
-                  : convergenceCard.culprit.label}
-              </span>
+              <CulpritName
+                culprit={convergenceCard.culprit}
+                actionable={
+                  convergenceCard.culprit.kind === 'part' ||
+                  culpritNet(circuit, convergenceCard.culprit) !== undefined
+                }
+                onReveal={() => _revealCulprit(store, convergenceCard.culprit!)}
+              />
               {convergenceCard.culprit.detail ? ` (${convergenceCard.culprit.detail})` : ''}.
             </div>
           )}
@@ -175,7 +234,19 @@ export default function WarningsBar(): React.ReactElement | null {
       {/* ── Op fallback caveat (persistent, non-dismissable — F1) ─────────── */}
       {opCaveat && (
         <div style={opCaveatStyle} data-testid="op-caveat">
-          <strong>Check these voltages.</strong> {opCaveatMessage(opCaveat.method)}
+          <strong>Check these voltages.</strong>{' '}
+          {opCaveat.method === 'failed' ? (
+            opCaveatMessage(opCaveat.method)
+          ) : (
+            <>
+              These voltages needed a workaround to solve; treat 0.000 V readings as unknown.
+              {/* Solver vocabulary (which fallback rung ran) stays one click away. */}
+              <details style={opCaveatDetailsStyle} data-testid="op-caveat-details">
+                <summary style={opCaveatSummaryStyle}>Details</summary>
+                {opCaveatMessage(opCaveat.method)}
+              </details>
+            </>
+          )}
         </div>
       )}
 
@@ -230,21 +301,18 @@ export default function WarningsBar(): React.ReactElement | null {
             title="What this simulation can and can't tell you (docs)"
             role="button"
             tabIndex={0}
-            onClick={() => {
-              if (typeof window !== 'undefined' && window.circsim?.openDocs) {
-                void window.circsim.openDocs()
-              }
-            }}
+            onClick={openDocs}
             onKeyDown={e => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                if (typeof window !== 'undefined' && window.circsim?.openDocs) {
-                  void window.circsim.openDocs()
-                }
-              }
+              if (e.key === 'Enter' || e.key === ' ') openDocs()
             }}
           >
             What can circsim tell you?
           </span>
+          {docsMessage && (
+            <div style={{ marginTop: 4 }} role="alert" data-testid="docs-open-error">
+              {docsMessage}
+            </div>
+          )}
         </div>
       )}
 
@@ -252,6 +320,25 @@ export default function WarningsBar(): React.ReactElement | null {
       {railNotes.map(note => (
         <RailNoteRow key={`${note.ref}:${note.kicadName}`} note={note} store={store} />
       ))}
+
+      {/* ── Undriven nets (issue #43): held at 0 V by a bleed, not measured ── */}
+      {undrivenNets.length > 0 && (
+        <div style={railNoteStyle} data-testid="undriven-nets">
+          <strong>Undriven nets held at 0 V:</strong>{' '}
+          {undrivenNets.map((n, i) => (
+            <span key={n.netId}>
+              {i > 0 && ', '}
+              <span style={refStyle}>{n.kicadName}</span>
+            </span>
+          ))}
+          . Nothing on the board drives {undrivenNets.length === 1 ? 'this net' : 'these nets'}, so
+          circsim ties {undrivenNets.length === 1 ? 'it' : 'each'} to ground through 1 GOhm to keep
+          the simulation solvable. On the real board{' '}
+          {undrivenNets.length === 1 ? 'it floats' : 'they float'}, and anything{' '}
+          {undrivenNets.length === 1 ? 'it feeds' : 'they feed'} reads a value the hardware would
+          not guarantee.
+        </div>
+      )}
 
       {/* ── Board outline warnings (#50): why the substrate looks wrong ───── */}
       {outlineWarnings.map((w, i) => (
@@ -274,6 +361,39 @@ export default function WarningsBar(): React.ReactElement | null {
         </div>
       ))}
     </div>
+  )
+}
+
+/**
+ * The part or net a convergence failure named. A button (reveal in the Model
+ * Doctor / select on the board) when there is something to select, plain text
+ * otherwise (an unmapped SPICE node name).
+ */
+function CulpritName({
+  culprit,
+  actionable,
+  onReveal,
+}: {
+  culprit: ConvergenceCulprit
+  actionable: boolean
+  onReveal: () => void
+}): React.ReactElement {
+  const text = culprit.kind === 'net' ? `net "${culprit.label}"` : culprit.label
+  if (!actionable) return <span style={refStyle}>{text}</span>
+  return (
+    <button
+      style={culpritBtnStyle}
+      data-testid="convergence-culprit-link"
+      data-kind={culprit.kind}
+      title={
+        culprit.kind === 'part'
+          ? `Select ${culprit.label} and show its Model Doctor card`
+          : `Select net ${culprit.label} on the board`
+      }
+      onClick={onReveal}
+    >
+      {text}
+    </button>
   )
 }
 
@@ -385,6 +505,15 @@ const opCaveatStyle: React.CSSProperties = {
   color: '#ffd9a0',
   borderTop: '1px solid #5a4418',
 }
+const opCaveatDetailsStyle: React.CSSProperties = {
+  marginTop: 4,
+  fontSize: 11.5,
+  opacity: 0.85,
+}
+const opCaveatSummaryStyle: React.CSSProperties = {
+  cursor: 'pointer',
+  textDecoration: 'underline',
+}
 // Gated-off rail note: same amber caveat tone as the op fallback, with an inline
 // action row for the manual override.
 const railNoteStyle: React.CSSProperties = {
@@ -461,6 +590,17 @@ const refStyle: React.CSSProperties = {
 const linkStyle: React.CSSProperties = {
   color: '#ffd27a',
   textDecoration: 'underline',
+}
+const culpritBtnStyle: React.CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  borderBottom: '1px dashed currentColor',
+  color: '#ffd27a',
+  cursor: 'pointer',
+  font: 'inherit',
+  fontFamily: 'monospace',
+  fontWeight: 600,
+  padding: 0,
 }
 const dismissBtn: React.CSSProperties = {
   marginLeft: 'auto',

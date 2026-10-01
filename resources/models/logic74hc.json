@@ -1,17 +1,20 @@
 {
-  "$provenance": "Provenance: written for circsim from 74HC-family datasheet pinouts and typical propagation delays, MIT. These are XSPICE behavioral templates (adc_bridge -> ngspice digital primitive(s) -> dac_bridge). No third-party proprietary 74xx model text is copied; only the datasheet pinouts (which pin is which gate's input/output) and datasheet-typical propagation delays (tpd) inform the templates. Verified against ngspice-46 digital.cm: the inverter primitive is d_inverter and the buffer is d_buffer (NOT d_inv/d_buf); gates are d_and/d_nand/d_or/d_nor/d_xor/d_xnor; the D flip-flop is d_dff with terminal order (data clk set reset | q qbar). The Schmitt-trigger HC14 does NOT use the adc_bridge path: each gate expands to a self-referential behavioral B-source whose flip state is held in the OUTPUT node voltage, giving TRUE hysteresis (state retention). Switching thresholds are FRACTIONS of vHigh (schmittAdc inLowFrac/inHighFrac = V_T-/V_T+); while the output is HIGH the input must rise past V_T+ to flip it LOW, while LOW it must fall past V_T- to flip HIGH. Validated against real ngspice-46: RC Schmitt astables self-oscillate and a static in-band input holds the previous rail rather than an undefined mid-rail level.",
+  "$provenance": "Provenance: written for circsim from 74HC-family datasheet pinouts, typical propagation delays and typical output drive, MIT. Output stage (family.output): 40 ohm source resistance at 5 V (44 ohm at 4.5 V, from the datasheet VOH figure of 4.32 V typical at IO=4 mA, 0.18 V / 4 mA), drive-current limit 25 mA from the absolute-maximum continuous output current of the family; the emitter models it as a saturating current source (I = iMax*tanh(dV/(rOhms*iMax))), so a bare LED or a short to ground is bounded instead of ideal. These are XSPICE behavioral templates (adc_bridge -> ngspice digital primitive(s) -> dac_bridge). No third-party proprietary 74xx model text is copied; only the datasheet pinouts (which pin is which gate's input/output) and datasheet-typical propagation delays (tpd) inform the templates. Verified against ngspice-46 digital.cm: the inverter primitive is d_inverter and the buffer is d_buffer (NOT d_inv/d_buf); gates are d_and/d_nand/d_or/d_nor/d_xor/d_xnor; the D flip-flop is d_dff with terminal order (data clk set reset | q qbar). The Schmitt-trigger HC14 does NOT use the adc_bridge path: each gate expands to a self-referential behavioral B-source whose flip state is held in the OUTPUT node voltage, giving TRUE hysteresis (state retention). Switching thresholds are FRACTIONS of vHigh (schmittAdc inLowFrac/inHighFrac = V_T-/V_T+); while the output is HIGH the input must rise past V_T+ to flip it LOW, while LOW it must fall past V_T- to flip HIGH. Validated against real ngspice-46: RC Schmitt astables self-oscillate and a static in-band input holds the previous rail rather than an undefined mid-rail level.",
   "$schema": {
     "description": "Each template expands to: one adc_bridge per logic-input pin, the listed digital primitive instances wired on internal d_* nodes, and one dac_bridge per logic-output pin. ADC/DAC thresholds and rails come from the chosen logic family rail (vHigh). Pin roles are by package-independent SIGNAL name; pinMaps translate package pad numbers to signal names.",
     "gate.prim": "ngspice digital primitive name (d_inverter|d_buffer|d_and|d_nand|d_or|d_nor|d_xor|d_xnor|d_dff)",
     "gate.in": "array of signal names feeding this gate's input(s)",
     "gate.out": "signal name produced (also a chip output pin if listed in outputs)",
-    "delaysNs": "rise_delay/fall_delay applied to every gate (datasheet-typical tpd at 5 V)"
+    "delaysNs": "rise_delay/fall_delay applied to every gate (datasheet-typical tpd at 5 V)",
+    "family.output": "Output stage emitted between every gate output and its pad: atVolts is the rail the figures are quoted at, rOhms the source resistance there, iMaxMa the drive-current limit there. Scaled with the rail in use (resistance inversely, current limit proportionally). Omit for an ideal output.",
+    "activeLow": "Optional template array of input signal names that are active LOW (PRE_N, CLR_N, MR_N). The emitter inverts each before it reaches a d_dff set or reset pin, which are active HIGH."
   },
   "family": {
     "name": "74HC",
     "vHighDefault": 5.0,
     "adc": { "inLowFrac": 0.3, "inHighFrac": 0.7 },
-    "schmittAdc": { "inLowFrac": 0.28, "inHighFrac": 0.55 }
+    "schmittAdc": { "inLowFrac": 0.28, "inHighFrac": 0.55 },
+    "output": { "atVolts": 5, "rOhms": 40, "iMaxMa": 25 }
   },
   "templates": {
     "74HC00": {
@@ -127,6 +130,7 @@
       ],
       "inputs": ["1D", "1CLK", "1PRE_N", "1CLR_N", "2D", "2CLK", "2PRE_N", "2CLR_N"],
       "outputs": ["1Q", "1Q_N", "2Q", "2Q_N"],
+      "activeLow": ["1PRE_N", "1CLR_N", "2PRE_N", "2CLR_N"],
       "power": { "vcc": "VCC", "gnd": "GND" },
       "delaysNs": 18,
       "pinMaps": {
@@ -172,6 +176,7 @@
       ],
       "inputs": ["A", "B", "CLK", "CLR_N"],
       "outputs": ["Q0", "Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7"],
+      "activeLow": ["CLR_N"],
       "power": { "vcc": "VCC", "gnd": "GND" },
       "delaysNs": 21,
       "pinMaps": {
@@ -204,6 +209,7 @@
       ],
       "inputs": ["DS", "SHCP", "STCP", "MR_N", "OE_N"],
       "outputs": ["Q0", "Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q7S"],
+      "activeLow": ["MR_N"],
       "power": { "vcc": "VCC", "gnd": "GND" },
       "delaysNs": 24,
       "pinMaps": {
@@ -211,6 +217,63 @@
           "1": "Q1", "2": "Q2", "3": "Q3", "4": "Q4", "5": "Q5", "6": "Q6", "7": "Q7",
           "8": "GND", "9": "Q7S", "10": "MR_N", "11": "SHCP", "12": "STCP", "13": "OE_N",
           "14": "DS", "15": "Q0", "16": "VCC"
+        }
+      }
+    },
+    "74HC02": {
+      "desc": "Quad 2-input NOR",
+      "gates": [
+        { "prim": "d_nor", "in": ["1A", "1B"], "out": "1Y" },
+        { "prim": "d_nor", "in": ["2A", "2B"], "out": "2Y" },
+        { "prim": "d_nor", "in": ["3A", "3B"], "out": "3Y" },
+        { "prim": "d_nor", "in": ["4A", "4B"], "out": "4Y" }
+      ],
+      "inputs": ["1A", "1B", "2A", "2B", "3A", "3B", "4A", "4B"],
+      "outputs": ["1Y", "2Y", "3Y", "4Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 9,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1Y", "2": "1A", "3": "1B", "4": "2Y", "5": "2A", "6": "2B",
+          "7": "GND", "8": "3A", "9": "3B", "10": "3Y", "11": "4A", "12": "4B",
+          "13": "4Y", "14": "VCC"
+        }
+      }
+    },
+    "74HC10": {
+      "desc": "Triple 3-input NAND",
+      "gates": [
+        { "prim": "d_nand", "in": ["1A", "1B", "1C"], "out": "1Y" },
+        { "prim": "d_nand", "in": ["2A", "2B", "2C"], "out": "2Y" },
+        { "prim": "d_nand", "in": ["3A", "3B", "3C"], "out": "3Y" }
+      ],
+      "inputs": ["1A", "1B", "1C", "2A", "2B", "2C", "3A", "3B", "3C"],
+      "outputs": ["1Y", "2Y", "3Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 9,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1A", "2": "1B", "3": "2A", "4": "2B", "5": "2C", "6": "2Y",
+          "7": "GND", "8": "3Y", "9": "3A", "10": "3B", "11": "3C", "12": "1Y",
+          "13": "1C", "14": "VCC"
+        }
+      }
+    },
+    "74HC20": {
+      "desc": "Dual 4-input NAND",
+      "gates": [
+        { "prim": "d_nand", "in": ["1A", "1B", "1C", "1D"], "out": "1Y" },
+        { "prim": "d_nand", "in": ["2A", "2B", "2C", "2D"], "out": "2Y" }
+      ],
+      "inputs": ["1A", "1B", "1C", "1D", "2A", "2B", "2C", "2D"],
+      "outputs": ["1Y", "2Y"],
+      "power": { "vcc": "VCC", "gnd": "GND" },
+      "delaysNs": 9,
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SO)-?14.*": {
+          "1": "1A", "2": "1B", "4": "1C", "5": "1D", "6": "1Y",
+          "7": "GND", "8": "2Y", "9": "2A", "10": "2B", "12": "2C", "13": "2D",
+          "14": "VCC"
         }
       }
     }

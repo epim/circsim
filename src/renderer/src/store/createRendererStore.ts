@@ -15,10 +15,24 @@
 
 import { createAppStore, type AppStore } from './appStore'
 import { createPortSimClient } from '../ipc/simClient'
+import { createInlineRunner } from '../boardOpen/runner'
+import { createWorkerOpenRunner, type WorkerLike } from '../boardOpen/workerRunner'
+// `?worker&inline` bundles the worker into a blob, which the page's
+// `worker-src blob:` CSP already allows, and works from file:// where a module
+// worker URL would not.
+import BoardOpenWorker from '../boardOpen/boardOpen.worker?worker&inline'
+import { attachSidecarSync } from './sidecarSync'
 
 export function createRendererStore(): AppStore {
   const client = createPortSimClient()
-  const store = createAppStore({ simClient: client })
+  // Board open (parse, extract, resolve, audit) runs in a Worker so a large
+  // board cannot freeze the window (issue #55). If a Worker cannot start, the
+  // runner falls back to running the same pipeline inline.
+  const openRunner = createWorkerOpenRunner(
+    () => new BoardOpenWorker() as unknown as WorkerLike,
+    createInlineRunner(),
+  )
+  const store = createAppStore({ simClient: client, openRunner })
 
   // The live SimHost MessagePort is delivered to the MAIN world by the preload
   // via `window.postMessage('circsim:simhost-port', '*', [port])` — the canonical
@@ -49,6 +63,19 @@ export function createRendererStore(): AppStore {
   // only record the crash notice here.
   window.circsim.onSimhostCrashed(({ willRespawn }) => {
     store.getState().noteCrash(willRespawn)
+  })
+
+  // Per-board setup file (issue #27): once the user has opted in (or a setup file
+  // exists), every change to ground / bench / overrides / models is saved beside
+  // the board through the main-process bridge. Flush on the way out so a change
+  // made just before closing the window is not lost to the debounce.
+  const sidecarSync = attachSidecarSync(store, {
+    write: async (boardPath, text, opts) => {
+      await window.circsim.writeSidecar(boardPath, text, opts)
+    },
+  })
+  window.addEventListener('pagehide', () => {
+    void sidecarSync.flush()
   })
 
   // Load the bundled model library in the BACKGROUND too (tier-3 resolution +

@@ -6,12 +6,18 @@
  * Matching precedence (first tier that produces a non-ambiguous single match wins):
  *   1. Exact normalized MPN match against entry.match.mpn[]
  *   2. Value field matches entry.match.valueRegex
- *   3. refdesPrefix + footprintRegex fallback
+ *   3. refdesPrefix + footprintRegex fallback (footprintRegex is required)
+ *
+ * Tiers 1 and 2 refuse a match that came from the Value field when the refdes names
+ * a class of part that is never a library device (battery, test point, switch,
+ * connector, passive; issue #51).
  *
  * Ambiguous (2+ entries match at the same tier) → 'ambiguous' result with candidate ids.
  * No match at any tier → 'none'.
  *
  * Pin-map selection:
+ *   - A JLC/EasyEDA-origin footprint on a polarized two-terminal entry → defaultPinMap
+ *     + 'pinmap-unverified' polarity warning (the name cannot tell polarity, issue #5).
  *   - Iterate entry.pinMaps keys (treated as regex patterns) against the part's libId.
  *   - First match → return that pinMap with no warning.
  *   - No match → return entry.defaultPinMap + 'pinmap-unverified' warning.
@@ -143,8 +149,15 @@ export type MatchResult =
 // ─── Part descriptor for matching ────────────────────────────────────────────
 
 export interface PartDescriptor {
-  /** MPN from part.properties['mpn'] or part.properties['MPN'], if present. */
+  /** MPN from a BOM row or part.properties['mpn'] / ['MPN'], if present. */
   mpn: string | undefined
+  /**
+   * True when `mpn` is only the part's Value field standing in for a missing
+   * MPN. Such a guess carries no intent, so it is refused on a refdes that is
+   * never a library device (battery, test point, switch, connector, passive;
+   * issue #51). An explicit MPN is never gated.
+   */
+  mpnIsValue?: boolean
   /** Part's libId (e.g. "Diode_SMD:D_SMA_SMA"). Used for footprint matching. */
   libId: string
   /** Part's value field. */
@@ -165,63 +178,202 @@ function refdesPrefix(ref: string): string {
 // ─── Single-entry match predicates ────────────────────────────────────────────
 
 /**
- * Test if an entry matches by MPN (normalized).
+ * Refdes prefixes (the leading letters) of parts that are never a library
+ * device: passives, batteries, test points, switches, connectors, mechanical
+ * and electromechanical parts. A value-derived match (value-as-MPN, valueRegex)
+ * carries no refdes information of its own, so "3V0" on BT1 or "555" on SW1 must
+ * not become a zener or an NE555 (issue #51).
+ *
+ * This is a deny list on purpose. The library covers diodes, LEDs, transistors,
+ * ICs and regulators, and boards name those with many conventions (D, CR, LD, Q,
+ * T, TR, V, U, IC, A, N, VR, REG ...); a list of the accepted prefixes goes stale
+ * the moment a board uses another one and silently un-resolves a good part.
+ * Naming what a part cannot be fails safe the other way: an unlisted prefix
+ * keeps the match it always had.
  */
-function matchesByMpn(entry: LibraryEntry, mpn: string | undefined): boolean {
-  if (!mpn || !entry.match.mpn || entry.match.mpn.length === 0) return false
-  const normalized = normalizeMpn(mpn)
-  return entry.match.mpn.some(entryMpn => normalizeMpn(entryMpn) === normalized)
+const NON_DEVICE_REFDES = new Set([
+  // passives
+  'R', 'RV', 'RN', 'RP', 'RT', 'RK', 'C', 'CP', 'L', 'FB', 'F', 'FU', 'TH', 'VDR',
+  // sources, switches, relays, connectors, mechanical
+  'BT', 'BAT', 'SW', 'S', 'K', 'RLY', 'J', 'P', 'CN', 'CON', 'JP', 'SP',
+  'TP', 'H', 'MH', 'FID', 'MK', 'NT', 'ANT', 'Y', 'LS', 'BZ',
+])
+
+/**
+ * True when a value-derived match may be accepted for a part with this refdes:
+ * it may unless the refdes names a class that is never a library device.
+ */
+export function valueMatchAllowed(ref: string): boolean {
+  return !NON_DEVICE_REFDES.has(refdesPrefix(ref))
+}
+
+// ─── Compiled-pattern cache ───────────────────────────────────────────────────
+
+/**
+ * A pattern compiles to the same RegExp every time, so compile each once. A
+ * library entry's valueRegex and footprintRegex were compiled for every part
+ * that reached tier 3 (issue #76); a pin-map key was compiled again for every
+ * pin-map selection. The key carries the flags. A malformed pattern is cached as
+ * null: callers treat it as "never matches", exactly as the try/catch they
+ * replace did.
+ *
+ * The cache is keyed by pattern text, never by entry, so an edited entry cannot
+ * read a stale RegExp. It is bounded: user libraries are re-resolved on every
+ * edit, and a cache that only grows would keep every pattern ever imported.
+ */
+const COMPILED_PATTERNS = new Map<string, RegExp | null>()
+const COMPILED_PATTERNS_MAX = 4096
+
+function compilePattern(pattern: string, flags: string): RegExp | null {
+  const key = `${flags}/${pattern}`
+  const hit = COMPILED_PATTERNS.get(key)
+  if (hit !== undefined) return hit
+  let re: RegExp | null
+  try {
+    re = new RegExp(pattern, flags)
+  } catch {
+    re = null
+  }
+  if (COMPILED_PATTERNS.size >= COMPILED_PATTERNS_MAX) COMPILED_PATTERNS.clear()
+  COMPILED_PATTERNS.set(key, re)
+  return re
 }
 
 /**
- * Test if an entry matches by value regex.
- * The valueRegex in the index may use `(?i)` prefix for case-insensitive matching.
+ * The compiled valueRegex of an entry, or null when it has none or it is
+ * malformed. The index may write `(?i)` as a prefix for case-insensitive
+ * matching; that is not a valid JS regex position, so it becomes the `i` flag.
  */
-function matchesByValueRegex(entry: LibraryEntry, value: string): boolean {
-  if (!entry.match.valueRegex) return false
+function compileValueRegex(entry: LibraryEntry): RegExp | null {
   let pattern = entry.match.valueRegex
+  if (!pattern) return null
   let flags = ''
-  // Handle (?i) inline flag (not a valid JS regex flag position — convert to /flag)
   if (pattern.startsWith('(?i)')) {
     pattern = pattern.slice(4)
     flags = 'i'
   }
-  try {
-    const re = new RegExp(pattern, flags)
-    return re.test(value)
-  } catch {
-    return false
-  }
+  return compilePattern(pattern, flags)
+}
+
+// ─── Library index ────────────────────────────────────────────────────────────
+
+interface FallbackCandidate {
+  entry: LibraryEntry
+  /** Position in the library, so candidates merge back into library order. */
+  order: number
+  re: RegExp
 }
 
 /**
- * Test if an entry matches by refdesPrefix + footprintRegex fallback.
- * Both must match (if the entry specifies them).
+ * Lookup structures over one library, built once per resolveAll and reused for
+ * every part. Matching a part against the bare entry list normalised every
+ * entry's MPNs and compiled its regexes per part: parts x library work
+ * (issue #76). Every list here keeps library order, so a match, an ambiguity
+ * and the candidate ids come out exactly as the linear scan produced them.
+ *
+ * An index describes the library it was built from. Build a new one after the
+ * library changes; resolveAll does, on every call.
  */
-function matchesByFallback(entry: LibraryEntry, part: PartDescriptor): boolean {
-  const { refdesPrefix: prefixes, footprintRegex } = entry.match
-
-  // Need at least one fallback criterion
-  if (!prefixes && !footprintRegex) return false
-
-  // Check refdesPrefix
-  if (prefixes && prefixes.length > 0) {
-    const prefix = refdesPrefix(part.ref)
-    if (!prefixes.map(p => p.toUpperCase()).includes(prefix)) return false
-  }
-
-  // Check footprintRegex against libId
-  if (footprintRegex) {
-    try {
-      const re = new RegExp(footprintRegex, 'i')
-      if (!re.test(part.libId)) return false
-    } catch {
-      return false
-    }
-  }
-
-  return true
+export interface LibraryIndex {
+  /** normalizeMpn(entry MPN) to the entries listing it, in library order. */
+  readonly byMpn: ReadonlyMap<string, readonly LibraryEntry[]>
+  /** Entries with a usable valueRegex, in library order. */
+  readonly valueRegex: ReadonlyArray<{ entry: LibraryEntry; re: RegExp }>
+  /** Entries with a usable footprintRegex that name a refdes prefix, by upper-cased prefix. */
+  readonly fallbackByPrefix: ReadonlyMap<string, readonly FallbackCandidate[]>
+  /** Entries with a usable footprintRegex that name no refdes prefix. */
+  readonly fallbackAnyPrefix: readonly FallbackCandidate[]
+  /** valueRegex matches per distinct Value text: boards repeat "10k", "100nF". */
+  readonly valueCache: Map<string, readonly LibraryEntry[]>
+  /** Fallback matches per distinct refdes prefix and footprint. */
+  readonly fallbackCache: Map<string, readonly LibraryEntry[]>
 }
+
+export function buildLibraryIndex(library: readonly LibraryEntry[]): LibraryIndex {
+  const byMpn = new Map<string, LibraryEntry[]>()
+  const valueRegex: Array<{ entry: LibraryEntry; re: RegExp }> = []
+  const fallbackByPrefix = new Map<string, FallbackCandidate[]>()
+  const fallbackAnyPrefix: FallbackCandidate[] = []
+
+  library.forEach((entry, order) => {
+    for (const mpn of entry.match.mpn ?? []) {
+      const key = normalizeMpn(mpn)
+      const list = byMpn.get(key)
+      if (!list) byMpn.set(key, [entry])
+      else if (list[list.length - 1] !== entry) list.push(entry)
+    }
+
+    const vre = compileValueRegex(entry)
+    if (vre) valueRegex.push({ entry, re: vre })
+
+    // A footprint pattern is required for the fallback tier: a refdes prefix
+    // alone ("D") describes every part of that class, which is no basis for
+    // picking one model. Entries that are identified by value only (the colored
+    // LEDs) declare no footprintRegex and so stay out of this tier.
+    const footprintRegex = entry.match.footprintRegex
+    if (!footprintRegex) return
+    const re = compilePattern(footprintRegex, 'i')
+    if (!re) return
+    const candidate: FallbackCandidate = { entry, order, re }
+    const prefixes = entry.match.refdesPrefix
+    if (prefixes && prefixes.length > 0) {
+      for (const p of new Set(prefixes.map(x => x.toUpperCase()))) {
+        const list = fallbackByPrefix.get(p)
+        if (list) list.push(candidate)
+        else fallbackByPrefix.set(p, [candidate])
+      }
+    } else {
+      fallbackAnyPrefix.push(candidate)
+    }
+  })
+
+  return {
+    byMpn,
+    valueRegex,
+    fallbackByPrefix,
+    fallbackAnyPrefix,
+    valueCache: new Map(),
+    fallbackCache: new Map(),
+  }
+}
+
+/** Entries whose normalized MPN list contains this MPN, in library order. */
+function entriesByMpn(index: LibraryIndex, mpn: string | undefined): readonly LibraryEntry[] {
+  if (!mpn) return []
+  return index.byMpn.get(normalizeMpn(mpn)) ?? []
+}
+
+/** Entries whose valueRegex matches this Value text, in library order. */
+function entriesByValueRegex(index: LibraryIndex, value: string): readonly LibraryEntry[] {
+  const cached = index.valueCache.get(value)
+  if (cached) return cached
+  const out: LibraryEntry[] = []
+  for (const { entry, re } of index.valueRegex) if (re.test(value)) out.push(entry)
+  index.valueCache.set(value, out)
+  return out
+}
+
+/**
+ * Entries matching by refdesPrefix + footprintRegex fallback, in library order.
+ * Both must match (an entry that names no refdes prefix matches any).
+ */
+function entriesByFallback(index: LibraryIndex, part: PartDescriptor): readonly LibraryEntry[] {
+  const prefix = refdesPrefix(part.ref)
+  const key = `${prefix}\u0000${part.libId}`
+  const cached = index.fallbackCache.get(key)
+  if (cached) return cached
+  const named = index.fallbackByPrefix.get(prefix) ?? []
+  const candidates = named.length === 0
+    ? index.fallbackAnyPrefix
+    : index.fallbackAnyPrefix.length === 0
+      ? named
+      : [...named, ...index.fallbackAnyPrefix].sort((a, b) => a.order - b.order)
+  const out: LibraryEntry[] = []
+  for (const c of candidates) if (c.re.test(part.libId)) out.push(c.entry)
+  index.fallbackCache.set(key, out)
+  return out
+}
+
 
 // ─── Main matching function ───────────────────────────────────────────────────
 
@@ -231,7 +383,7 @@ function matchesByFallback(entry: LibraryEntry, part: PartDescriptor): boolean {
  * the same MPN must WIN, not create a false mpn-tier ambiguity — otherwise
  * "Import .lib…" on an open-by-design part could never take effect.
  */
-function preferModeled(matches: LibraryEntry[]): LibraryEntry[] {
+function preferModeled(matches: readonly LibraryEntry[]): readonly LibraryEntry[] {
   if (matches.length < 2) return matches
   const modeled = matches.filter(e => e.model.type !== 'documented-open')
   return modeled.length > 0 ? modeled : matches
@@ -247,13 +399,22 @@ function preferModeled(matches: LibraryEntry[]): LibraryEntry[] {
  * If two or more match at the same tier → 'ambiguous' (do not fall through),
  * except that documented-open entries yield to modeled ones first.
  * If zero match at a tier → try the next tier.
+ *
+ * `index` is the library's lookup structure (buildLibraryIndex). A caller that
+ * matches many parts against one library builds it once and passes it in;
+ * without it one is built for this call, which gives the same result.
  */
 export function matchLibraryEntry(
   part: PartDescriptor,
-  library: LibraryEntry[],
+  library: readonly LibraryEntry[],
+  index: LibraryIndex = buildLibraryIndex(library),
 ): MatchResult {
   // ── Tier A: MPN ────────────────────────────────────────────────────────────
-  const mpnMatches = preferModeled(library.filter(e => matchesByMpn(e, part.mpn)))
+  // A Value-field stand-in for a missing MPN is refused on a refdes that is
+  // never a library device (issue #51: "3V0" on BT1 is a battery, not a zener).
+  const mpnMatches = preferModeled(
+    !part.mpnIsValue || valueMatchAllowed(part.ref) ? entriesByMpn(index, part.mpn) : [],
+  )
   if (mpnMatches.length === 1) {
     return { kind: 'match', entry: mpnMatches[0], tier: 'mpn' }
   }
@@ -262,7 +423,9 @@ export function matchLibraryEntry(
   }
 
   // ── Tier B: Value regex ────────────────────────────────────────────────────
-  const valueMatches = preferModeled(library.filter(e => matchesByValueRegex(e, part.value)))
+  const valueMatches = preferModeled(
+    valueMatchAllowed(part.ref) ? entriesByValueRegex(index, part.value) : [],
+  )
   if (valueMatches.length === 1) {
     return { kind: 'match', entry: valueMatches[0], tier: 'valueRegex' }
   }
@@ -271,7 +434,7 @@ export function matchLibraryEntry(
   }
 
   // ── Tier C: Fallback (refdesPrefix + footprintRegex) ──────────────────────
-  const fallbackMatches = preferModeled(library.filter(e => matchesByFallback(e, part)))
+  const fallbackMatches = preferModeled(entriesByFallback(index, part))
   if (fallbackMatches.length === 1) {
     return { kind: 'match', entry: fallbackMatches[0], tier: 'fallback' }
   }
@@ -289,6 +452,37 @@ export interface PinMapResult {
   warnings: string[]
 }
 
+/** Machine prefix of every unverified-pin-map warning. */
+export const PINMAP_UNVERIFIED_PREFIX = 'pinmap-unverified:'
+
+/**
+ * Machine prefix of the one unverified-pin-map warning that marks a polarity
+ * guess: a polarized two-terminal part on a JLC/EasyEDA footprint whose
+ * polarity the attached schematic's A/K pin names have not confirmed (issue #5).
+ */
+export const POLARITY_UNVERIFIED_PREFIX = `${PINMAP_UNVERIFIED_PREFIX} polarity `
+
+/**
+ * True when a resolution's diode/LED polarity is an unconfirmed guess: its
+ * model is right but which pad is the anode is not known. Such a part resolves
+ * ok, so it has no Model Doctor card; resolutionNoteLines (resolve.ts) puts the
+ * guess on the sim log, and a renderer surface can key on this predicate.
+ */
+export function hasUnverifiedPolarity(res: { warnings: readonly string[] }): boolean {
+  return res.warnings.some(w => w.startsWith(POLARITY_UNVERIFIED_PREFIX))
+}
+
+/**
+ * True for footprint names that come from the JLC/EasyEDA ecosystem: the JLC
+ * library prefix ("JLC-MCP:SMA_...") or the bare dimension-pattern shape
+ * ("SMA_L4.2-W2.6-LS5.0-RD_1"). KiCad-official names never have that shape (their
+ * dimension tokens carry an "mm" suffix). Pad numbering on these footprints
+ * follows the part, not any convention, so the name cannot tell polarity.
+ */
+export function isEasyEdaOriginFootprint(libId: string): boolean {
+  return /^JLC/i.test(libId) || /_L\d+(\.\d+)?-W\d+/i.test(libId)
+}
+
 /**
  * Select the best pin map for a matched entry given the part's footprint (libId).
  *
@@ -301,15 +495,32 @@ export interface PinMapResult {
 export function selectPinMap(entry: LibraryEntry, libId: string): PinMapResult {
   const warnings: string[] = []
 
+  // JLC/EasyEDA-origin footprint on a polarized two-terminal part: the name
+  // says nothing about which pad is the anode (issue #5), so no pinMaps key may
+  // claim it. Hand back the KiCad-convention default, flagged unverified; the
+  // attached schematic's A/K names (pinMapFromSchematicPins) are what make the
+  // polarity known. The warning names only the schematic: the part resolves ok,
+  // and the Model Doctor has no card for a part that resolved.
+  if (
+    isEasyEdaOriginFootprint(libId) &&
+    isTwoTerminalPolarizedEntry(entry) &&
+    entry.defaultPinMap &&
+    Object.keys(entry.defaultPinMap).length > 0
+  ) {
+    warnings.push(
+      `${POLARITY_UNVERIFIED_PREFIX}of "${libId}" cannot be known from a JLC/EasyEDA footprint name ` +
+      `(pad 1 is the anode on some and the cathode on others); assumed the KiCad convention, pad 1 = cathode. ` +
+      `Attach the schematic (its A/K pin names) to confirm, or check the part against the board`
+    )
+    return { pinMap: entry.defaultPinMap, warnings }
+  }
+
   // Try each pinMaps key as a regex
   for (const [pattern, pinMap] of Object.entries(entry.pinMaps)) {
-    try {
-      const re = new RegExp(pattern, 'i')
-      if (re.test(libId)) {
-        return { pinMap, warnings }
-      }
-    } catch {
-      // Malformed regex — skip this key
+    // A malformed pattern compiles to null: skip this key
+    const re = compilePattern(pattern, 'i')
+    if (re && re.test(libId)) {
+      return { pinMap, warnings }
     }
   }
 

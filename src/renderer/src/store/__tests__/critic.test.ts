@@ -137,6 +137,37 @@ describe('buildCriticOpResult', () => {
     expect(op!.nodeVoltages[vin.spiceNode]).toBeCloseTo(5)
     expect(op!.partCurrents!['D1']).toBeCloseTo(0.012)
   })
+
+  it('carries the solve-derived branch currents of every part when they are given (issues #9, #45)', () => {
+    const board = parseBoard(readFixture('fixture-rc.kicad_pcb'))
+    const circuit = extract(board, { groundNetId: circuitGnd(board) })
+    const vin = circuit.nets.find(n => n.kicadName === 'VIN')!
+    const op = buildCriticOpResult(
+      circuit,
+      new Map([[vin.id, 5]]),
+      new Map([['D1', 0.012]]), // the LED-only map the store used to pass
+      {
+        partCurrents: { R1: 0.012, D1: 0.012 },
+        padCurrents: { R1: { '1': 0.012, '2': -0.012 } },
+        unresolvedRefs: ['U9'],
+      },
+    )
+    expect(op!.partCurrents!['R1']).toBeCloseTo(0.012) // a resistor, not only the LED
+    expect(op!.padCurrents!['R1']['1']).toBeCloseTo(0.012)
+    expect(op!.unresolvedRefs).toEqual(['U9'])
+  })
+
+  it('carries the supply entries (bench lead positions) in both op shapes (issue #47)', () => {
+    const board = parseBoard(readFixture('fixture-rc.kicad_pcb'))
+    const circuit = extract(board, { groundNetId: circuitGnd(board) })
+    const vin = circuit.nets.find(n => n.kicadName === 'VIN')!
+    const entries = [{ netId: vin.id, pos: { x: 3, y: 4 } }]
+    const bare = buildCriticOpResult(circuit, new Map([[vin.id, 5]]), new Map([['D1', 0.012]]), null, entries)
+    expect(bare!.supplyEntries).toEqual(entries)
+    const solved = buildCriticOpResult(circuit, new Map([[vin.id, 5]]), new Map(), { partCurrents: {}, padCurrents: {}, unresolvedRefs: [] }, entries)
+    expect(solved!.supplyEntries).toEqual(entries)
+    expect(buildCriticOpResult(circuit, new Map([[vin.id, 5]]), new Map())!.supplyEntries).toBeUndefined()
+  })
 })
 
 function circuitGnd(board: ReturnType<typeof parseBoard>): number {

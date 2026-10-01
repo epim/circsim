@@ -11,7 +11,9 @@ Two concrete payoffs:
 
 ## How to attach
 
-Two ways, with a board already open:
+The easiest way is to do nothing. When you open a board, circsim looks in the same folder for a `.kicad_sch` with the same name (`my-board.kicad_sch` next to `my-board.kicad_pcb`) and attaches it if it finds one.
+
+If the schematic lives elsewhere or has a different name, attach it by hand with a board already open:
 
 - **Drag and drop** the `.kicad_sch` onto the circsim window.
 - Click **Attach schematic…** (or **Replace schematic…**) in the **Ground & Power** panel and pick the file.

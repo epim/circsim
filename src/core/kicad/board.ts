@@ -95,21 +95,21 @@ function isSilkscreen(layer: string): boolean {
 /**
  * Resolves `(net ...)` nodes to numeric net ids across BOTH KiCad formats:
  *
- *  - KiCad 6–8 (legacy): a top-level net table of `(net <id> "<name>")`, with
+ *  - KiCad 6–9 (format 20211014 to 20241229): a top-level net table of `(net <id> "<name>")`, with
  *    references `(net <id> "<name>")` on pads and `(net <id>)` on tracks/vias.
  *    The numeric id is authoritative.
  *
- *  - KiCad 9 / 2026 (version 20260206): the numeric id AND the top-level net
+ *  - KiCad 10 (format 20260206): the numeric id AND the top-level net
  *    table were both removed. EVERY reference is name-only — `(net "<name>")` —
  *    on pads, tracks, vias and zones.
  *
  * To keep the downstream pipeline (which keys connectivity on numeric net ids)
  * working unchanged, this index synthesizes a stable id for each distinct net
- * name encountered in the v9 format, in first-seen order. The same name always
+ * name encountered in the name-only format, in first-seen order. The same name always
  * resolves to the same id within one parse, which is all connectivity needs.
  *
  * `byId` is the BoardModel.netById map: it accumulates every net actually
- * referenced (legacy ids from the table, or synthesized v9 ids).
+ * referenced (legacy ids from the table, or synthesized name-only ids).
  */
 class NetIndex {
   readonly byId = new Map<number, { id: number; name: string }>()
@@ -124,7 +124,7 @@ class NetIndex {
     if (id >= this.nextSyntheticId) this.nextSyntheticId = id + 1
   }
 
-  /** Resolve (or synthesize) the id for a name-only (v9) net reference. */
+  /** Resolve (or synthesize) the id for a name-only (KiCad 10) net reference. */
   private registerByName(name: string): number {
     const existing = this.byName.get(name)
     if (existing !== undefined) return existing
@@ -135,7 +135,7 @@ class NetIndex {
   }
 
   /**
-   * Register a top-level net-table entry (legacy files only — v9 has no table).
+   * Register a top-level net-table entry (legacy files only; KiCad 10 files have no table).
    * `(net 0 "")` and empty names are skipped.
    */
   registerTableEntry(node: SExpr): void {
@@ -167,7 +167,7 @@ class NetIndex {
       return first
     }
     if (typeof first === 'string') {
-      // KiCad 9 / 2026 reference: (net "<name>").
+      // KiCad 10 reference: (net "<name>").
       if (first === '') return undefined
       return this.registerByName(first)
     }
@@ -215,7 +215,7 @@ function parsePad(padNode: SExpr, nets: NetIndex): Pad | null {
     }
   }
 
-  // (net N "NAME") legacy, or (net "NAME") v9 — resolved via the NetIndex.
+  // (net N "NAME") legacy, or (net "NAME") name-only — resolved via the NetIndex.
   let netId: number | undefined
   const netNode = find(padNode, 'net')
   if (netNode) netId = nets.resolve(netNode)
@@ -588,6 +588,15 @@ function parseZone(node: SExpr, nets: NetIndex): Zone | null {
   const netId = netNode ? nets.resolve(netNode) : undefined
 
   const layer = parseLayer(node)
+  // A multi-layer zone has `(layers "F.Cu" "B.Cu" ...)` and no `(layer ...)`.
+  const layersNode = find(node, 'layers')
+  const layers: string[] = []
+  if (layersNode && Array.isArray(layersNode)) {
+    for (let i = 1; i < layersNode.length; i++) {
+      const l = strAtom(layersNode, i)
+      if (l) layers.push(l)
+    }
+  }
 
   // polygon pts
   const polygon: Vec2[][] = []
@@ -603,7 +612,7 @@ function parseZone(node: SExpr, nets: NetIndex): Zone | null {
     if (pts.length > 0) polygon.push(pts)
   }
 
-  return { netId, layer, polygon }
+  return layers.length > 0 ? { netId, layer, layers, polygon } : { netId, layer, polygon }
 }
 
 /** `(version ...)` of KiCad 6.0, the oldest board format circsim reads. */
@@ -641,9 +650,9 @@ export function parseBoard(text: string): BoardModel {
   }
 
   // --- nets ---
-  // Register the legacy top-level net table FIRST (KiCad 6–8) so that tracks/
+  // Register the legacy top-level net table FIRST (KiCad 6–9) so that tracks/
   // vias, which carry only `(net <id>)` with no name, resolve to their proper
-  // names. KiCad 9/2026 files have no table — the index synthesizes ids lazily
+  // names. KiCad 10 files have no table — the index synthesizes ids lazily
   // from the name-only references parsed below.
   const nets = new NetIndex()
   for (const child of root) {

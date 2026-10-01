@@ -87,6 +87,12 @@ export interface CriticOptions {
    */
   loopAreaWarnMm2: number
   loopAreaErrMm2: number
+  /**
+   * Target cell pitch (mm) for meshing a copper pour into the IR-drop graph.
+   * The mesh coarsens on its own when a pour would exceed a few thousand
+   * cells. Default 2 mm.
+   */
+  zoneMeshMm: number
 }
 
 export const DEFAULT_CRITIC_OPTIONS: CriticOptions = {
@@ -99,6 +105,23 @@ export const DEFAULT_CRITIC_OPTIONS: CriticOptions = {
   ambientC: 25,
   loopAreaWarnMm2: 100,
   loopAreaErrMm2: 500,
+  zoneMeshMm: 2,
+}
+
+/**
+ * Where a bench supply (or the ground clip) enters a net, from the lead's copper
+ * position. The copper checks use it as the source of the rail solve instead of
+ * guessing the entry pad (issue #47).
+ */
+export interface SupplyEntry {
+  /** Board net the lead is attached to. */
+  netId: number
+  /**
+   * Where the lead was clipped, KiCad board coordinates in mm. Absent when the
+   * supply is attached but no position was recorded (a v0 setup file, a clip made
+   * without a pick point): the check then guesses and says so.
+   */
+  pos?: { x: number; y: number }
 }
 
 /**
@@ -114,6 +137,32 @@ export interface OpResult {
    * required by v1 checks — magnitude is what matters for ampacity/thermal.
    */
   partCurrents?: Record<string, number>
+  /**
+   * Signed current (A) drawn from the pad's net into the part, keyed by ref then
+   * pad number. A load on a positive rail reads positive and its ground pad
+   * negative (the current comes back out into the ground net). On a negative
+   * rail the current runs the other way, from ground through the load into the
+   * rail: the load's rail pad reads negative and its ground pad positive. Built
+   * from the solve by deriveSolvedCurrents. When absent, the copper checks fall
+   * back to `partCurrents` magnitudes in the load direction of each net: drawn
+   * from a positive rail, returned into a negative rail and into ground.
+   */
+  padCurrents?: Record<string, Record<string, number>>
+  /**
+   * Parts that can carry current but whose pad currents the solve could not
+   * resolve (two unmeasured parts share every net they touch). The copper
+   * checks name them in their not-assessed line instead of treating them as
+   * zero-current.
+   */
+  unresolvedRefs?: string[]
+  /**
+   * Bench supply entries (and the ground clip), one per attached lead. The
+   * IR-drop and ampacity solves enter a rail at the pad nearest the lead's
+   * position. A rail with no entry, or an entry without a position, falls back to
+   * the connector/widest-copper heuristic and the finding says it guessed. When
+   * several entries name one net the first is used.
+   */
+  supplyEntries?: SupplyEntry[]
   /** Power (W) dissipated by a part, keyed by ref (P = Σ|V·I| across its pads). */
   partPower?: Record<string, number>
 }

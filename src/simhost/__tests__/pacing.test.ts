@@ -8,56 +8,26 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { SimHost, buildAlterCommand, formatNum } from '../index'
-import type { EngineEvent, EngineEventListener, SpiceEngine } from '../engine'
+import {
+  SimHost,
+  TRAN_MEMORY_BUDGET_BYTES,
+  buildAlterCommand,
+  fitTranStop,
+  formatNum,
+  ngspiceTranMemoryBytes
+} from '../index'
+import { StubEngine } from './stubEngine'
 import type { SimEvent } from '../protocol'
 
-/** Minimal scriptable SpiceEngine stub: records commands, replays events. */
-class StubEngine implements SpiceEngine {
-  version = '46'
-  commands: string[] = []
-  private listeners: EngineEventListener[] = []
-  running = false
-
-  init(): void {}
-  on(l: EngineEventListener): () => void {
-    this.listeners.push(l)
-    return () => {
-      const i = this.listeners.indexOf(l)
-      if (i >= 0) this.listeners.splice(i, 1)
-    }
-  }
-  emit(ev: EngineEvent): void {
-    for (const l of this.listeners) l(ev)
-  }
-  loadCircuit(): void {}
-  command(cmd: string): Promise<void> {
-    this.commands.push(cmd)
-    if (cmd.startsWith('bg_tran')) this.running = true
-    if (cmd === 'bg_halt') this.running = false
-    if (cmd === 'bg_resume') this.running = true
-    return Promise.resolve()
-  }
-  currentPlot(): string {
-    return 'tran1'
-  }
-  allVectors(): string[] {
-    return []
-  }
-  vectorData(): Float64Array | undefined {
-    return undefined
-  }
-  isRunning(): boolean {
-    return this.running
-  }
-  dispose(): void {}
-}
+/** Let the halt/resume commands queued on the host's engine chain run. */
+const settle = (): Promise<void> => new Promise((r) => setImmediate(r))
 
 function makeHost(opts: {
   engine: StubEngine
   now: () => number
   rssBytes?: () => number
   benchWindowSeconds?: number
+  tranMemoryBudgetBytes?: number
 }): { host: SimHost; events: SimEvent[] } {
   const events: SimEvent[] = []
   const host = new SimHost({
@@ -66,8 +36,10 @@ function makeHost(opts: {
     now: opts.now,
     rssBytes: opts.rssBytes,
     benchWindowSeconds: opts.benchWindowSeconds,
+    tranMemoryBudgetBytes: opts.tranMemoryBudgetBytes,
     disableWatchdog: true,
-    disableTimers: true // unit test steps pacingTick() manually
+    disableTimers: true, // unit test steps pacingTick() manually
+    resumeGapMs: 0 // no real-time settle gap in unit tests
   })
   return { host, events }
 }
@@ -99,9 +71,11 @@ describe('SimHost pacing', () => {
 
     // Advance wall-clock 50 ms but report sim-time of 5 s (way ahead of 1x target).
     t += 50
-    engine.emit({ type: 'data', row: { time: 5, out: 1 }, scaleName: 'time' })
+    engine.pushPoint({ time: 5, out: 1 })
+    host.sampleTick()
     host.pacingTick()
     expect(host.getHaltOwner()).toBe('pacing')
+    await settle()
     expect(engine.commands).toContain('bg_halt')
   })
 
@@ -115,7 +89,8 @@ describe('SimHost pacing', () => {
     await host.whenIdle()
 
     t += 50
-    engine.emit({ type: 'data', row: { time: 10, out: 1 }, scaleName: 'time' })
+    engine.pushPoint({ time: 10, out: 1 })
+    host.sampleTick()
     host.pacingTick()
     expect(host.getHaltOwner()).toBe('none')
   })
@@ -129,7 +104,8 @@ describe('SimHost pacing', () => {
 
     // After 1 s wall, sim-time 0.5 s → factor 0.5×.
     t += 1000
-    engine.emit({ type: 'data', row: { time: 0.5, out: 1 }, scaleName: 'time' })
+    engine.pushPoint({ time: 0.5, out: 1 })
+    host.sampleTick()
     host.pacingTick()
     const status = events.find((e) => e.type === 'status') as
       | Extract<SimEvent, { type: 'status' }>
@@ -139,17 +115,78 @@ describe('SimHost pacing', () => {
   })
 })
 
+describe('SimHost status.running while pacing halts the thread', () => {
+  const lastStatus = (events: SimEvent[]): Extract<SimEvent, { type: 'status' }> =>
+    [...events].reverse().find((e) => e.type === 'status') as Extract<SimEvent, { type: 'status' }>
+
+  it('stays true while a pacing halt holds the thread, so the toolbar does not show Paused', async () => {
+    const engine = new StubEngine()
+    let t = 1000
+    const { host, events } = makeHost({ engine, now: () => t, benchWindowSeconds: 30 })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
+    await host.whenIdle()
+
+    t += 1000
+    engine.pushPoint({ time: 5, out: 1 })
+    host.sampleTick()
+    host.pacingTick()
+    await settle()
+    expect(host.getHaltOwner()).toBe('pacing')
+    expect(engine.isRunning()).toBe(false) // the thread really is halted
+    t += 1000
+    host.pacingTick()
+    expect(lastStatus(events).running).toBe(true)
+  })
+
+  it('stays true across the gap between releasing the pacing halt and the thread restarting', async () => {
+    const engine = new StubEngine()
+    let t = 1000
+    const { host, events } = makeHost({ engine, now: () => t, benchWindowSeconds: 30 })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
+    await host.whenIdle()
+    t += 1000
+    engine.pushPoint({ time: 5, out: 1 })
+    host.sampleTick()
+    host.pacingTick()
+    await settle()
+    // Wall time catches up with the plot: the halt is released, the bg_resume
+    // is queued but the thread has not started yet.
+    t += 10_000
+    host.sampleTick()
+    host.pacingTick()
+    expect(host.getHaltOwner()).toBe('none')
+    expect(engine.isRunning()).toBe(false)
+    expect(lastStatus(events).running).toBe(true)
+  })
+
+  it('is false while the user has paused', async () => {
+    const engine = new StubEngine()
+    let t = 1000
+    const { host, events } = makeHost({ engine, now: () => t, benchWindowSeconds: 30 })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
+    await host.whenIdle()
+    host.handleCommand({ type: 'halt' })
+    await host.whenIdle()
+    t += 1000
+    host.pacingTick()
+    expect(host.getHaltOwner()).toBe('user')
+    expect(lastStatus(events).running).toBe(false)
+  })
+})
+
 describe('SimHost bounded bench windows (Spec §7.5)', () => {
   it('restarts when sim-time reaches the bench window and emits benchRestarted', async () => {
     const engine = new StubEngine()
     const t = 1000
     const { host, events } = makeHost({ engine, now: () => t, benchWindowSeconds: 5 })
     host.handleCommand({ type: 'loadCircuit', deckLines: ['* d', 'v1 in 0 dc 5', '.end'] })
+    host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
     host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
     await host.whenIdle()
 
     // Drive sim-time past the 5 s window.
-    engine.emit({ type: 'data', row: { time: 5.0, out: 1 }, scaleName: 'time' })
+    engine.pushPoint({ time: 5.0, out: 1 })
+    host.sampleTick()
     host.pacingTick()
     await host.whenIdle()
 
@@ -176,7 +213,8 @@ describe('SimHost bounded bench windows (Spec §7.5)', () => {
     host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-3, tstopSeconds: 30 })
     await host.whenIdle()
 
-    engine.emit({ type: 'data', row: { time: 0.1, out: 1 }, scaleName: 'time' })
+    engine.pushPoint({ time: 0.1, out: 1 })
+    host.sampleTick()
     host.pacingTick()
     await host.whenIdle()
 
@@ -201,6 +239,7 @@ describe('SimHost alter batching (Spec §7.4.3)', () => {
     host.handleCommand({ type: 'alter', device: 'V1', value: 7 })
     host.flushAlters() // force the coalesce window closed
     await host.whenIdle()
+    await settle()
 
     const halts = engine.commands.filter((c) => c === 'bg_halt').length
     const resumes = engine.commands.filter((c) => c === 'bg_resume').length
@@ -275,5 +314,100 @@ describe('SimHost convergence detection (Spec §7.4.6)', () => {
     const fail = events.find((e) => e.type === 'convergenceFailure')
     expect(fail).toBeDefined()
     vi.clearAllMocks()
+  })
+})
+
+describe('SimHost sizes transients to its memory budget, not to ngspice free-memory check', () => {
+  // ngspice-46 allocates a transient's whole output at its first saved point,
+  // vectors x (tstop/tstep + 100) x 8 B, and its own check weighs that against
+  // the OS free-memory figure at every saved point (macOS: vm_stat free_count).
+  // SimHost turns that check off and keeps every run within a fixed budget.
+  const MB = 1024 * 1024
+  const deck = ['* d', 'v1 in 0 dc 5', '.end']
+  // The shipped 555 sample saves 26 vectors, the scale included.
+  const names = Array.from({ length: 26 }, (_, i) => (i === 0 ? 'time' : `v${i}`))
+
+  it('start() turns off ngspice free-memory check before anything else runs', async () => {
+    const engine = new StubEngine()
+    const { host } = makeHost({ engine, now: () => 0 })
+    await host.start()
+    expect(engine.commands[0]).toBe('set no_mem_check')
+  })
+
+  it('fitTranStop: the longest stop whose estimate fits, never under 1000 steps, never past tstop', () => {
+    const stop = fitTranStop(26, 1e-5, 30, 100 * MB)
+    expect(ngspiceTranMemoryBytes(26, 1e-5, stop)).toBeLessThanOrEqual(100 * MB)
+    // One more step would not fit.
+    expect(ngspiceTranMemoryBytes(26, 1e-5, stop + 2e-5)).toBeGreaterThan(100 * MB)
+    expect(fitTranStop(26, 1e-5, 0.5, 100 * MB)).toBe(0.5)
+    expect(fitTranStop(26, 1e-5, 30, 1)).toBeCloseTo(1000 * 1e-5, 12)
+  })
+
+  for (const [tstep, label] of [
+    [1e-5, 'the default 10 us'],
+    [5e-6, 'the 5 us a 1 kHz function generator sets'],
+  ] as const) {
+    it(`a 30 s bench at ${label} on a 26-vector deck fits the budget: a finite 30 s run, as before`, async () => {
+      const engine = new StubEngine()
+      engine.vectors = names
+      const { host, events } = makeHost({ engine, now: () => 0, benchWindowSeconds: 30 })
+      host.handleCommand({ type: 'loadCircuit', deckLines: deck })
+      host.handleCommand({ type: 'runTransient', tstepSeconds: tstep, tstopSeconds: 30 })
+      await host.whenIdle()
+      expect(ngspiceTranMemoryBytes(26, tstep, 30)).toBeLessThan(TRAN_MEMORY_BUDGET_BYTES)
+      expect(engine.commands.find((c) => c.startsWith('bg_tran'))).toBe(`bg_tran ${formatNum(tstep)} 30 uic`)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((host as any).tran.continuous).toBe(false)
+      expect(events.some((e) => e.type === 'log' && /limited to/.test(e.text))).toBe(false)
+    })
+  }
+
+  it('shortens a window whose samples exceed the budget and keeps the bench restarting', async () => {
+    const engine = new StubEngine()
+    engine.vectors = names
+    const { host, events } = makeHost({ engine, now: () => 0, benchWindowSeconds: 30 })
+    host.handleCommand({ type: 'loadCircuit', deckLines: deck })
+    // A 2.5 kHz function generator sets 2 us steps: 3.1 GB over 30 s.
+    host.handleCommand({ type: 'runTransient', tstepSeconds: 2e-6, tstopSeconds: 30 })
+    await host.whenIdle()
+    const cmd = engine.commands.find((c) => c.startsWith('bg_tran'))!
+    const stop = Number(cmd.split(' ')[2])
+    expect(stop).toBeGreaterThan(15)
+    expect(stop).toBeLessThan(16)
+    expect(ngspiceTranMemoryBytes(26, 2e-6, stop)).toBeLessThanOrEqual(TRAN_MEMORY_BUDGET_BYTES)
+    // A window cut by memory, not finished: the bench goes on into the next one.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((host as any).tran.continuous).toBe(true)
+    // The vectors were counted once, by a few-step probe before the real run.
+    expect(engine.commands.filter((c) => c.startsWith('tran '))).toEqual(['tran 0.000002 0.000006 uic'])
+    expect(events.some((e) => e.type === 'log' && e.level === 'warn' && /limited to/.test(e.text))).toBe(true)
+  })
+
+  it('runTran refuses a run over the budget, without asking ngspice for it', async () => {
+    const engine = new StubEngine()
+    engine.vectors = names
+    const { host } = makeHost({ engine, now: () => 0, tranMemoryBudgetBytes: 100 * MB })
+    await host.loadCircuit(deck)
+    await expect(host.runTran(1e-6, 30)).rejects.toThrow(/need \d+ MB, over the 100 MB budget/)
+    expect(engine.commands.filter((c) => c.startsWith('tran 0.000001 30'))).toEqual([])
+  })
+
+  it('runTran with tstart keeps the steps of the run from 0 and only drops the points before it', async () => {
+    const engine = new StubEngine()
+    engine.vectors = names
+    const { host } = makeHost({ engine, now: () => 0 })
+    await host.loadCircuit(deck)
+    await host.runTran(1e-5, 1e-3)
+    await host.runTran(2e-6, 0.7, 0.6)
+    await host.runTran(0.1, 1, 0.5)
+    await expect(host.runTran(1e-5, 1e-3, 1e-3)).rejects.toThrow(/tstart < tstop/)
+    expect(engine.commands.filter((c) => c.startsWith('tran ')).slice(1)).toEqual([
+      // No tstart: the command is the bench start, unchanged.
+      'tran 0.00001 0.001 uic',
+      // The step limit is pinned to min(tstep, tstop/50), the run from 0's own:
+      // without it ngspice would use (tstop - tstart)/50 when that is smaller.
+      'tran 0.000002 0.7 0.6 0.000002 uic',
+      'tran 0.1 1 0.5 0.02 uic',
+    ])
   })
 })

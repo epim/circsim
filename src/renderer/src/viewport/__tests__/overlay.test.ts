@@ -5,7 +5,7 @@
  *   - setOverlay mode switching (realistic / voltage / highlight)
  *   - applyNetVoltages: per-net color lerp blue→red
  *   - legend data exposed correctly
- *   - perf: 500-net color-write loop ≤ 16 ms (no GL context needed)
+ *   - perf: color-write cost grows linearly with net count (ratio, no GL context needed)
  *
  * THREE.MeshStandardMaterial works headlessly; no WebGL context required.
  */
@@ -17,6 +17,7 @@ import {
   type OverlayController,
   type LegendData,
 } from '../overlay'
+import { NetTintTable } from '../netTint'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -29,9 +30,31 @@ function makeNetMaterials(count: number): Map<number, THREE.MeshStandardMaterial
   return map
 }
 
+/**
+ * Best-of-5 wall time (ms) for a batch of 500 applyNetVoltages calls over `count`
+ * nets. The batch is large so even the 500-net case costs several milliseconds
+ * per sample, well above timer noise. The range end changes every call so no
+ * per-call result can be reused.
+ * Wall time is only ever compared between two sizes on the same machine, never
+ * against an absolute millisecond bound: CI runners are up to 5x slower than a
+ * dev machine.
+ */
+function timeApply(overlay: OverlayController, count: number, iters: number): number {
+  overlay.setOverlay('voltage')
+  const voltages = new Map<number, number>()
+  for (let i = 1; i <= count; i++) voltages.set(i, (i / count) * 5)
+  let best = Infinity
+  for (let rep = 0; rep < 5; rep++) {
+    const t0 = performance.now()
+    for (let k = 0; k < iters; k++) overlay.applyNetVoltages(voltages, 0, 5 + (k % 20) * 0.01)
+    best = Math.min(best, (performance.now() - t0) / iters)
+  }
+  return best
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-describe('OverlayController — mode switching', () => {
+describe('OverlayController: mode switching', () => {
   let overlay: OverlayController
   let netMaterials: Map<number, THREE.MeshStandardMaterial>
 
@@ -75,7 +98,7 @@ describe('OverlayController — mode switching', () => {
   })
 })
 
-describe('OverlayController — voltage tinting', () => {
+describe('OverlayController: voltage tinting', () => {
   let overlay: OverlayController
   let netMaterials: Map<number, THREE.MeshStandardMaterial>
 
@@ -137,7 +160,7 @@ describe('OverlayController — voltage tinting', () => {
   })
 })
 
-describe('OverlayController — legend data', () => {
+describe('OverlayController: legend data', () => {
   it('getLegend returns null when not in voltage mode', () => {
     const overlay = createOverlayController(makeNetMaterials(3))
     expect(overlay.getLegend()).toBeNull()
@@ -170,22 +193,87 @@ describe('OverlayController — legend data', () => {
   })
 })
 
-describe('OverlayController — performance', () => {
-  it('color-write loop for 500 nets completes in ≤ 16 ms', () => {
-    const netMaterials = makeNetMaterials(500)
+describe('OverlayController: performance', () => {
+  it('color-write cost grows linearly with net count (100 to 10000 nets)', () => {
+    // Per-update cost (ms), so the small case runs many more updates than the
+    // big one and both samples last several milliseconds, well above timer noise.
+    timeApply(createOverlayController(makeNetMaterials(100)), 100, 5000) // warm the JIT
+    const small = timeApply(createOverlayController(makeNetMaterials(100)), 100, 5000)
+    const big = timeApply(createOverlayController(makeNetMaterials(10000)), 10000, 50)
+
+    // Intent: the color-write loop stays a single pass over the nets, so a
+    // frame update on a big board fits the 16 ms spec budget. 100x the nets
+    // costs about 100x the time (measured 170 to 195 locally, cache effects at
+    // the larger size); a quadratic loop would cost about 10000x. The bound of
+    // 1000 is over 5x the highest locally measured ratio, so a loaded runner
+    // does not trip it, and it still fails on quadratic work with a wide margin.
+    const ratio = big / small
+    expect(ratio).toBeLessThan(1000)
+  })
+})
+
+describe('OverlayController: uniform-only writes (#77)', () => {
+  it('applyNetVoltages and setOverlay never bump a material version', () => {
+    const netMaterials = makeNetMaterials(50)
     const overlay = createOverlayController(netMaterials)
+    const before = [...netMaterials.values()].map(m => m.version)
+
     overlay.setOverlay('voltage')
-
-    // Build a voltages map for all 500 nets
     const voltages = new Map<number, number>()
-    for (let i = 1; i <= 500; i++) {
-      voltages.set(i, (i / 500) * 5)
-    }
-
-    const start = performance.now()
+    for (let i = 1; i <= 50; i++) voltages.set(i, (i / 50) * 5)
     overlay.applyNetVoltages(voltages, 0, 5)
-    const elapsed = performance.now() - start
+    overlay.applyNetVoltages(voltages, 0, 5)
+    overlay.setOverlay('realistic')
 
-    expect(elapsed).toBeLessThan(16)
+    const after = [...netMaterials.values()].map(m => m.version)
+    expect(after).toEqual(before)
+  })
+})
+
+describe('OverlayController: NetTintTable target (#57)', () => {
+  const COPPER = new THREE.Color(0xb87333)
+
+  it('tints nets through the table and restores them in realistic mode', () => {
+    const tints = new NetTintTable([1, 2, 3], COPPER)
+    const overlay = createOverlayController(tints)
+    overlay.setOverlay('voltage')
+    overlay.applyNetVoltages(new Map([[1, 0], [2, 5]]), 0, 5)
+
+    expect(tints.getColor(1)!.b).toBeGreaterThan(0.7)
+    expect(tints.getColor(2)!.r).toBeGreaterThan(0.7)
+    // net 3 was not in the map: still copper
+    expect(tints.getColor(3)!.r).toBeCloseTo(COPPER.r, 5)
+
+    overlay.setOverlay('realistic')
+    for (const id of [1, 2, 3]) {
+      expect(tints.getColor(id)!.r).toBeCloseTo(COPPER.r, 5)
+      expect(tints.getColor(id)!.g).toBeCloseTo(COPPER.g, 5)
+      expect(tints.getColor(id)!.b).toBeCloseTo(COPPER.b, 5)
+    }
+  })
+
+  it('a tint update grows linearly with net count (150 to 15000 nets)', () => {
+    const tintTime = (count: number, iters: number) =>
+      timeApply(createOverlayController(new NetTintTable(Array.from({ length: count }, (_, i) => i + 1), COPPER)), count, iters)
+    tintTime(150, 5000) // warm the JIT
+    const small = tintTime(150, 5000)
+    const big = tintTime(15000, 50)
+
+    // Intent: tinting through the table is one uniform write per net (no
+    // per-net material, no version bump), so the 16 ms spec budget holds at
+    // 1500 nets. Same-machine ratio: 100x the nets costs about 100x the time
+    // (measured 150 to 160 locally, cache effects at the larger size); a
+    // quadratic update would cost about 10000x. The bound of 1000 is over 5x the
+    // highest locally measured ratio, so a loaded runner does not trip it, and
+    // it still fails on quadratic work with a wide margin.
+    const ratio = big / small
+    expect(ratio).toBeLessThan(1000)
+  })
+
+  it('does not tint outside voltage mode', () => {
+    const tints = new NetTintTable([1], COPPER)
+    const overlay = createOverlayController(tints)
+    overlay.applyNetVoltages(new Map([[1, 5]]), 0, 5)
+    expect(tints.getColor(1)!.r).toBeCloseTo(COPPER.r, 5)
   })
 })

@@ -86,10 +86,16 @@ describe.skipIf(!kicad)('KiCad agrees with the synthetic boards', () => {
     }
   }, 60_000)
 
-  it('routed-rotated is fully connected in KiCad (zero unconnected items)', () => {
-    const drc = runDrc(kicad!.path, join(FIXTURE_DIR, 'routed-rotated-kicad10.kicad_pcb'))
-    expect(drc.unconnected, 'kicad-cli pcb drc unconnected items').toBe(0)
-  }, 60_000)
+  // pour-only-rail has no VCC track at all: KiCad connects it through the pour,
+  // which is the claim the critic's IR-drop graph (issue #10) has to match.
+  it.each(['routed-rotated-kicad10.kicad_pcb', 'pour-only-rail-kicad10.kicad_pcb'])(
+    '%s is fully connected in KiCad (zero unconnected items)',
+    (file: string) => {
+      const drc = runDrc(kicad!.path, join(FIXTURE_DIR, file))
+      expect(drc.unconnected, 'kicad-cli pcb drc unconnected items').toBe(0)
+    },
+    60_000,
+  )
 
   it('routed-rotated KiCad pad centres match the committed golden (rewrite with CIRCSIM_CORPUS_UPDATE_ORACLE=1)', () => {
     const boardFile = join(FIXTURE_DIR, 'routed-rotated-kicad10.kicad_pcb')

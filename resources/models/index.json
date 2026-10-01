@@ -1,50 +1,47 @@
 {
-  "$comment": "Provenance: bundled SPICE model library index for circsim, MIT. Every model file referenced here carries its own 'Provenance:' header and was written in-house from datasheet parameters (no vendor model text). PinMap node positions are 1-based and refer to the device's terminal order: diode/LED = 'anode cathode' (1=anode, 2=cathode); BJT = 'collector base emitter' (1=C, 2=B, 3=E); VDMOS = 'drain gate source' (1=D, 2=G, 3=S). Pad numbers come from the KiCad footprint. KiCad-official diode footprints (D_*) put pad-1 = cathode; JLC/EasyEDA-origin diode footprints (JLC lib prefix or bare dimension-pattern names like SMC_L7.1-W6.2) put pad-1 = ANODE, hence the anode-first '^JLC|_L…-W…' key ordered first on every two-terminal diode entry (first pinMaps key match wins; verified on the led_lantern rev B design files, D7).",
+  "$comment": "Provenance: bundled SPICE model library index for circsim, MIT. Every model file referenced here carries its own 'Provenance:' header and was written in-house from datasheet parameters (no vendor model text); the discrete BJT, diode, TVS and LED cards are derived from datasheet operating points by scripts/fit-model-cards.mjs and checked against known third-party library cards by library-fingerprint.test.ts. PinMap node positions are 1-based and refer to the device's terminal order: diode/LED = 'anode cathode' (1=anode, 2=cathode); BJT = 'collector base emitter' (1=C, 2=B, 3=E); VDMOS = 'drain gate source' (1=D, 2=G, 3=S). Pad numbers come from the KiCad footprint. KiCad-official diode footprints (D_*) put pad-1 = cathode, and the pinMaps keys encode that. JLC/EasyEDA-origin diode footprints (JLC lib prefix or bare dimension-pattern names like SMC_L7.1-W6.2-LS8.1) carry NO polarity convention: on the led_lantern rev B board pad 1 is the anode on one of four such diodes and the cathode on the other three, so no footprint-name key can know. selectPinMap therefore never matches those names against pinMaps keys; it returns the KiCad-convention defaultPinMap with a pinmap-unverified polarity warning, and only the attached schematic's A/K pin names (or a Model Doctor override) make the polarity known.",
   "entries": [
     {
       "id": "diode-1n4148",
       "match": {
         "mpn": ["1N4148", "1N914", "1N4148W", "1N4148WS", "BAS16", "BAS16W"],
         "refdesPrefix": ["D"],
-        "footprintRegex": "D_(SOD|SMA|SMB|0805|MELF|DO-35|DO-204)"
+        "footprintRegex": "(?:^|:)D_(SOD|SMA|SMB|0805|MELF|DO-35|DO-204)"
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "D1N4148" },
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(SOD|SMA|SMB|0805|MELF|DO-35|DO-204|DO-41).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim from 1N4148 datasheet parameters (Vf, Cj, trr, Vbr), MIT."
+      "provenance": "Derived for circsim from 1N4148 datasheet operating points (Vf at 5 mA and 100 mA, Cj, trr, Vbr) by scripts/fit-model-cards.mjs, MIT."
     },
     {
       "id": "diode-1n4001",
       "match": {
         "mpn": ["1N4001", "1N4002", "1N4003", "1N4004", "1N4005", "1N4006", "1N4007"],
         "refdesPrefix": ["D"],
-        "footprintRegex": "D_(DO-41|SMA|SMB|DO-214)"
+        "footprintRegex": "(?:^|:)D_(DO-41|SMA|SMB|DO-214)"
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "D1N4001" },
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(DO-41|SMA|SMB|DO-214|DO-201).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim from 1N400x rectifier datasheet parameters (Vf@1A, Vbr=50V), MIT."
+      "provenance": "Derived for circsim from 1N400x rectifier datasheet operating points (Vf at 1 A, Cj, trr, VRRM=50V) by scripts/fit-model-cards.mjs, MIT."
     },
     {
       "id": "diode-1n5819",
       "match": {
         "mpn": ["1N5819", "1N5817", "1N5818", "SB5819", "B5819W", "SS14"],
         "refdesPrefix": ["D"],
-        "footprintRegex": "D_(DO-41|SMA|SMB|DO-214|SOD)"
+        "footprintRegex": "(?:^|:)D_(DO-41|SMA|SMB|DO-214|SOD)"
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "D1N5819" },
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(DO-41|SMA|SMB|DO-214|SOD).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim from 1N5819 Schottky datasheet parameters (Vf~0.6V@1A, Vbr=40V, eg=0.69), MIT."
+      "provenance": "Derived for circsim from 1N5819 Schottky datasheet operating points (Vf at 1 A and 3 A, Cj, VRRM=40V) by scripts/fit-model-cards.mjs, MIT."
     },
     {
       "id": "schottky-ss54",
@@ -52,9 +49,8 @@
         "mpn": ["SS54", "SS52", "SS56", "SB540"]
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "DSS54" },
-      "$comment": "5A/40V-class Schottky (DO-214AB/SMC). MPN/value matching only — a D + SMA/SMB/SMC fallback would collide with the 1N4001/1N5819 fallback rules. pinMaps keys are for pin mapping, not matching; the (D_)? prefix covers bare routed-board footprint names like SMC_L7.1-…. The anode-first JLC/EasyEDA key MUST stay ordered before the generic key: the generic pattern also matches JLC names (SMC anywhere in the string) and would silently reverse the diode (led_lantern rev B D7, JLC-MCP:SMC_L7.1-W6.2-LS8.1-R-RD, pad 1 = anode = /VBUS_C).",
+      "$comment": "5A/40V-class Schottky (DO-214AB/SMC). MPN/value matching only — a D + SMA/SMB/SMC fallback would collide with the 1N4001/1N5819 fallback rules. pinMaps keys are for pin mapping, not matching; the (D_)? prefix covers bare routed-board footprint names like SMC_L7.1-…. JLC/EasyEDA-origin names (which the generic pattern also matches) are intercepted in selectPinMap before any key is tried and come back pinmap-unverified, because their pad-1 polarity varies by part (led_lantern rev B: D7 SMC pad 1 = anode, but the SMA and SOD-123 diodes are cathode on pad 1).",
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "(D_)?(SMC|SMB|SMA|DO-214|DO-201).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
@@ -65,11 +61,10 @@
       "match": {
         "mpn": ["BZX55C5V1", "BZX84C5V1", "1N4733A", "5V1"],
         "refdesPrefix": ["D", "Z", "ZD"],
-        "footprintRegex": "D_(SOD|MiniMELF|DO-35|SOT-23)"
+        "footprintRegex": "(?:^|:)D_(SOD|MiniMELF|DO-35|SOT-23)"
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "DZ5V1" },
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(SOD|MiniMELF|DO-35|MELF).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
@@ -81,12 +76,11 @@
         "mpn": ["BZX84C3V0", "3V0"],
         "valueRegex": "(?i)^3\\.0V$",
         "refdesPrefix": ["D", "Z", "ZD"],
-        "footprintRegex": "D_(SOD|MiniMELF|DO-35|SOT-23)"
+        "footprintRegex": "(?:^|:)D_(SOD|MiniMELF|DO-35|SOT-23)"
       },
       "model": { "type": "model-card", "file": "diodes.lib", "name": "DZ3V0" },
       "$comment": "valueRegex matches part VALUES only, and only the explicit '3.0V' (bare '3V' is ambiguous with battery values — refdes BT); a supply net named 3V0 never reaches the matcher.",
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "D_(SOD|MiniMELF|DO-35|MELF).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
@@ -100,11 +94,10 @@
       "model": { "type": "model-card", "file": "diodes.lib", "name": "DSMAJ24A" },
       "$comment": "Unidirectional 24V TVS (SMA). MPN/value matching only — the D + SMA refdes/footprint fallback tier gave a live 3-way false ambiguity on a real board (D3). pinMaps keys are for pin mapping, not matching.",
       "pinMaps": {
-        "^JLC|_L\\d+(\\.\\d+)?-W\\d+": { "1": "1", "2": "2" },
         "(D_)?(SMA|SMB|SMC|DO-214).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim from SMAJ24A TVS datasheet parameters (Vbr=26.7V@1mA, Vc=38.9V@10.3A via rs, Cj~280pF), MIT."
+      "provenance": "Derived for circsim from SMAJ24A TVS datasheet operating points (forward Vf at 1 A and 25 A, VBR at 1 mA, VC=38.9V at 10.3A, Cj~280pF) by scripts/fit-model-cards.mjs. Two-branch subcircuit: separate forward diode and reverse clamp. MIT."
     },
     {
       "id": "led-generic",
@@ -118,63 +111,59 @@
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Generic LED (red model, Vf~1.9V) written for circsim — used when value field is simply 'LED' without a color qualifier, MIT."
+      "provenance": "Generic LED (red model, Vf 1.9V at 20 mA) derived for circsim, used when value field is simply 'LED' without a color qualifier, MIT."
     },
     {
       "id": "led-red",
       "match": {
-        "valueRegex": "(?i)^(led[_-]?)?red$",
-        "refdesPrefix": ["D", "LED"],
-        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+        "valueRegex": "(?i)^(led[_ -]?)?red([_ -]?led)?$",
+        "refdesPrefix": ["D", "LED"]
       },
       "model": { "type": "model-card", "file": "led.lib", "name": "LED_RED" },
       "pinMaps": {
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim: red LED (AlGaInP, Vf~1.8-2.0V@20mA) via tuned n/eg, MIT."
+      "provenance": "Derived for circsim by scripts/fit-model-cards.mjs: red LED (AlGaInP, Vf 1.9V at 20 mA, band 1.8-2.0V) by fitting is, MIT."
     },
     {
       "id": "led-green",
       "match": {
-        "valueRegex": "(?i)^(led[_-]?)?green$",
-        "refdesPrefix": ["D", "LED"],
-        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+        "valueRegex": "(?i)^(led[_ -]?)?green([_ -]?led)?$",
+        "refdesPrefix": ["D", "LED"]
       },
       "model": { "type": "model-card", "file": "led.lib", "name": "LED_GREEN" },
       "pinMaps": {
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim: green LED (InGaN, Vf~2.0-2.2V@20mA) via tuned n/eg, MIT."
+      "provenance": "Derived for circsim by scripts/fit-model-cards.mjs: green LED (InGaN, Vf 2.15V at 20 mA, band 2.1-2.2V) by fitting is, MIT."
     },
     {
       "id": "led-blue",
       "match": {
-        "valueRegex": "(?i)^(led[_-]?)?blue$",
-        "refdesPrefix": ["D", "LED"],
-        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+        "valueRegex": "(?i)^(led[_ -]?)?blue([_ -]?led)?$",
+        "refdesPrefix": ["D", "LED"]
       },
       "model": { "type": "model-card", "file": "led.lib", "name": "LED_BLUE" },
       "pinMaps": {
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim: blue LED (InGaN, Vf~3.0-3.2V@20mA) via tuned n/eg, MIT."
+      "provenance": "Derived for circsim by scripts/fit-model-cards.mjs: blue LED (InGaN, Vf 3.1V at 20 mA, band 3.0-3.2V) by fitting is, MIT."
     },
     {
       "id": "led-white",
       "match": {
-        "valueRegex": "(?i)^(led[_-]?)?white$",
-        "refdesPrefix": ["D", "LED"],
-        "footprintRegex": "LED_(0603|0805|1206|3mm|5mm|D[0-9])"
+        "valueRegex": "(?i)^(led[_ -]?)?white([_ -]?led)?$",
+        "refdesPrefix": ["D", "LED"]
       },
       "model": { "type": "model-card", "file": "led.lib", "name": "LED_WHITE" },
       "pinMaps": {
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim: white LED (InGaN+phosphor, Vf~3.0-3.4V@20mA) via tuned n/eg, MIT."
+      "provenance": "Derived for circsim by scripts/fit-model-cards.mjs: white LED (InGaN+phosphor, Vf 3.2V at 20 mA, band 3.0-3.4V) by fitting is, MIT."
     },
     {
       "id": "bjt-2n2222",
@@ -192,7 +181,7 @@
         "TO-92.*": { "1": "3", "2": "2", "3": "1" }
       },
       "defaultPinMap": { "1": "3", "2": "2", "3": "1" },
-      "provenance": "Written for circsim from 2N2222A datasheet parameters (hFE, fT=300MHz), Gummel-Poon NPN, MIT."
+      "provenance": "Derived for circsim from 2N2222A datasheet operating points (hFE, Vbe, hoe, fT=300MHz, Cobo, Cibo, ts) by scripts/fit-model-cards.mjs, Gummel-Poon NPN, MIT."
     },
     {
       "id": "bjt-2n3904",
@@ -209,7 +198,7 @@
         "TO-92.*": { "1": "3", "2": "2", "3": "1" }
       },
       "defaultPinMap": { "1": "3", "2": "2", "3": "1" },
-      "provenance": "Written for circsim from 2N3904 datasheet parameters (hFE, fT=300MHz), Gummel-Poon NPN, MIT."
+      "provenance": "Derived for circsim from 2N3904 datasheet operating points (hFE, Vbe, hoe, fT=300MHz, Cobo, Cibo, ts) by scripts/fit-model-cards.mjs, Gummel-Poon NPN, MIT."
     },
     {
       "id": "bjt-2n3906",
@@ -226,7 +215,7 @@
         "TO-92.*": { "1": "3", "2": "2", "3": "1" }
       },
       "defaultPinMap": { "1": "3", "2": "2", "3": "1" },
-      "provenance": "Written for circsim from 2N3906 datasheet parameters (hFE, fT=250MHz), Gummel-Poon PNP, MIT."
+      "provenance": "Derived for circsim from 2N3906 datasheet operating points (hFE, Vbe, hoe, fT=250MHz, Cobo, Cibo, ts) by scripts/fit-model-cards.mjs, Gummel-Poon PNP, MIT."
     },
     {
       "id": "bjt-bc547",
@@ -243,7 +232,7 @@
         "TO-92.*": { "1": "1", "2": "2", "3": "3" }
       },
       "defaultPinMap": { "1": "1", "2": "2", "3": "3" },
-      "provenance": "Written for circsim from BC547B datasheet parameters (hFE~200-450, fT=300MHz), Gummel-Poon NPN. Note TO-92 BC547 pinout is C-B-E (pin1=C), MIT."
+      "provenance": "Derived for circsim from BC547B datasheet operating points (hFE typ 290 at 2 mA, Vbe, hoe, fT=300MHz, Cc, Ce, ts) by scripts/fit-model-cards.mjs, Gummel-Poon NPN. Note TO-92 BC547 pinout is C-B-E (pin1=C), MIT."
     },
     {
       "id": "bjt-bc557",
@@ -260,7 +249,7 @@
         "TO-92.*": { "1": "1", "2": "2", "3": "3" }
       },
       "defaultPinMap": { "1": "1", "2": "2", "3": "3" },
-      "provenance": "Written for circsim from BC557B datasheet parameters (hFE~200-450, fT=150MHz), Gummel-Poon PNP. TO-92 pinout C-B-E (pin1=C), MIT."
+      "provenance": "Derived for circsim from BC557B datasheet operating points (hFE typ 290 at 2 mA, Vbe, hoe, fT=150MHz, Cc, Ce, ts) by scripts/fit-model-cards.mjs, Gummel-Poon PNP. TO-92 pinout C-B-E (pin1=C), MIT."
     },
     {
       "id": "mosfet-2n7002",
@@ -684,6 +673,1052 @@
       "$comment": "Documented open: known part, deliberately not modeled — resolves to an open stub carrying the note. MPN/value matching only — a U + 16-pin fallback would collide with logic-74hc595 (the exact false-positive the CD4538 gap test exists to catch).",
       "pinMaps": {},
       "provenance": "Documented-open entry written for circsim from the TI CD4538B datasheet review (retriggerable monostable, per-unit RC timing pins) — no model text by design, MIT."
+    },
+    {
+      "id": "stub-mcu-esp32",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "MCU_STUB_ESP32"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. ESP32 family: 100 mA supply load, RF receive active, Rx 802.11b/g/n about 95 to 100 mA.",
+      "pinMaps": {},
+      "provenance": "Supply-load stub written for circsim from the ESP32 family datasheet (RF receive active, Rx 802.11b/g/n about 95 to 100 mA: 100 mA), MIT. The load is the only behavior; see stubs.lib for the simplifications."
+    },
+    {
+      "id": "stub-mcu-esp8266",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "MCU_STUB_ESP8266"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. ESP8266 family: 60 mA supply load, Rx 802.11b/g/n about 56 to 62 mA.",
+      "pinMaps": {},
+      "provenance": "Supply-load stub written for circsim from the ESP8266 family datasheet (Rx 802.11b/g/n about 56 to 62 mA: 60 mA), MIT. The load is the only behavior; see stubs.lib for the simplifications."
+    },
+    {
+      "id": "stub-mcu-stm32f1",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "MCU_STUB_STM32F1"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. STM32F1: 36 mA supply load, Run mode at 72 MHz, all peripherals enabled, typical.",
+      "pinMaps": {},
+      "provenance": "Supply-load stub written for circsim from the STM32F1 datasheet (Run mode at 72 MHz, all peripherals enabled, typical: 36 mA), MIT. The load is the only behavior; see stubs.lib for the simplifications."
+    },
+    {
+      "id": "stub-mcu-stm32f4",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "MCU_STUB_STM32F4"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. STM32F4: 100 mA supply load, Run mode at 168 MHz, all peripherals enabled.",
+      "pinMaps": {},
+      "provenance": "Supply-load stub written for circsim from the STM32F4 datasheet (Run mode at 168 MHz, all peripherals enabled: 100 mA), MIT. The load is the only behavior; see stubs.lib for the simplifications."
+    },
+    {
+      "id": "stub-mcu-stm32-lowpower",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "MCU_STUB_STM32LP"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. STM32 C0/F0/G0/L0/L4: 10 mA supply load, Run mode at 48 to 80 MHz.",
+      "pinMaps": {},
+      "provenance": "Supply-load stub written for circsim from the STM32 C0/F0/G0/L0/L4 datasheet (Run mode at 48 to 80 MHz: 10 mA), MIT. The load is the only behavior; see stubs.lib for the simplifications."
+    },
+    {
+      "id": "stub-mcu-atmega",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "MCU_STUB_ATMEGA"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. ATmega: 10 mA supply load, active at 16 MHz, 5 V.",
+      "pinMaps": {},
+      "provenance": "Supply-load stub written for circsim from the ATmega datasheet (active at 16 MHz, 5 V: 10 mA), MIT. The load is the only behavior; see stubs.lib for the simplifications."
+    },
+    {
+      "id": "stub-mcu-attiny",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "MCU_STUB_ATTINY"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. ATtiny: 5 mA supply load, active at 8 MHz, 5 V.",
+      "pinMaps": {},
+      "provenance": "Supply-load stub written for circsim from the ATtiny datasheet (active at 8 MHz, 5 V: 5 mA), MIT. The load is the only behavior; see stubs.lib for the simplifications."
+    },
+    {
+      "id": "stub-mcu-rp2040",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "MCU_STUB_RP2040"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. RP2040: 25 mA supply load, both cores at 125 MHz.",
+      "pinMaps": {},
+      "provenance": "Supply-load stub written for circsim from the RP2040 datasheet (both cores at 125 MHz: 25 mA), MIT. The load is the only behavior; see stubs.lib for the simplifications."
+    },
+    {
+      "id": "stub-mcu-nrf52",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "MCU_STUB_NRF52"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. nRF52: 6 mA supply load, radio Rx 1 Mbps BLE with the DC/DC converter at 3 V.",
+      "pinMaps": {},
+      "provenance": "Supply-load stub written for circsim from the nRF52 datasheet (radio Rx 1 Mbps BLE with the DC/DC converter at 3 V: 6 mA), MIT. The load is the only behavior; see stubs.lib for the simplifications."
+    },
+    {
+      "id": "stub-mcu-samd21",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "MCU_STUB_SAMD21"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. SAMD21: 6 mA supply load, active at 48 MHz, 3.3 V.",
+      "pinMaps": {},
+      "provenance": "Supply-load stub written for circsim from the SAMD21 datasheet (active at 48 MHz, 3.3 V: 6 mA), MIT. The load is the only behavior; see stubs.lib for the simplifications."
+    },
+    {
+      "id": "stub-mcu-ch32v003",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "MCU_STUB_CH32V003"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. CH32V003: 8 mA supply load, run mode at 48 MHz.",
+      "pinMaps": {},
+      "provenance": "Supply-load stub written for circsim from the CH32V003 datasheet (run mode at 48 MHz: 8 mA), MIT. The load is the only behavior; see stubs.lib for the simplifications."
+    },
+    {
+      "id": "stub-mcu-msp430",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "MCU_STUB_MSP430"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. MSP430: 0.23 mA supply load, active at 1 MHz, 2.2 V.",
+      "pinMaps": {},
+      "provenance": "Supply-load stub written for circsim from the MSP430 datasheet (active at 1 MHz, 2.2 V: 0.23 mA), MIT. The load is the only behavior; see stubs.lib for the simplifications."
+    },
+    {
+      "id": "stub-ws2812b",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "LED_STUB_WS2812B"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. WS2812B / WS2811 / NeoPixel addressable LED as a 1 mA IDLE sink (the part is a supply load; the lit LED draws up to 60 mA, see stubs.lib). Datasheet pinout WS2812B 5050: 1 VDD, 2 DOUT, 3 VSS, 4 DIN.",
+      "pinMaps": {
+        "LED_WS2812B_PL9823": {
+          "1": "vdd",
+          "3": "gnd"
+        }
+      },
+      "provenance": "Supply-load stub written for circsim from the WS2812B datasheet (supply 3.5 to 5.3 V, 20 mA per colour channel lit) and the dark-state current vendors report (about 1 mA), MIT."
+    },
+    {
+      "id": "stub-ch340",
+      "match": {},
+      "model": {
+        "type": "subckt",
+        "file": "stubs.lib",
+        "name": "IC_STUB_CH340"
+      },
+      "$comment": "Supply-load stub, never matched by libraryMatch (no match criteria): src/core/models/stubRules.ts selects it by name patterns and binds its vdd and gnd pads. CH340C / CH340G USB-serial bridge as a 12 mA supply load. Datasheet SOP-16 pinout: 1 GND, 16 VCC, 4 V3 (internal 3.3 V pin).",
+      "pinMaps": {
+        "(SOIC|SOP|SSOP)-?16": {
+          "1": "gnd",
+          "16": "vdd"
+        }
+      },
+      "provenance": "Supply-load stub written for circsim from the WCH CH340 datasheet (operating supply current about 12 mA at 5 V, SOP-16 pinout), MIT."
+    },
+    {
+      "id": "reg-lm317",
+      "match": {
+        "mpn": [
+          "LM317",
+          "LM317T",
+          "LM317AT",
+          "LM317MDT",
+          "LM317-N",
+          "LM317EMP"
+        ]
+      },
+      "model": {
+        "type": "subckt",
+        "file": "regulators.lib",
+        "name": "LM317"
+      },
+      "$comment": "Adjustable regulator, subckt terminals vin adj vout. TO-220, SOT-223, DPAK and D2PAK share the pinout 1=ADJ 2=OUT 3=IN. MPN/value matching only (an unlabeled TO-220 U could be anything). Vout is set by the external divider: Vout = 1.25 V x (1 + R2/R1) + 50 uA x R2.",
+      "pinMaps": {
+        "(TO-220|SOT-223|TO-252|DPAK|TO-263|D2PAK).*": {
+          "1": "adj",
+          "2": "vout",
+          "3": "vin"
+        }
+      },
+      "defaultPinMap": {
+        "1": "adj",
+        "2": "vout",
+        "3": "vin"
+      },
+      "provenance": "Behavioral adjustable regulator written for circsim from the LM317 datasheet (Vref 1.25 V, IADJ 50 uA, dropout about 2 V at 1.5 A, current limit 2.2 A), MIT."
+    },
+    {
+      "id": "reg-ap2112k-3v3",
+      "match": {
+        "mpn": [
+          "AP2112K-3.3",
+          "AP2112K-3.3TRG1",
+          "AP2112K-3V3",
+          "AP2112K"
+        ]
+      },
+      "model": {
+        "type": "subckt",
+        "file": "regulators.lib",
+        "name": "AP2112K-3.3"
+      },
+      "$comment": "SOT-23-5 pinout 1=VIN 2=GND 3=EN 4=NC 5=VOUT; the enable input gates the output (a floating EN is off). 600 mA, 250 mV dropout. MPN/value matching only.",
+      "pinMaps": {
+        "SOT-23-5.*": {
+          "1": "vin",
+          "2": "gnd",
+          "3": "en",
+          "5": "vout"
+        }
+      },
+      "defaultPinMap": {
+        "1": "vin",
+        "2": "gnd",
+        "3": "en",
+        "5": "vout"
+      },
+      "provenance": "Behavioral LDO written for circsim from the Diodes Inc. AP2112K-3.3 datasheet (Vout 3.3 V, dropout 250 mV at 600 mA, Iq 55 uA, enable thresholds), MIT."
+    },
+    {
+      "id": "reg-mcp1700-3v3",
+      "match": {
+        "mpn": [
+          "MCP1700-3302E",
+          "MCP1700-3302",
+          "MCP1700T-3302E",
+          "MCP1700T-3302E/TT",
+          "MCP1700"
+        ]
+      },
+      "model": {
+        "type": "subckt",
+        "file": "regulators.lib",
+        "name": "MCP1700-3302"
+      },
+      "$comment": "SOT-23 pinout 1=GND 2=VOUT 3=VIN. The TO-92 and SOT-89 pinouts differ, so only the SOT-23 key is trusted; other footprints take the default map with a pinmap-unverified warning. MPN/value matching only.",
+      "pinMaps": {
+        "SOT-23.*": {
+          "1": "gnd",
+          "2": "vout",
+          "3": "vin"
+        }
+      },
+      "defaultPinMap": {
+        "1": "gnd",
+        "2": "vout",
+        "3": "vin"
+      },
+      "provenance": "Behavioral LDO written for circsim from the Microchip MCP1700 datasheet (Vout 3.3 V, dropout 178 mV at 250 mA, Iq 1.6 uA, current limit about 550 mA), MIT."
+    },
+    {
+      "id": "reg-xc6206-3v3",
+      "match": {
+        "mpn": [
+          "XC6206P332MR",
+          "XC6206P332MR-G",
+          "XC6206P332",
+          "XC6206P332MR-GB"
+        ]
+      },
+      "model": {
+        "type": "subckt",
+        "file": "regulators.lib",
+        "name": "XC6206-3.3"
+      },
+      "$comment": "Torex XC6206 SOT-23 pinout 1=VSS 2=VIN 3=VOUT. The 662K and HT73xx look-alikes use other pin orders, so only the Torex part numbers match. MPN/value matching only.",
+      "pinMaps": {
+        "SOT-23.*": {
+          "1": "gnd",
+          "2": "vin",
+          "3": "vout"
+        }
+      },
+      "defaultPinMap": {
+        "1": "gnd",
+        "2": "vin",
+        "3": "vout"
+      },
+      "provenance": "Behavioral LDO written for circsim from the Torex XC6206P332 datasheet (Vout 3.3 V, dropout about 250 mV at 100 mA, Iq 1 uA, 200 mA), MIT."
+    },
+    {
+      "id": "charger-tp4056",
+      "match": {
+        "mpn": [
+          "TP4056",
+          "TP4056-42-ESOP8",
+          "TP4056-42",
+          "TP4056X"
+        ]
+      },
+      "model": {
+        "type": "subckt",
+        "file": "power-ic.lib",
+        "name": "TP4056"
+      },
+      "$comment": "SIMPLIFIED CC/CV charge stub, subckt terminals vcc bat prog gnd ce chrg stdby temp (see power-ic.lib). SOP-8 / ESOP-8 pinout 1=TEMP 2=PROG 3=GND 4=VCC 5=BAT 6=STDBY 7=CHRG 8=CE. MPN/value matching only.",
+      "pinMaps": {
+        "(SOIC|SOP|ESOP|HSOP)-?8.*": {
+          "1": "temp",
+          "2": "prog",
+          "3": "gnd",
+          "4": "vcc",
+          "5": "bat",
+          "6": "stdby",
+          "7": "chrg",
+          "8": "ce"
+        }
+      },
+      "defaultPinMap": {
+        "1": "temp",
+        "2": "prog",
+        "3": "gnd",
+        "4": "vcc",
+        "5": "bat",
+        "6": "stdby",
+        "7": "chrg",
+        "8": "ce"
+      },
+      "provenance": "Behavioral CC/CV charger stub written for circsim from the TP4056 datasheet (Ibat = 1200 x Vprog/Rprog with Vprog 1.0 V, 4.2 V float, trickle below 2.9 V, open-drain status pins), MIT."
+    },
+    {
+      "id": "open-lm2596",
+      "match": {
+        "mpn": [
+          "LM2596",
+          "LM2596S",
+          "LM2596S-ADJ",
+          "LM2596S-5.0",
+          "LM2596S-3.3",
+          "LM2596T-ADJ",
+          "LM2596SX-ADJ"
+        ]
+      },
+      "model": {
+        "type": "documented-open",
+        "name": "LM2596"
+      },
+      "note": "Switching buck regulator: a cycle-by-cycle converter has no useful DC-averaged stand-in that stays stable for every inductor and capacitor choice. Intentionally left open; drive its output rail from a bench supply to test the load.",
+      "$comment": "Documented open: known part, deliberately not modeled (grey \"open by design\" in the UI). MPN/value matching only.",
+      "pinMaps": {},
+      "provenance": "Documented-open entry written for circsim from the LM2596 datasheet review (150 kHz current-mode buck, feedback 1.23 V; no stable averaged model across L and C), no model text by design, MIT."
+    },
+    {
+      "id": "open-mt3608",
+      "match": {
+        "mpn": [
+          "MT3608",
+          "MT3608L",
+          "XL6009",
+          "XL6009E1"
+        ]
+      },
+      "model": {
+        "type": "documented-open",
+        "name": "MT3608"
+      },
+      "note": "Switching boost regulator: the converter has no useful DC-averaged stand-in that stays stable for every inductor and capacitor choice. Intentionally left open; drive its output rail from a bench supply to test the load.",
+      "$comment": "Documented open: known part, deliberately not modeled (grey \"open by design\" in the UI). MPN/value matching only.",
+      "pinMaps": {},
+      "provenance": "Documented-open entry written for circsim from the MT3608 and XL6009 datasheet review (1.2 MHz and 400 kHz boost converters, feedback 0.6 V and 1.25 V), no model text by design, MIT."
+    },
+    {
+      "id": "open-mp1584",
+      "match": {
+        "mpn": [
+          "MP1584",
+          "MP1584EN",
+          "MP1584EN-LF-Z"
+        ]
+      },
+      "model": {
+        "type": "documented-open",
+        "name": "MP1584"
+      },
+      "note": "Switching buck regulator: the converter has no useful DC-averaged stand-in that stays stable for every inductor and capacitor choice. Intentionally left open; drive its output rail from a bench supply to test the load.",
+      "$comment": "Documented open: known part, deliberately not modeled (grey \"open by design\" in the UI). MPN/value matching only.",
+      "pinMaps": {},
+      "provenance": "Documented-open entry written for circsim from the MP1584 datasheet review (1.5 MHz buck, feedback 0.8 V), no model text by design, MIT."
+    },
+    {
+      "id": "opamp-mcp6001",
+      "match": {
+        "mpn": [
+          "MCP6001",
+          "MCP6001T-I/OT",
+          "MCP6001T-E/OT",
+          "MCP6001T"
+        ]
+      },
+      "model": {
+        "type": "subckt",
+        "file": "opamp.lib",
+        "name": "MCP6001"
+      },
+      "$comment": "Rail-to-rail single op-amp, SOT-23-5 / SC-70-5 pinout 1=OUT 2=VSS 3=IN+ 4=IN- 5=VDD. The MCP6001R and MCP6001U variants swap pins and are not matched. MPN/value matching only.",
+      "pinMaps": {
+        "(SOT-23-5|SC-70-5|SOT-353|SOT-323-5).*": {
+          "1": "out",
+          "2": "vee",
+          "3": "inp",
+          "4": "inn",
+          "5": "vcc"
+        }
+      },
+      "defaultPinMap": {
+        "1": "out",
+        "2": "vee",
+        "3": "inp",
+        "4": "inn",
+        "5": "vcc"
+      },
+      "provenance": "Behavioral op-amp written for circsim from the Microchip MCP6001 datasheet (Aol 112 dB, GBW 1 MHz, SR 0.6 V/us, Vos 0.5 mV, IQ 100 uA, rail-to-rail output), MIT."
+    },
+    {
+      "id": "opamp-mcp6002",
+      "match": {
+        "mpn": [
+          "MCP6002",
+          "MCP6002-I/SN",
+          "MCP6002T-I/SN",
+          "MCP6002-I/P"
+        ]
+      },
+      "model": {
+        "type": "subckt",
+        "file": "opamp.lib",
+        "name": "MCP6002"
+      },
+      "$comment": "Rail-to-rail dual op-amp, BOTH channels modeled. 8-pin pinout 1=OUTA 2=INA- 3=INA+ 4=VSS 5=INB+ 6=INB- 7=OUTB 8=VDD. MPN/value matching only.",
+      "pinMaps": {
+        "(SOIC|DIP|MSOP|TSSOP|SOP)-?8.*": {
+          "1": "outa",
+          "2": "inan",
+          "3": "inap",
+          "4": "vee",
+          "5": "inbp",
+          "6": "inbn",
+          "7": "outb",
+          "8": "vcc"
+        }
+      },
+      "defaultPinMap": {
+        "1": "outa",
+        "2": "inan",
+        "3": "inap",
+        "4": "vee",
+        "5": "inbp",
+        "6": "inbn",
+        "7": "outb",
+        "8": "vcc"
+      },
+      "provenance": "Behavioral dual op-amp written for circsim from the Microchip MCP6002 datasheet (same per-channel figures as the MCP6001, IQ 100 uA per amplifier), MIT."
+    },
+    {
+      "id": "opamp-ne5532",
+      "match": {
+        "mpn": [
+          "NE5532",
+          "NE5532P",
+          "NE5532D",
+          "NE5532DR",
+          "NE5532N",
+          "NE5532AP"
+        ]
+      },
+      "model": {
+        "type": "subckt",
+        "file": "opamp.lib",
+        "name": "NE5532"
+      },
+      "$comment": "Low-noise audio dual op-amp, BOTH channels modeled. 8-pin pinout 1=OUT1 2=IN1- 3=IN1+ 4=V- 5=IN2+ 6=IN2- 7=OUT2 8=V+. MPN/value matching only.",
+      "pinMaps": {
+        "(SOIC|DIP|MSOP|TSSOP|SOP)-?8.*": {
+          "1": "outa",
+          "2": "inan",
+          "3": "inap",
+          "4": "vee",
+          "5": "inbp",
+          "6": "inbn",
+          "7": "outb",
+          "8": "vcc"
+        }
+      },
+      "defaultPinMap": {
+        "1": "outa",
+        "2": "inan",
+        "3": "inap",
+        "4": "vee",
+        "5": "inbp",
+        "6": "inbn",
+        "7": "outb",
+        "8": "vcc"
+      },
+      "provenance": "Behavioral dual op-amp written for circsim from the NE5532 datasheet (Aol 100 V/mV, GBW 10 MHz, SR 9 V/us, ICC 8 mA per package), MIT."
+    },
+    {
+      "id": "opamp-lm741",
+      "match": {
+        "mpn": [
+          "LM741",
+          "LM741C",
+          "LM741CN",
+          "UA741",
+          "UA741CP",
+          "LM741CH"
+        ]
+      },
+      "model": {
+        "type": "subckt",
+        "file": "opamp.lib",
+        "name": "LM741"
+      },
+      "$comment": "General-purpose single op-amp, DIP-8 / SOIC-8 pinout 2=IN- 3=IN+ 4=V- 6=OUT 7=V+ (1 and 5 offset null, 8 NC: not modeled). MPN/value matching only.",
+      "pinMaps": {
+        "(SOIC|DIP|MSOP|TSSOP|SOP)-?8.*": {
+          "2": "inn",
+          "3": "inp",
+          "4": "vee",
+          "6": "out",
+          "7": "vcc"
+        }
+      },
+      "defaultPinMap": {
+        "2": "inn",
+        "3": "inp",
+        "4": "vee",
+        "6": "out",
+        "7": "vcc"
+      },
+      "provenance": "Behavioral op-amp written for circsim from the LM741 datasheet (Aol 200 V/mV, GBW 1 MHz, SR 0.5 V/us, Vos 1 mV, ICC 1.7 mA, output resistance 75 ohm), MIT."
+    },
+    {
+      "id": "mosfet-irlz44n",
+      "match": {
+        "mpn": [
+          "IRLZ44N",
+          "IRLZ44NPBF",
+          "IRLZ44NS",
+          "IRLZ44",
+          "IRLZ44NL"
+        ]
+      },
+      "model": {
+        "type": "model-card",
+        "file": "mosfet.lib",
+        "name": "MIRLZ44N"
+      },
+      "$comment": "N-channel power MOSFET, TO-220 / TO-247 / D2PAK / DPAK pinout 1=G 2=D 3=S (the pin map sends pad 1 to the gate position 2, pad 2 to the drain position 1, pad 3 to the source position 3). MPN/value matching only.",
+      "pinMaps": {
+        "(TO-220|TO-247|TO-263|D2PAK|TO-252|DPAK).*": {
+          "1": "2",
+          "2": "1",
+          "3": "3"
+        }
+      },
+      "defaultPinMap": {
+        "1": "2",
+        "2": "1",
+        "3": "3"
+      },
+      "provenance": "Written for circsim from the datasheet parameters of the IRLZ44N logic-level 55 V NMOS (Vgs(th) 1 to 2 V, Rds(on) 22 mohm at 10 V and 25 mohm at 5 V), VDMOS card fitted by hand to the stated Rds(on) points, MIT."
+    },
+    {
+      "id": "mosfet-irf540n",
+      "match": {
+        "mpn": [
+          "IRF540N",
+          "IRF540NPBF",
+          "IRF540NS",
+          "IRF540",
+          "IRF540NL"
+        ]
+      },
+      "model": {
+        "type": "model-card",
+        "file": "mosfet.lib",
+        "name": "MIRF540N"
+      },
+      "$comment": "N-channel power MOSFET, TO-220 / TO-247 / D2PAK / DPAK pinout 1=G 2=D 3=S (the pin map sends pad 1 to the gate position 2, pad 2 to the drain position 1, pad 3 to the source position 3). MPN/value matching only.",
+      "pinMaps": {
+        "(TO-220|TO-247|TO-263|D2PAK|TO-252|DPAK).*": {
+          "1": "2",
+          "2": "1",
+          "3": "3"
+        }
+      },
+      "defaultPinMap": {
+        "1": "2",
+        "2": "1",
+        "3": "3"
+      },
+      "provenance": "Written for circsim from the datasheet parameters of the IRF540N 100 V NMOS (Vgs(th) 2 to 4 V, Rds(on) 44 mohm max at 10 V), VDMOS card fitted by hand to the stated Rds(on) points, MIT."
+    },
+    {
+      "id": "mosfet-irf3205",
+      "match": {
+        "mpn": [
+          "IRF3205",
+          "IRF3205PBF",
+          "IRF3205S",
+          "IRF3205ZPBF"
+        ]
+      },
+      "model": {
+        "type": "model-card",
+        "file": "mosfet.lib",
+        "name": "MIRF3205"
+      },
+      "$comment": "N-channel power MOSFET, TO-220 / TO-247 / D2PAK / DPAK pinout 1=G 2=D 3=S (the pin map sends pad 1 to the gate position 2, pad 2 to the drain position 1, pad 3 to the source position 3). MPN/value matching only.",
+      "pinMaps": {
+        "(TO-220|TO-247|TO-263|D2PAK|TO-252|DPAK).*": {
+          "1": "2",
+          "2": "1",
+          "3": "3"
+        }
+      },
+      "defaultPinMap": {
+        "1": "2",
+        "2": "1",
+        "3": "3"
+      },
+      "provenance": "Written for circsim from the datasheet parameters of the IRF3205 55 V NMOS (Vgs(th) 2 to 4 V, Rds(on) 8 mohm max at 10 V), VDMOS card fitted by hand to the stated Rds(on) points, MIT."
+    },
+    {
+      "id": "mosfet-irf9540n",
+      "match": {
+        "mpn": [
+          "IRF9540N",
+          "IRF9540NPBF",
+          "IRF9540NS",
+          "IRF9540"
+        ]
+      },
+      "model": {
+        "type": "model-card",
+        "file": "mosfet.lib",
+        "name": "MIRF9540N"
+      },
+      "$comment": "P-channel power MOSFET, TO-220 / TO-247 / D2PAK / DPAK pinout 1=G 2=D 3=S (the pin map sends pad 1 to the gate position 2, pad 2 to the drain position 1, pad 3 to the source position 3). MPN/value matching only.",
+      "pinMaps": {
+        "(TO-220|TO-247|TO-263|D2PAK|TO-252|DPAK).*": {
+          "1": "2",
+          "2": "1",
+          "3": "3"
+        }
+      },
+      "defaultPinMap": {
+        "1": "2",
+        "2": "1",
+        "3": "3"
+      },
+      "provenance": "Written for circsim from the datasheet parameters of the IRF9540N 100 V PMOS (Vgs(th) -2 to -4 V, Rds(on) 117 mohm max at -10 V), VDMOS card fitted by hand to the stated Rds(on) points, MIT."
+    },
+    {
+      "id": "mosfet-irlml6402",
+      "match": {
+        "mpn": [
+          "IRLML6402",
+          "IRLML6402TRPBF",
+          "IRLML6402PBF"
+        ]
+      },
+      "model": {
+        "type": "model-card",
+        "file": "mosfet.lib",
+        "name": "MIRLML6402"
+      },
+      "$comment": "P-channel logic-level MOSFET, SOT-23 pinout 1=G 2=S 3=D. MPN/value matching only (the SOT-23 Q fallback tier stays with mosfet-pmos-generic).",
+      "pinMaps": {
+        "SOT-23.*": {
+          "1": "2",
+          "2": "3",
+          "3": "1"
+        }
+      },
+      "defaultPinMap": {
+        "1": "2",
+        "2": "3",
+        "3": "1"
+      },
+      "provenance": "Written for circsim from the IRLML6402 datasheet (Vgs(th) -0.4 to -0.7 V, Rds(on) 65 mohm max at -4.5 V and 135 mohm max at -2.5 V), VDMOS PMOS, MIT."
+    },
+    {
+      "id": "schottky-ss34",
+      "match": {
+        "mpn": [
+          "SS34",
+          "SS33",
+          "SS32",
+          "SK34",
+          "B340A",
+          "B340B"
+        ]
+      },
+      "model": {
+        "type": "model-card",
+        "file": "discrete-extra.lib",
+        "name": "DSS34"
+      },
+      "$comment": "3 A / 40 V-class Schottky (SMA/SMB/SMC). MPN/value matching only: a D + SMA/SMB/SMC fallback would collide with the 1N4001/1N5819 fallback rules. pinMaps keys are for pin mapping, not matching.",
+      "pinMaps": {
+        "D_(DO-41|DO-201|SMA|SMB|SMC|DO-214|SOD).*": {
+          "1": "2",
+          "2": "1"
+        }
+      },
+      "defaultPinMap": {
+        "1": "2",
+        "2": "1"
+      },
+      "provenance": "Fitted for circsim from SS34 datasheet points (Vf 0.45 V typ at 3 A, VRRM 40 V) with the fit-model-cards.mjs two-point helper, MIT."
+    },
+    {
+      "id": "schottky-1n5822",
+      "match": {
+        "mpn": [
+          "1N5822",
+          "1N5821",
+          "1N5820",
+          "SB340",
+          "MBR340"
+        ]
+      },
+      "model": {
+        "type": "model-card",
+        "file": "discrete-extra.lib",
+        "name": "D1N5822"
+      },
+      "$comment": "3 A / 40 V Schottky rectifier (DO-201AD axial). MPN/value matching only. pinMaps keys are for pin mapping, not matching.",
+      "pinMaps": {
+        "D_(DO-41|DO-201|SMA|SMB|SMC|DO-214|SOD).*": {
+          "1": "2",
+          "2": "1"
+        }
+      },
+      "defaultPinMap": {
+        "1": "2",
+        "2": "1"
+      },
+      "provenance": "Fitted for circsim from 1N5822 datasheet points (Vf 0.47 V typ at 3 A, VRRM 40 V) with the fit-model-cards.mjs two-point helper, MIT."
+    },
+    {
+      "id": "zener-3v3",
+      "match": {
+        "mpn": [
+          "BZX55C3V3",
+          "BZX84C3V3",
+          "1N4728A",
+          "MMSZ4684",
+          "BZT52C3V3"
+        ]
+      },
+      "model": {
+        "type": "model-card",
+        "file": "discrete-extra.lib",
+        "name": "DZ3V3"
+      },
+      "$comment": "3.3 V zener. MPN matching only: the bare value \"3V3\" names rails and regulators on real boards, so it is not a match key. pinMaps keys are for pin mapping, not matching.",
+      "pinMaps": {
+        "D_(SOD|MiniMELF|DO-35|MELF).*": {
+          "1": "2",
+          "2": "1"
+        }
+      },
+      "defaultPinMap": {
+        "1": "2",
+        "2": "1"
+      },
+      "provenance": "Written for circsim from BZX55C3V3 / BZX84C3V3 zener datasheet parameters (Vz 3.1 to 3.5 V at 5 mA, Zzt 95 ohm max), MIT."
+    },
+    {
+      "id": "zener-12v",
+      "match": {
+        "mpn": [
+          "BZX55C12",
+          "BZX84C12",
+          "1N4742A",
+          "BZT52C12"
+        ]
+      },
+      "model": {
+        "type": "model-card",
+        "file": "discrete-extra.lib",
+        "name": "DZ12V"
+      },
+      "$comment": "12 V zener. MPN matching only: the bare value \"12V\" names rails and batteries on real boards, so it is not a match key. pinMaps keys are for pin mapping, not matching.",
+      "pinMaps": {
+        "D_(SOD|MiniMELF|DO-35|MELF).*": {
+          "1": "2",
+          "2": "1"
+        }
+      },
+      "defaultPinMap": {
+        "1": "2",
+        "2": "1"
+      },
+      "provenance": "Written for circsim from BZX55C12 / BZX84C12 zener datasheet parameters (Vz 11.4 to 12.7 V at 5 mA, Zzt 25 ohm max), MIT."
+    },
+    {
+      "id": "led-yellow",
+      "match": {
+        "valueRegex": "(?i)^(led[_ -]?)?yellow([_ -]?led)?$",
+        "refdesPrefix": [
+          "D",
+          "LED"
+        ]
+      },
+      "model": {
+        "type": "model-card",
+        "file": "discrete-extra.lib",
+        "name": "LED_YELLOW"
+      },
+      "pinMaps": {
+        "LED_(0603|0805|1206|3mm|5mm).*": {
+          "1": "2",
+          "2": "1"
+        }
+      },
+      "defaultPinMap": {
+        "1": "2",
+        "2": "1"
+      },
+      "provenance": "Fitted for circsim with the fit-model-cards.mjs LED helper: yellow LED (AlGaInP, Vf 2.1 V at 20 mA, band 2.0-2.2 V) by fitting is, MIT."
+    },
+    {
+      "id": "led-orange",
+      "match": {
+        "valueRegex": "(?i)^(led[_ -]?)?orange([_ -]?led)?$",
+        "refdesPrefix": [
+          "D",
+          "LED"
+        ]
+      },
+      "model": {
+        "type": "model-card",
+        "file": "discrete-extra.lib",
+        "name": "LED_ORANGE"
+      },
+      "pinMaps": {
+        "LED_(0603|0805|1206|3mm|5mm).*": {
+          "1": "2",
+          "2": "1"
+        }
+      },
+      "defaultPinMap": {
+        "1": "2",
+        "2": "1"
+      },
+      "provenance": "Fitted for circsim with the fit-model-cards.mjs LED helper: orange LED (AlGaInP, Vf 2.0 V at 20 mA, band 1.9-2.1 V) by fitting is, MIT."
+    },
+    {
+      "id": "opto-pc817",
+      "match": {
+        "mpn": [
+          "PC817",
+          "PC817A",
+          "PC817B",
+          "PC817C",
+          "PC817D",
+          "EL817",
+          "LTV-817",
+          "LTV817",
+          "PC817X"
+        ]
+      },
+      "model": {
+        "type": "subckt",
+        "file": "opto.lib",
+        "name": "PC817"
+      },
+      "$comment": "Phototransistor coupler, subckt terminals a k c e. 4-pin DIP / SOP pinout 1=anode 2=cathode 3=emitter 4=collector. CTR 170 percent (the datasheet window is 50 to 600 percent). MPN/value matching only.",
+      "pinMaps": {
+        "(DIP|SOP|SO|SMDIP)-?4.*": {
+          "1": "a",
+          "2": "k",
+          "3": "e",
+          "4": "c"
+        }
+      },
+      "defaultPinMap": {
+        "1": "a",
+        "2": "k",
+        "3": "e",
+        "4": "c"
+      },
+      "provenance": "Behavioral optocoupler written for circsim from the Sharp PC817 datasheet (VF 1.2 V at 20 mA, CTR 50-600 percent at 5 mA, VCE(sat) 0.1 V typ), MIT."
+    },
+    {
+      "id": "opto-4n35",
+      "match": {
+        "mpn": [
+          "4N35",
+          "4N36",
+          "4N37",
+          "CNY17-3",
+          "MOC8050"
+        ]
+      },
+      "model": {
+        "type": "subckt",
+        "file": "opto.lib",
+        "name": "4N35"
+      },
+      "$comment": "Phototransistor coupler, subckt terminals a k c e. 6-pin DIP pinout 1=anode 2=cathode 3=NC 4=emitter 5=collector 6=base (base not modeled). CTR 100 percent. MPN/value matching only.",
+      "pinMaps": {
+        "(DIP|SMDIP|SOP|SO)-?6.*": {
+          "1": "a",
+          "2": "k",
+          "4": "e",
+          "5": "c"
+        }
+      },
+      "defaultPinMap": {
+        "1": "a",
+        "2": "k",
+        "4": "e",
+        "5": "c"
+      },
+      "provenance": "Behavioral optocoupler written for circsim from the Vishay 4N35 datasheet (VF 1.15 V at 10 mA, CTR 100 percent minimum at 10 mA, VCE(sat) 0.3 V max), MIT."
+    },
+    {
+      "id": "logic-74hc02",
+      "match": {
+        "mpn": [
+          "74HC02",
+          "74HCT02",
+          "SN74HC02",
+          "74HC02D"
+        ]
+      },
+      "model": {
+        "type": "xspice-digital",
+        "file": "logic74hc.json",
+        "name": "74HC02"
+      },
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": {
+          "1": "1Y",
+          "2": "1A",
+          "3": "1B",
+          "4": "2Y",
+          "5": "2A",
+          "6": "2B",
+          "7": "GND",
+          "8": "3A",
+          "9": "3B",
+          "10": "3Y",
+          "11": "4A",
+          "12": "4B",
+          "13": "4Y",
+          "14": "VCC"
+        }
+      },
+      "provenance": "XSPICE behavioral 74HC02 quad NOR written for circsim from datasheet pinout + typical tpd, MIT."
+    },
+    {
+      "id": "logic-74hc10",
+      "match": {
+        "mpn": [
+          "74HC10",
+          "74HCT10",
+          "SN74HC10",
+          "74HC10D"
+        ]
+      },
+      "model": {
+        "type": "xspice-digital",
+        "file": "logic74hc.json",
+        "name": "74HC10"
+      },
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": {
+          "1": "1A",
+          "2": "1B",
+          "3": "2A",
+          "4": "2B",
+          "5": "2C",
+          "6": "2Y",
+          "7": "GND",
+          "8": "3Y",
+          "9": "3A",
+          "10": "3B",
+          "11": "3C",
+          "12": "1Y",
+          "13": "1C",
+          "14": "VCC"
+        }
+      },
+      "provenance": "XSPICE behavioral 74HC10 triple 3-input NAND written for circsim from datasheet pinout + typical tpd, MIT."
+    },
+    {
+      "id": "logic-74hc20",
+      "match": {
+        "mpn": [
+          "74HC20",
+          "74HCT20",
+          "SN74HC20",
+          "74HC20D"
+        ]
+      },
+      "model": {
+        "type": "xspice-digital",
+        "file": "logic74hc.json",
+        "name": "74HC20"
+      },
+      "pinMaps": {
+        "(DIP|SOIC|TSSOP|SOP|SO)-?14.*": {
+          "1": "1A",
+          "2": "1B",
+          "4": "1C",
+          "5": "1D",
+          "6": "1Y",
+          "7": "GND",
+          "8": "2Y",
+          "9": "2A",
+          "10": "2B",
+          "12": "2C",
+          "13": "2D",
+          "14": "VCC"
+        }
+      },
+      "provenance": "XSPICE behavioral 74HC20 dual 4-input NAND written for circsim from datasheet pinout + typical tpd, MIT."
     }
   ]
 }

@@ -19,6 +19,7 @@
  */
 
 import React, { useEffect, useState } from 'react'
+import { openDocsAndReport } from './docsLink'
 
 export interface AboutProps {
   open: boolean
@@ -36,12 +37,20 @@ const FALLBACK_PROVENANCE =
   'The bundled SPICE model library was written in-house for circsim from public ' +
   'datasheet parameters and is MIT-licensed. Every file in resources/models/ carries ' +
   'a "Provenance:" header; no vendor (TI/ADI/onsemi) or Micro-Cap/Intusoft model text ' +
-  'is included. The GPL-encumbered ngspice "table.cm" code model is excluded from every ' +
-  'platform bundle.'
+  'is included. The discrete diode, LED and transistor cards are derived from datasheet ' +
+  'operating points by the checked-in script scripts/fit-model-cards.mjs, and a CI ' +
+  'fingerprint test rejects any card that reproduces a known third-party library card. ' +
+  'The GPL-encumbered ngspice "table.cm" code model is excluded from every platform bundle.'
 
 export default function About({ open, onClose }: AboutProps): React.ReactElement | null {
   const [texts, setTexts] = useState<LicenseTexts | null>(null)
   const [loadError, setLoadError] = useState(false)
+  // #62: shown when the fidelity link could not open anything.
+  const [docsMessage, setDocsMessage] = useState<string | null>(null)
+  const openDocs = (): void => {
+    if (typeof window === 'undefined') return
+    void openDocsAndReport(window.circsim, setDocsMessage)
+  }
 
   useEffect(() => {
     if (!open) return
@@ -131,21 +140,18 @@ export default function About({ open, onClose }: AboutProps): React.ReactElement
               style={linkStyle}
               role="button"
               tabIndex={0}
-              onClick={() => {
-                if (typeof window !== 'undefined' && window.circsim?.openDocs) {
-                  void window.circsim.openDocs()
-                }
-              }}
+              onClick={openDocs}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  if (typeof window !== 'undefined' && window.circsim?.openDocs) {
-                    void window.circsim.openDocs()
-                  }
-                }
+                if (e.key === 'Enter' || e.key === ' ') openDocs()
               }}
             >
               What can circsim tell you? (fidelity &amp; limits)
             </span>
+            {docsMessage && (
+              <span style={{ display: 'block', marginTop: 4, color: '#f99' }} role="alert">
+                {docsMessage}
+              </span>
+            )}
           </p>
         </div>
       </div>
