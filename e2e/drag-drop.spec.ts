@@ -55,19 +55,38 @@ async function stageRealFiles(page: Page, id: string, filePaths: string[]): Prom
 /**
  * Drop real, disk-backed files (chosen through a file input so they carry a
  * path) onto the app root. `filePaths` are absolute paths.
+ *
+ * Every dropped File has its text() replaced with a rejecting stub that counts
+ * its calls. The File.text() fallback in App.tsx would otherwise produce the
+ * same UI as the by-path route, so a test could not tell them apart; with the
+ * stub, only a successful getPathForFile resolution attaches anything.
+ * `textFallbackCalls` reads back how many times text() was called (must be 0
+ * on the by-path route).
  */
 async function dropRealFiles(page: Page, filePaths: string[]): Promise<void> {
   const id = '__e2e-drop-source'
   await stageRealFiles(page, id, filePaths)
   await page.evaluate((inputId: string) => {
     const input = document.getElementById(inputId) as HTMLInputElement
+    const w = window as unknown as { __e2eTextCalls?: number }
+    w.__e2eTextCalls = 0
     const dt = new DataTransfer()
-    for (const f of Array.from(input.files ?? [])) dt.items.add(f)
+    for (const f of Array.from(input.files ?? [])) {
+      f.text = () => {
+        w.__e2eTextCalls = (w.__e2eTextCalls ?? 0) + 1
+        return Promise.reject(new Error('File.text() fallback used; getPathForFile returned no path'))
+      }
+      dt.items.add(f)
+    }
     // The drop handler lives on the App root element (first child of #root).
     const target = document.querySelector('#root > div') as HTMLElement
     target.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
     input.remove()
   }, id)
+}
+
+async function textFallbackCalls(page: Page): Promise<number> {
+  return page.evaluate(() => (window as unknown as { __e2eTextCalls?: number }).__e2eTextCalls ?? -1)
 }
 
 test.describe('drag-drop path resolution (#34)', () => {
@@ -109,6 +128,7 @@ test.describe('drag-drop path resolution (#34)', () => {
     // discovered via the real path (not the File.text() fallback).
     await expect(page.getByText('blinker-555.kicad_sch').first()).toBeVisible({ timeout: 30_000 })
     await expect(page.getByText('No schematic')).toHaveCount(0)
+    expect(await textFallbackCalls(page)).toBe(0)
   })
 
   test('dropping a schematic onto a loaded board attaches it by path', async () => {
@@ -127,5 +147,6 @@ test.describe('drag-drop path resolution (#34)', () => {
     await dropRealFiles(page, [SCHEMATIC])
     await expect(page.getByText('blinker-555.kicad_sch').first()).toBeVisible({ timeout: 30_000 })
     await expect(page.getByText('No schematic')).toHaveCount(0)
+    expect(await textFallbackCalls(page)).toBe(0)
   })
 })
