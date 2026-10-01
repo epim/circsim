@@ -605,8 +605,9 @@ describe('resolveAll tier 3 — value used as MPN candidate when no mpn property
   })
 
   it('BT1 value "3V" (battery symbol) stays unresolved — bare "3V" must not match zener-3v0', async () => {
-    // valueRegex matching is not refdes-gated, so a coin-cell battery whose
-    // VALUE is "3V" would resolve as a 3.0 V zener if the regex accepted the
+    // valueRegex matching refuses battery refdes, but the regex must not accept
+    // the bare form either: a coin-cell battery whose
+    // VALUE is "3V" on an unlisted refdes would resolve as a 3.0 V zener if the regex accepted the
     // bare form. Only "3.0V" (value) and "3V0"/"BZX84C3V0" (mpn) may match.
     const part = makePart('BT1', '3V', 'Battery:BatteryHolder_Keystone_3034_1x20mm')
     const circuit = makeCircuit([part])

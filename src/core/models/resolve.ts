@@ -601,8 +601,8 @@ function tryTier3(
   // Value-as-MPN fallback: real boards often carry the MPN in the VALUE field
   // ("1N4148W", "MMBT3904", "AO3401") with no mpn property at all. When there
   // is no explicit MPN, pass the value as the MPN candidate and mark it as a
-  // guess: matchLibraryEntry only lets it match an entry whose refdes class fits
-  // (issue #51), so "3V0" on a battery holder is never a zener.
+  // guess: matchLibraryEntry refuses it on a refdes that is never a library
+  // device (issue #51), so "3V0" on a battery holder is never a zener.
   const mpnIsValue = mpnProp === undefined
   const mpn = mpnProp ?? (part.value.trim() !== '' ? part.value : undefined)
 
@@ -761,6 +761,21 @@ export function resolveAll(
 // ─── BOM application ──────────────────────────────────────────────────────────
 
 /**
+ * The value a BOM row gives an R/C/L part, in a form tier 2 can read. A JLCPCB
+ * "Comment" carries the rating after the value ("100nF 50V X7R",
+ * "4.7kOhm +-1% 1/10W"): when the whole string does not parse but its leading
+ * token does, that token is the value. Anything else is returned unchanged.
+ */
+function bomPrimitiveValue(ref: string, value: string): string {
+  const prefix = refdesPrefix(ref)
+  if (!TIER2_PRIMITIVE_PREFIXES.has(prefix)) return value
+  const kind = prefix as 'R' | 'C' | 'L'
+  if (parseValue(value, kind) !== undefined) return value
+  const lead = value.split(/\s+/)[0]
+  return lead !== value && parseValue(lead, kind) !== undefined ? lead : value
+}
+
+/**
  * The part as the BOM describes it: the row's value replaces the board value,
  * and the row's MPN replaces any board MPN property (whatever its case).
  */
@@ -778,7 +793,7 @@ function applyBomRow(part: Part, row: BomRow | undefined): Part {
     }
     properties.mpn = mpn
   }
-  return { ...part, value: value || part.value, properties }
+  return { ...part, value: value ? bomPrimitiveValue(part.ref, value) : part.value, properties }
 }
 
 /**
@@ -786,12 +801,25 @@ function applyBomRow(part: Part, row: BomRow | undefined): Part {
  * a value that replaced the board's, and an MPN that chose (or failed to
  * choose) a library model.
  */
-function noteBomEffect(part: Part, row: BomRow | undefined, res: Resolution): Resolution {
+function noteBomEffect(
+  part: Part,
+  row: BomRow | undefined,
+  res: Resolution,
+  boardValueUsed: boolean,
+): Resolution {
   if (!row) return res
   const extra: string[] = []
   const bomValue = row.value?.trim()
-  if (bomValue && bomValue !== part.value.trim() && res.model) {
-    extra.push(`bom: value "${bomValue}" from the BOM replaces the board value "${part.value}"`)
+  if (bomValue && bomValue !== part.value.trim()) {
+    if (boardValueUsed) {
+      // The BOM value found no model, the board's did: say which one decided.
+      extra.push(
+        `bom: value "${bomValue}" from the BOM found no model, so the board value "${part.value}" was used`,
+      )
+    } else if (res.model || res.status === 'unresolved') {
+      // An unresolved part names the BOM too: its value may be why nothing matched.
+      extra.push(`bom: value "${bomValue}" from the BOM replaces the board value "${part.value}"`)
+    }
   }
   const bomMpn = row.mpn?.trim()
   if (bomMpn) {
@@ -826,8 +854,21 @@ function resolvePart(
     return makeTier6(part, override.mode)
   }
 
-  const res = resolveFromTiers(applyBomRow(part, bomRow), circuit, schematicSimData, library)
-  return noteBomEffect(part, bomRow, res)
+  const applied = applyBomRow(part, bomRow)
+  let res = resolveFromTiers(applied, circuit, schematicSimData, library)
+
+  // The BOM wins, but a BOM value the resolver cannot use (a free-text Comment)
+  // must not cost a part the model its board value already earned: retry with the
+  // board value, keeping the BOM's MPN, and say so.
+  let boardValueUsed = false
+  if (res.status === 'unresolved' && applied.value !== part.value) {
+    const retry = resolveFromTiers({ ...applied, value: part.value }, circuit, schematicSimData, library)
+    if (retry.status !== 'unresolved') {
+      res = retry
+      boardValueUsed = true
+    }
+  }
+  return noteBomEffect(part, bomRow, res, boardValueUsed)
 }
 
 function resolveFromTiers(

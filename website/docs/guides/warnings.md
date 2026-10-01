@@ -33,7 +33,7 @@ You can **minimize** it (the **»** button) to a compact header badge (**⚠ N a
 
 ## "pinmap-unverified: polarity of ..."
 
-*(a warning on the part's card in the [Model Doctor](./model-doctor))* A diode or LED sits on a JLCPCB / EasyEDA footprint, whose pad numbering follows the part rather than any convention, so circsim cannot tell which pad is the anode from the footprint name. It used KiCad's default (pad 1 = cathode) and flagged it. [Attach the schematic](./attach-schematic) so circsim can read the symbol's `A`/`K` pin names, or set the pin map yourself in the Model Doctor. See [the diode-polarity trap](../reference/pin-maps#diode-polarity).
+*(recorded on the part's resolution; the [Model Doctor](./model-doctor) lists only parts that need attention, so a diode that resolved to a model does not show it on a card)* A diode or LED sits on a JLCPCB / EasyEDA footprint, whose pad numbering follows the part rather than any convention, so circsim cannot tell which pad is the anode from the footprint name. It used KiCad's default (pad 1 = cathode) and flagged it. [Attach the schematic](./attach-schematic) so circsim can read the symbol's `A`/`K` pin names, or set the pin map yourself in the Model Doctor. See [the diode-polarity trap](../reference/pin-maps#diode-polarity).
 
 ## A part the simulator dropped or rejected
 
@@ -41,7 +41,7 @@ You can **minimize** it (the **»** button) to a compact header badge (**⚠ N a
 
 ## `bom:` notes and `BOM:` log warnings
 
-A `bom:` line on a part's card means a [BOM row](../reference/file-formats#bom-csv-the-bill-of-materials-optional) replaced its value or chose its model. A `BOM:` warning in the sim log means the file could not be read, had a range circsim could not expand, or had rows whose references are not on the board.
+A `bom:` note on a part means a [BOM row](../reference/file-formats#bom-csv-the-bill-of-materials-optional) replaced its value or chose its model. A `BOM:` warning in the sim log means the file could not be read, had a range circsim could not expand, or had rows whose references are not on the board.
 
 ## 💡 Coach notes (dark LEDs)
 

@@ -8,8 +8,9 @@
  *   2. Value field matches entry.match.valueRegex
  *   3. refdesPrefix + footprintRegex fallback (footprintRegex is required)
  *
- * Tiers 1 and 2 only accept an entry whose refdesPrefix (when declared) fits the
- * part's refdes when the match came from the Value field (issue #51).
+ * Tiers 1 and 2 refuse a match that came from the Value field when the refdes names
+ * a class of part that is never a library device (battery, test point, switch,
+ * connector, passive; issue #51).
  *
  * Ambiguous (2+ entries match at the same tier) → 'ambiguous' result with candidate ids.
  * No match at any tier → 'none'.
@@ -152,9 +153,9 @@ export interface PartDescriptor {
   mpn: string | undefined
   /**
    * True when `mpn` is only the part's Value field standing in for a missing
-   * MPN. Such a guess carries no intent, so an entry that declares refdesPrefix
-   * only accepts it on a matching refdes class (issue #51). An explicit MPN is
-   * never gated.
+   * MPN. Such a guess carries no intent, so it is refused on a refdes that is
+   * never a library device (battery, test point, switch, connector, passive;
+   * issue #51). An explicit MPN is never gated.
    */
   mpnIsValue?: boolean
   /** Part's libId (e.g. "Diode_SMD:D_SMA_SMA"). Used for footprint matching. */
@@ -177,17 +178,33 @@ function refdesPrefix(ref: string): string {
 // ─── Single-entry match predicates ────────────────────────────────────────────
 
 /**
- * True when the entry may apply to a part with this refdes: either the entry
- * declares no refdesPrefix, or the ref's prefix starts with one of them
- * (D matches D3 and DZ1; Z matches ZD1; U matches U1; BT1 does not match a D/Z
- * zener entry). Used to gate value-derived matches (value-as-MPN, valueRegex),
- * which carry no refdes information of their own.
+ * Refdes prefixes (the leading letters) of parts that are never a library
+ * device: passives, batteries, test points, switches, connectors, mechanical
+ * and electromechanical parts. A value-derived match (value-as-MPN, valueRegex)
+ * carries no refdes information of its own, so "3V0" on BT1 or "555" on SW1 must
+ * not become a zener or an NE555 (issue #51).
+ *
+ * This is a deny list on purpose. The library covers diodes, LEDs, transistors,
+ * ICs and regulators, and boards name those with many conventions (D, CR, LD, Q,
+ * T, TR, V, U, IC, A, N, VR, REG ...); a list of the accepted prefixes goes stale
+ * the moment a board uses another one and silently un-resolves a good part.
+ * Naming what a part cannot be fails safe the other way: an unlisted prefix
+ * keeps the match it always had.
  */
-function refdesAllows(entry: LibraryEntry, ref: string): boolean {
-  const prefixes = entry.match.refdesPrefix
-  if (!prefixes || prefixes.length === 0) return true
-  const prefix = refdesPrefix(ref)
-  return prefixes.some(p => prefix.startsWith(p.toUpperCase()))
+const NON_DEVICE_REFDES = new Set([
+  // passives
+  'R', 'RV', 'RN', 'RP', 'RT', 'RK', 'C', 'CP', 'L', 'FB', 'F', 'FU', 'TH', 'VDR',
+  // sources, switches, relays, connectors, mechanical
+  'BT', 'BAT', 'SW', 'S', 'K', 'RLY', 'J', 'P', 'CN', 'CON', 'JP', 'SP',
+  'TP', 'H', 'MH', 'FID', 'MK', 'NT', 'ANT', 'Y', 'LS', 'BZ',
+])
+
+/**
+ * True when a value-derived match may be accepted for a part with this refdes:
+ * it may unless the refdes names a class that is never a library device.
+ */
+function valueMatchAllowed(ref: string): boolean {
+  return !NON_DEVICE_REFDES.has(refdesPrefix(ref))
 }
 
 /**
@@ -229,8 +246,8 @@ function matchesByFallback(entry: LibraryEntry, part: PartDescriptor): boolean {
 
   // A footprint pattern is required: a refdes prefix alone ("D") describes
   // every part of that class, which is no basis for picking one model. Entries
-  // that are identified by value only (the colored LEDs) declare refdesPrefix
-  // without footprintRegex to gate their value match and stay out of this tier.
+  // that are identified by value only (the colored LEDs) declare no
+  // footprintRegex and so stay out of this tier.
   if (!footprintRegex) return false
 
   // Check refdesPrefix
@@ -282,11 +299,11 @@ export function matchLibraryEntry(
   library: LibraryEntry[],
 ): MatchResult {
   // ── Tier A: MPN ────────────────────────────────────────────────────────────
-  // A Value-field stand-in for a missing MPN must also fit the entry's refdes
-  // class (issue #51: "3V0" on BT1 is a battery, not a zener).
+  // A Value-field stand-in for a missing MPN is refused on a refdes that is
+  // never a library device (issue #51: "3V0" on BT1 is a battery, not a zener).
   const mpnMatches = preferModeled(
     library.filter(
-      e => matchesByMpn(e, part.mpn) && (!part.mpnIsValue || refdesAllows(e, part.ref)),
+      e => matchesByMpn(e, part.mpn) && (!part.mpnIsValue || valueMatchAllowed(part.ref)),
     ),
   )
   if (mpnMatches.length === 1) {
@@ -298,7 +315,7 @@ export function matchLibraryEntry(
 
   // ── Tier B: Value regex ────────────────────────────────────────────────────
   const valueMatches = preferModeled(
-    library.filter(e => matchesByValueRegex(e, part.value) && refdesAllows(e, part.ref)),
+    library.filter(e => matchesByValueRegex(e, part.value) && valueMatchAllowed(part.ref)),
   )
   if (valueMatches.length === 1) {
     return { kind: 'match', entry: valueMatches[0], tier: 'valueRegex' }

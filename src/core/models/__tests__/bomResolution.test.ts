@@ -86,3 +86,40 @@ describe('BOM rows feed resolution (issue #4)', () => {
     expect(res.map(r => r.status)).toEqual(['ok', 'ok'])
   })
 })
+
+describe('a JLCPCB Comment value never costs a passive its model', () => {
+  const bomOf = (ref: string, comment: string) => parseBom(`Designator,Comment
+${ref},"${comment}"
+`).rows
+
+  it('reads the leading value of "100nF 50V X7R" and "4.7kOhm +-1% 1/10W"', () => {
+    const c = makeCircuit([
+      makePart('C1', '100n', 'Capacitor_SMD:C_0805_2012Metric'),
+      makePart('R2', '4k7', 'Resistor_SMD:R_0805_2012Metric'),
+    ])
+    const bom: BomData = new Map([
+      ...bomOf('C1', '100nF 50V X7R'),
+      ...bomOf('R2', '4.7kOhm +-1% 1/10W'),
+    ])
+    const res = resolveAll(c, undefined, bom, lib)
+    expect(res.map(r => r.status)).toEqual(['ok', 'ok'])
+    expect(res.map(r => r.tier)).toEqual([2, 2])
+    expect(res[0].model).toMatchObject({ card: 'c_c1 vin out 1e-7' })
+    expect(res[1].model).toMatchObject({ card: 'r_r2 vin out 4700' })
+  })
+
+  it('falls back to the board value when the BOM value cannot be read, and says so', () => {
+    const c = makeCircuit([makePart('R3', '10k', 'Resistor_SMD:R_0805_2012Metric')])
+    const res = resolveAll(c, undefined, bomOf('R3', 'Thick film chip resistor'), lib)
+    expect(res[0].status).toBe('ok')
+    expect(res[0].model).toMatchObject({ card: 'r_r3 vin out 10000' })
+    expect(res[0].warnings.some(w => w.startsWith('bom:') && w.includes('Thick film') && w.includes('10k'))).toBe(true)
+  })
+
+  it('an unresolved part still names the BOM value that replaced the board value', () => {
+    const c = makeCircuit([makePart('R4', 'banana', 'Resistor_SMD:R_0805_2012Metric')])
+    const res = resolveAll(c, undefined, bomOf('R4', 'Thick film chip resistor'), lib)
+    expect(res[0].status).toBe('unresolved')
+    expect(res[0].warnings.some(w => w.startsWith('bom:') && w.includes('Thick film'))).toBe(true)
+  })
+})

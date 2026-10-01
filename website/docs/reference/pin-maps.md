@@ -18,7 +18,7 @@ Here's a real one worth understanding, because it will silently reverse a diode 
 - **KiCad's** standard diode footprints put **pad 1 = cathode**, every time.
 - **JLCPCB / EasyEDA** footprints have **no fixed convention**. Pad numbering follows whatever the part's own datasheet drawing used, so pad 1 is the anode on some and the cathode on others. On one real board (an LED lantern charger), the SMC Schottky has pad 1 = anode, while the SMA Schottkys and the SOD-123 diode on the same board have pad 1 = cathode.
 
-A routed board often carries footprints as bare dimension-pattern names (something like `SMC_L7.1-W6.2-...` or `SMA_L4.2-W2.6-LS5.0-RD_1`) with no "KiCad" or "JLC" label. circsim recognizes that dimension-pattern shape, and recognizes that it cannot tell polarity from the name. For those footprints it uses KiCad's default order and shows a `pinmap-unverified` polarity warning on the part in the Model Doctor, instead of presenting a guess as fact.
+A routed board often carries footprints as bare dimension-pattern names (something like `SMC_L7.1-W6.2-...` or `SMA_L4.2-W2.6-LS5.0-RD_1`) with no "KiCad" or "JLC" label. circsim recognizes that dimension-pattern shape, and recognizes that it cannot tell polarity from the name. For those footprints it uses KiCad's default order and records a `pinmap-unverified` polarity warning on the part's resolution, instead of presenting a guess as fact. The Model Doctor lists only parts that need attention, and a diode that resolved to a model is not one of them, so the warning does not appear on a card: attach the schematic, or check the pad polarity yourself.
 
 ### How the schematic saves you
 
