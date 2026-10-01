@@ -1,31 +1,38 @@
-* Provenance: written for circsim from manufacturer datasheet parameters, MIT.
+* Provenance: derived for circsim from datasheet-class forward-voltage targets by scripts/fit-model-cards.mjs, MIT.
 * In-house LED .model cards. An LED is a diode whose forward drop is set by its
-* die material; we reproduce the datasheet typical Vf at the rated test current
-* by raising the emission coefficient n and the bandgap eg (eg shifts the
-* temperature behavior toward the wider-gap III-V material; n widens the
-* exponential so the knee lands at the right voltage). No vendor model text is
-* copied — only the datasheet Vf/If operating points inform the fit.
+* die material; the datasheet typical Vf at the rated test current is reproduced
+* by fitting the saturation current is, with the emission coefficient n, the
+* series resistance rs and the bandgap eg held at class values (eg shifts the
+* temperature behavior toward the wider-gap III-V material; n and rs set the
+* slope of the knee; blue and white use n=2.2 because ngspice stops tracking the
+* requested current once the internal junction voltage passes about 60 n*Vt).
+* Nothing is read from any third-party library card.
 *
-* Target forward drops (typical @ ~20 mA):
-*   red    ~1.8-2.0 V   (AlGaInP / GaAsP)
-*   green  ~2.1-2.2 V   (InGaN, traditional green ~2.2 V)
-*   blue   ~3.0-3.2 V   (InGaN)
-*   white  ~3.0-3.4 V   (blue InGaN die + phosphor)
+* Target forward drops (typical @ ~20 mA) and the fitted value (the middle of
+* each band, hit to within a few millivolts at 20 mA):
+*   red    ~1.8-2.0 V  -> 1.90 V  (AlGaInP / GaAsP)
+*   green  ~2.1-2.2 V  -> 2.15 V  (InGaN, traditional green ~2.2 V)
+*   blue   ~3.0-3.2 V  -> 3.10 V  (InGaN)
+*   white  ~3.0-3.4 V  -> 3.20 V  (blue InGaN die + phosphor)
+* The 10 mA drop follows from n and rs (about 50 mV below the 20 mA value for red,
+* 60 mV green, 100 mV blue, 110 mV white). Both points are checked by the
+* led-*-vf-20ma and led-*-vf-10ma rows in resources/models/characterization.json
+* (npm run test:characterization), so the targets above are enforced by CI.
 *
 * Cj is set ~15-50 pF (small indicator LED). Reverse Vbr ~5 V typical.
 
 * --------------------------------------------------------------------------- RED
-.model LED_RED D(is=1e-19 rs=2.0 n=1.7 cjo=30p vj=0.75 m=0.333
-+ bv=5 ibv=100u eg=1.9 xti=3)
+.model LED_RED D(is=8.51e-21 rs=2 n=1.7 cjo=30p vj=0.75 m=0.333 bv=5 ibv=100u
++ eg=1.9 xti=3)
 
 * --------------------------------------------------------------------------- GREEN
-.model LED_GREEN D(is=1e-20 rs=3.0 n=1.8 cjo=30p vj=0.75 m=0.333
-+ bv=5 ibv=100u eg=2.1 xti=3)
+.model LED_GREEN D(is=6.38e-22 rs=3 n=1.8 cjo=30p vj=0.75 m=0.333 bv=5
++ ibv=100u eg=2.1 xti=3)
 
 * --------------------------------------------------------------------------- BLUE
-.model LED_BLUE D(is=1e-26 rs=6.0 n=1.9 cjo=20p vj=0.75 m=0.333
-+ bv=5 ibv=100u eg=2.9 xti=3)
+.model LED_BLUE D(is=3.61e-25 rs=6 n=2.2 cjo=20p vj=0.75 m=0.333 bv=5 ibv=100u
++ eg=2.9 xti=3)
 
 * --------------------------------------------------------------------------- WHITE
-.model LED_WHITE D(is=1e-26 rs=7.0 n=1.9 cjo=20p vj=0.75 m=0.333
-+ bv=5 ibv=100u eg=3.0 xti=3)
+.model LED_WHITE D(is=8.84e-26 rs=7 n=2.2 cjo=20p vj=0.75 m=0.333 bv=5
++ ibv=100u eg=3 xti=3)

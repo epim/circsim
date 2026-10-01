@@ -15,6 +15,7 @@ export {
   undrivenNetsOf,
 } from './inputs'
 export { mapOpResultToNetVoltages, runSolvePlan, SolveFailedError } from './plan'
+export { settleBistableOpAmps, type LatchedOpAmp, type SettleResult } from './bistable'
 export {
   createSimClientEngine,
   type SimClientEngineOptions,

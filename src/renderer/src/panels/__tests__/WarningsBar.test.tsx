@@ -332,3 +332,49 @@ describe('WarningsBar: undriven nets (issue #43)', () => {
     expect(html).not.toContain('undriven-nets')
   })
 })
+
+// ─── op fallback caveat: plain language up front, solver vocabulary behind a disclosure ──
+
+function renderWithCaveat(method: 'gmin' | 'source' | 'tran-fallback' | 'failed' | null): string {
+  const store = createAppStore({ simClient: createMockSimClient() })
+  store.setState({ opCaveat: method ? { method, at: 0 } : null })
+  ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+    store.getState()
+  return renderToStaticMarkup(
+    <AppStoreProvider store={store}>
+      <WarningsBar />
+    </AppStoreProvider>,
+  )
+}
+
+describe('op fallback caveat (issue #19): details control for the solver vocabulary', () => {
+  it('a fallback solve shows plain language and keeps the rung name inside <details>', () => {
+    const html = renderWithCaveat('tran-fallback')
+    expect(html).toContain('data-testid="op-caveat"')
+    expect(html).toContain('Check these voltages.')
+    expect(html).toContain('These voltages needed a workaround to solve; treat 0.000 V readings as unknown.')
+    expect(html).toContain('data-testid="op-caveat-details"')
+    // Solver vocabulary appears only after the disclosure opens.
+    const beforeDetails = html.slice(0, html.indexOf('<details'))
+    expect(beforeDetails).not.toMatch(/transient-op|gmin|source stepping/)
+    const details = html.slice(html.indexOf('<details'))
+    expect(details).toContain('transient-op')
+  })
+
+  it.each(['gmin', 'source'] as const)('%s fallback names its rung only in the details', (method) => {
+    const html = renderWithCaveat(method)
+    const beforeDetails = html.slice(0, html.indexOf('<details'))
+    expect(beforeDetails).not.toMatch(/stepping/)
+    expect(html.slice(html.indexOf('<details'))).toMatch(/stepping/)
+  })
+
+  it('a solve that did not converge at all keeps its plain message and has no disclosure', () => {
+    const html = renderWithCaveat('failed')
+    expect(html).toContain('did not converge at all')
+    expect(html).not.toContain('op-caveat-details')
+  })
+
+  it('a direct solve (no caveat) renders nothing', () => {
+    expect(renderWithCaveat(null)).toBe('')
+  })
+})

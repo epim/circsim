@@ -13,11 +13,18 @@
  * measured rail change the circuit" decidable, which is why pass 1 never seeds
  * cached measured rails: a measured rail equal to the family default leaves the
  * deck unchanged and costs no second solve.
+ *
+ * After each pass, settleBistableOpAmps (bistable.ts) moves any op-amp left
+ * balanced on an unstable point (a Schmitt trigger inside its hysteresis band)
+ * to its power-up state before rail sensing reads the op, so neither the sensed
+ * rails nor the committed op carry a mid-rail latch output.
  */
 
 import type { Circuit } from '../netlist/extract'
 import { deriveMeasuredRailVHigh } from '../spicegen/generate'
+import { hasLinearOpAmp, settleBistableOpAmps, type LatchedOpAmp } from './bistable'
 import { buildDeckWithUndriven } from './inputs'
+import { loadAndRunOp } from './loadAndRunOp'
 import type { OpResult, SolveEngine, SolveInputs, SolveResult, UndrivenNet } from './types'
 
 /**
@@ -45,6 +52,14 @@ export async function runSolvePlan(inputs: SolveInputs, engine: SolveEngine): Pr
   } catch (cause) {
     throw new SolveFailedError(cause)
   }
+  // Checked synchronously, here and after pass 2, so a board with no op-amp in
+  // its linear region costs no extra solve and no extra await.
+  const settled1 = hasLinearOpAmp(op.values)
+    ? await settleBistableOpAmps(engine, pass1Deck, op)
+    : { op, deck: pass1Deck, latched: [] }
+  op = settled1.op
+  let deck = settled1.deck
+  let latched: LatchedOpAmp[] = settled1.latched
 
   const { rails, gatedOff } = deriveMeasuredRailVHigh({
     opValues: op.values,
@@ -56,7 +71,9 @@ export async function runSolvePlan(inputs: SolveInputs, engine: SolveEngine): Pr
     modelTexts: inputs.modelTexts,
   })
 
-  let deck = pass1Deck
+  // The undriven nets belong to the deck that produced the committed op, so they
+  // follow `deck` through pass 2 (settling only re-forces op-amp outputs, it does
+  // not change which nets the island analysis bleeds).
   let undrivenNets: UndrivenNet[] = pass1Undriven
   let pass2Deck: string[] | undefined
   let pass2: SolveResult['pass2'] = 'not-needed'
@@ -67,13 +84,21 @@ export async function runSolvePlan(inputs: SolveInputs, engine: SolveEngine): Pr
     })
     if (circuitText(candidate) !== circuitText(pass1Deck)) {
       pass2Deck = candidate
+      let op2: OpResult | undefined
       try {
-        op = await loadAndRunOp(engine, candidate)
-        deck = candidate
+        op2 = await loadAndRunOp(engine, candidate)
+      } catch {
+        pass2 = 'failed' // keep pass 1's op, which is still a valid solve of its deck
+      }
+      if (op2) {
+        const settled = hasLinearOpAmp(op2.values)
+          ? await settleBistableOpAmps(engine, candidate, op2)
+          : { op: op2, deck: candidate, latched: [] }
+        op = settled.op
+        deck = settled.deck
+        latched = settled.latched
         undrivenNets = pass2Undriven
         pass2 = 'solved'
-      } catch {
-        pass2 = 'failed' // keep pass 1's op, which is still a valid solve of pass1Deck
       }
     }
   }
@@ -88,24 +113,8 @@ export async function runSolvePlan(inputs: SolveInputs, engine: SolveEngine): Pr
     measuredRails: rails,
     gatedOff,
     undrivenNets,
+    latched,
   }
-}
-
-/**
- * Queue a load and an op back to back in one synchronous turn (see the
- * SolveEngine ordering contract), then settle the load first so a failed load
- * is reported as such rather than as a bad op.
- */
-async function loadAndRunOp(engine: SolveEngine, deck: string[]): Promise<OpResult> {
-  const loaded = engine.loadCircuit(deck)
-  const op = engine.runOp()
-  try {
-    await loaded
-  } catch (err) {
-    op.catch(() => undefined) // the op's own outcome no longer matters
-    throw err
-  }
-  return op
 }
 
 /**
