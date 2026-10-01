@@ -4,13 +4,19 @@ circsim is built around one idea: **you already have the board, so let's validat
 
 ## The gap circsim fills
 
-Here's the workflow a lot of people are in now. You describe a circuit to an LLM. It suggests parts and connections. You hand that to an autorouter like [Quilter](https://quilter.ai), which returns a finished, routed `.kicad_pcb`. You're one "order" button away from spending real money on fabrication.
+You have a routed `.kicad_pcb` and you are one "order" button away from spending real money on fabrication. The board might be your own KiCad layout, a contractor's delivery, an LLM-assisted design, or the output of an autorouter such as [Quilter](https://quilter.ai). circsim has no Quilter-specific code: a KiCad board is a KiCad board, whoever routed it.
 
-And there is nowhere to sanity-check it.
+Schematic simulators such as LTspice and KiCad's own ngspice integration run on the drawing. They never see the copper, so a rail routed through a thin track or a decoupling capacitor placed far from its pin is invisible to them, and you assign a model to each symbol before they run.
 
-Every hobbyist simulator on the market (LTspice, Falstad, EveryCircuit, Wokwi, KiCad's own ngspice integration, Proteus, Multisim) simulates from a **schematic**. They assume the schematic is the source of truth and the board is a downstream artifact. But in this new workflow the *board* is what you're holding, and often no clean schematic exists at all. The routed layout is the deliverable.
+circsim takes the routed board as its input. It reads the net connectivity straight out of the copper, reconstructs the circuit, and lets you validate the thing you're about to fabricate.
 
-circsim takes the routed board as its input. It reads the net connectivity straight out of the copper, reconstructs the circuit, and lets you validate the thing you're actually about to fabricate.
+### Where the schematic fits
+
+The schematic is an optional input, and it makes the result better. Keep the `.kicad_sch` next to the board with the same name and circsim attaches it when you open the board. Its `Sim.*` fields are the first model source circsim tries, and its pin names decide diode and LED polarity instead of a footprint guess. Only the root sheet is read today, so parts on hierarchical sub-sheets get neither. See [attach a schematic](../guides/attach-schematic).
+
+### Where the copper fits
+
+The Board Critic reads the copper directly: tracks, vias, pours, and part placement. The live bench does not. The simulation treats every net as a single ideal node, so a thin track never sags the rail in the simulated voltages. The Critic estimates copper resistance for its IR-drop check and compares track width with current for its ampacity check, and those estimates stay in the Critic. Putting the routed copper into the simulation itself is planned, not shipped.
 
 ## Two complementary jobs
 
@@ -49,7 +55,7 @@ A validator you can't trust is worse than no validator, because it converts "I d
 To keep the promise sharp, circsim deliberately does **not**:
 
 - edit schematics or boards, route, or run DRC;
-- do signal-integrity, EM, or crosstalk analysis, or model trace parasitics in the simulation;
+- do signal-integrity, EM, or crosstalk analysis, or model trace parasitics in the simulation (each net is one ideal node);
 - run MCU firmware (microcontrollers are [supply-load stubs, or interactive pins](./models#stubs-and-interactive-pins) if you choose);
 - import Altium, IPC-2581, or Gerbers (KiCad only, for now);
 - talk to the cloud: it is fully offline, and the "ask your LLM" helper is copy-and-paste, not an API call.

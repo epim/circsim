@@ -203,11 +203,13 @@ describe('via resistance', () => {
 })
 
 describe('scale', () => {
-  it('solves a 1950-node track rail with a pour in well under the 320 ms the dense solver took', () => {
-    // A 40 x 40 grid of VCC tracks (3120 segments) plus a pour over the whole
-    // board, and 60 loads: the council's perf-scale board in miniature.
+  /**
+   * An N x N grid of VCC tracks plus a pour over the whole board, with `loads`
+   * 50 mA loads: the council's perf-scale board in miniature (N = 40 is 3280
+   * segments, about 1950 graph nodes with the pour mesh).
+   */
+  function scaleBoard(N: number, loads: number) {
     const segs: string[] = []
-    const N = 40
     const step = 2.5
     for (let i = 0; i <= N; i++) {
       for (let j = 0; j < N; j++) {
@@ -215,21 +217,48 @@ describe('scale', () => {
         segs.push(`(segment (start ${10 + i * step} ${10 + j * step}) (end ${10 + i * step} ${10 + (j + 1) * step}) (width 0.25) (layer "F.Cu") (net 1))`)
       }
     }
+    const extent = 15 + N * step
     const parts = [fp('J1', 10, 10)]
-    const loads: Record<string, number> = {}
-    for (let k = 0; k < 60; k++) {
+    const loadMap: Record<string, number> = {}
+    for (let k = 0; k < loads; k++) {
       const ref = `U${k + 1}`
-      parts.push(fp(ref, 10 + (k % 10) * 10, 10 + Math.floor(k / 10) * 15))
-      loads[ref] = 0.05
+      parts.push(fp(ref, 10 + (k % 10) * (N / 4), 10 + Math.floor(k / 10) * (N * 0.375)))
+      loadMap[ref] = 0.05
     }
-    const { circuit, ctx } = ctxFor(`${parts.join(' ')} ${segs.join(' ')} ${zone('F.Cu', rect(5, 5, 115, 115))}`, loads)
-    const t0 = performance.now()
-    const sol = solveRail(ctx, netId(circuit, 'VCC'), false)
-    const ms = performance.now() - t0
-    expect(sol).not.toBeNull()
-    expect(sol!.loads.length).toBeGreaterThanOrEqual(55)
-    // Generous bound: the point is that meshing a pour into the graph does not
-    // bring back the cubic blow-up.
-    expect(ms).toBeLessThan(2500)
+    return ctxFor(`${parts.join(' ')} ${segs.join(' ')} ${zone('F.Cu', rect(5, 5, extent, extent))}`, loadMap)
+  }
+
+  /** Best-of-N wall time (ms) for one rail solve, plus the last result. */
+  function timeSolve(N: number, loads: number, reps: number) {
+    let best = Infinity
+    let sol: ReturnType<typeof solveRail> = null
+    for (let r = 0; r < reps; r++) {
+      // solveRail memoises per context, so every repetition gets a fresh one.
+      const { circuit, ctx } = scaleBoard(N, loads)
+      const net = netId(circuit, 'VCC')
+      const t0 = performance.now()
+      sol = solveRail(ctx, net, false)
+      best = Math.min(best, performance.now() - t0)
+    }
+    return { best, sol }
+  }
+
+  it('solves a 1950-node track rail with a pour in time that does not grow cubically', () => {
+    timeSolve(10, 4, 1) // warm the JIT so the small run is not the cold one
+    const small = timeSolve(20, 15, 3)
+    const big = timeSolve(40, 60, 1)
+    expect(small.sol).not.toBeNull()
+    expect(big.sol).not.toBeNull()
+    expect(big.sol!.loads.length).toBeGreaterThanOrEqual(55)
+
+    // Intent: meshing a pour into the graph must not bring back the cubic
+    // blow-up of the dense solver (320 ms there at this size). No absolute
+    // millisecond bound: CI runners are up to 5x slower than a dev machine, so
+    // compare two sizes on the same machine. Going from a 20 x 20 to a 40 x 40
+    // grid quadruples the node count: the sparse solve costs a small multiple of
+    // 4x to 8x, dense elimination would cost 4^3 = 64x. A ratio under 40 passes
+    // with headroom for noise and still fails on cubic-in-nodes growth.
+    const ratio = big.best / Math.max(small.best, 0.05)
+    expect(ratio).toBeLessThan(40)
   })
 })

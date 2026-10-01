@@ -163,4 +163,34 @@ describe('fileOpen — fileExists probing (F3, no ENOENT stack on board open)', 
     expect(opened.schematicText).toBeUndefined()
     expect(reads).toContain('/p/proj.kicad_sch')
   })
+
+  it('returns the board path and reads the setup file when a reader is given', async () => {
+    const { readFile } = trackingReadFile({ '/p/proj.kicad_pcb': '(board)' })
+    const readSidecar = async (p: string) => {
+      expect(p).toBe('/p/proj.kicad_pcb')
+      return { exists: true, text: '{"version":1}' }
+    }
+    const opened = await openProjectFromPath('/p/proj.kicad_pcb', readFile, undefined, async () => false, readSidecar)
+    expect(opened.boardPath).toBe('/p/proj.kicad_pcb')
+    expect(opened.sidecarText).toBe('{"version":1}')
+  })
+
+  it('an absent setup file leaves sidecarText unset', async () => {
+    const { readFile } = trackingReadFile({ '/p/proj.kicad_pcb': '(board)' })
+    const opened = await openProjectFromPath('/p/proj.kicad_pcb', readFile, undefined, async () => false, async () => ({ exists: false }))
+    expect(opened.sidecarText).toBeUndefined()
+    expect(opened.sidecarError).toBeUndefined()
+  })
+
+  it('a setup file that cannot be read, or a reader that throws, never fails the open', async () => {
+    const { readFile } = trackingReadFile({ '/p/proj.kicad_pcb': '(board)' })
+    const unreadable = await openProjectFromPath('/p/proj.kicad_pcb', readFile, undefined, async () => false,
+      async () => ({ exists: true, error: 'EACCES' }))
+    expect(unreadable.boardText).toBe('(board)')
+    expect(unreadable.sidecarError).toBe('EACCES')
+    const thrown = await openProjectFromPath('/p/proj.kicad_pcb', readFile, undefined, async () => false,
+      async () => { throw new Error('ipc down') })
+    expect(thrown.boardText).toBe('(board)')
+    expect(thrown.sidecarError).toBe('ipc down')
+  })
 })

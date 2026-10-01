@@ -49,7 +49,7 @@
     (net "OUT") (uuid "cccccccc-0000-0000-0000-000000000001"))
   (via (at 19.0875 10) (size 0.5) (drill 0.3) (layers "F.Cu" "B.Cu")
     (net "OUT") (uuid "dddddddd-0000-0000-0000-000000000001"))
-  (gr_text "fixture-rc-v9" (at 15 17) (layer "F.SilkS")
+  (gr_text "fixture-rc-v10" (at 15 17) (layer "F.SilkS")
     (effects (font (size 1 1) (thickness 0.15))))
   (gr_line (start 0 0) (end 30 0) (layer "Edge.Cuts") (width 0.1))
   (gr_line (start 30 0) (end 30 20) (layer "Edge.Cuts") (width 0.1))
