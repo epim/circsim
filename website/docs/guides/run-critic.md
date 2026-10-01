@@ -15,9 +15,9 @@ So the full flow is: open the board, glance at the static findings, then **Energ
 
 The **Board Critic** panel (right dock) shows a summary (`N error`, `N warn`, `N info`) then the findings grouped by severity. Before you energize, the current-dependent checks appear as *"needs simulation"* so you know what a solve would add.
 
-![The bundled 555 sample energized: the Board Critic panel on the right shows three clearance errors with detail and a suggestion.](/img/sample-energized.png)
+![The bundled 555 sample energized: the Board Critic panel on the right shows clearance errors with detail and a suggestion.](/img/sample-energized.png)
 
-*(Above: the bundled 555 sample. The Critic caught three real clearance errors ("Tracks touch or overlap … a short or a fabrication/etch risk"), which is the tool working as designed. An earlier build of this screenshot also showed an amber "check these voltages" banner; the bundled 555 model now solves directly, so the sample opens without it.)*
+*(Above: the bundled 555 sample. The Critic caught real clearance errors ("Tracks touch or overlap … a short or a fabrication/etch risk"), which is the tool working as designed. An earlier build of this screenshot also showed an amber "check these voltages" banner; the bundled 555 model now solves directly, so the sample opens without it.)*
 
 Each finding gives you three things to weigh:
 
