@@ -20,33 +20,26 @@
  *
  * We capture the LED current TWO ways and document what the real SimHost streams:
  *   (a) `.save all @d1[i]` — diode device-internal current vector. RESULT: the
- *       "@d1[i]" name IS announced in the `vectors` event, but ZERO `samples`
- *       rows stream (see gotcha below) — so this is NOT a viable Live-Bench path.
+ *       "@d1[i]" name IS announced in the `vectors` event, but the vector carries
+ *       no readable data (ngspice 46 holds none for a diode's own current), so its
+ *       column is all NaN. The other vectors of the run stream normally. NOT a
+ *       viable Live-Bench path for a device current.
  *   (b) a 0 V series ammeter `vmeas a ak 0` + `d1 ak 0 dled` + `.save i(vmeas)`.
  *       RESULT: streams cleanly as "vmeas#branch", ~8.65 mA, every timepoint.
  *       THIS is the path Live-Bench should use for a device branch current.
  *
- * GOTCHA — why `@d1[i]` does not stream (load-bearing for Live-Bench, root cause
- * RE-DIAGNOSED): when the saved set includes a device-internal "@d1[i]" vector,
- * ngspice's shared-library SendData dispatch does NOT fire AT ALL for the run — the
- * FFI SendData callback is never invoked, so no timepoint is ever delivered (proven
- * in isolation: the identical circuit WITHOUT @d1[i] streams 1000+ rows; WITH it,
- * zero callbacks). The loss is INSIDE ngspice's SendData path, not in the koffi
- * vecvaluesall decode. (The decode loop is nonetheless now per-entry resilient — a
- * single bad vector substitutes NaN for itself rather than dropping the whole row —
- * see ngspiceFfi.ts and the unit test in ngspiceFfi.senddata.test.ts; but that
- * resilience cannot resurrect rows ngspice never sends.) The op path is unaffected
- * (it reads vectors via ngGet_Vec_Info, not the SendData struct). So in the
- * transient stream a device's own @dev[i] current is unusable; a 0 V series ammeter
- * (whose current comes through as the well-behaved "<src>#branch" form) is the
- * working answer.
+ * HISTORY (issue #25): while samples arrived through ngspice's per-timepoint
+ * SendData callback, a saved "@d1[i]" made ngspice skip SendData for the WHOLE
+ * run (zero callbacks, zero samples; the identical circuit without it streamed
+ * 1000+ rows). Samples are now read from the plot vectors instead, so the run
+ * survives and only that one column is lost.
  *
- * NORMALIZATION NOTE (also load-bearing): the transient streaming path
- * (onEngineEvent → initData/data) passes ngspice's RAW vector names straight into
- * the SampleBatcher — it does NOT call normalizeVectorKey() (only the op path
- * does). So the streamed `vectors`/`samples` events carry the RAW name
- * ("vmeas#branch", "@d1[i]"), NOT the canonical "i(vmeas)". The renderer/store
- * must normalize on its side. This test asserts on both raw and normalized forms.
+ * NORMALIZATION NOTE (load-bearing): the transient streaming path (initData and
+ * the plot reads) passes ngspice's RAW vector names straight through, it does NOT
+ * call normalizeVectorKey() (only the op path does). So the streamed
+ * `vectors`/`samples` events carry the RAW name ("vmeas#branch", "@d1[i]"), NOT
+ * the canonical "i(vmeas)". The renderer/store must normalize on its side. This
+ * test asserts on both raw and normalized forms.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -137,18 +130,11 @@ function findCurrentColumn(col: SampleCollector, dev: string): { raw: string; va
 }
 
 describe.skipIf(!haveNgspice)('Live-Bench spike — LED branch current streams (real libngspice)', () => {
-  it('(a) `.save all @d1[i]` ANNOUNCES the vector but streams NO samples (ngspice gotcha)', async () => {
+  it('(a) `.save all @d1[i]` is announced, but its column is NaN; the rest of the run still streams', async () => {
     // Diode model: is/n chosen so Vf ≈ 1.8–2 V at ~10 mA (so i ≈ (5-Vf)/330).
-    // This test PINS the known gotcha: including a device-internal "@d1[i]" vector
-    // in the saved set makes ngspice's shared-library SendData dispatch skip the
-    // entire run — the FFI SendData callback is NEVER invoked, so nothing streams,
-    // even though "@d1[i]" appears in the `vectors` event. The identical circuit
-    // WITHOUT @d1[i] streams 1000+ rows (verified in isolation), proving the loss
-    // is inside ngspice's SendData path — NOT in the koffi vecvaluesall decode
-    // (which is independently per-entry resilient; see ngspiceFfi.senddata.test.ts).
-    // If a future ngspice/wrapper change makes @dev[i] stream, this test's
-    // batchCount assertion will start failing — the intended tripwire to revisit
-    // the Live-Bench design.
+    // A device-internal "@d1[i]" vector appears in the `vectors` event but holds
+    // no readable data on ngspice 46, so SimHost reports NaN for that column
+    // (see the HISTORY note above for the old SendData behavior).
     const deck = [
       '* current-limited LED — diode internal current via .save all @d1[i]',
       'v1 vcc 0 dc 5',
@@ -171,10 +157,12 @@ describe.skipIf(!haveNgspice)('Live-Bench spike — LED branch current streams (
     // The device current vector name IS announced in the `vectors` event...
     expect(col.vectorNames).toContain('@d1[i]')
     expect(col.vectorNames.map(normalizeVectorKey)).toContain('i(d1)')
-    // ...but NO samples stream (ngspice never fires SendData for this run). This is
-    // the documented gotcha: @dev[i] is NOT a usable transient-stream current source.
-    expect(col.batchCount).toBe(0)
-    expect(col.time.length).toBe(0)
+    // ...the run streams anyway (node voltages arrive)...
+    expect(col.time.length).toBeGreaterThan(10)
+    expect(Number.isFinite(col.finalValue('a'))).toBe(true)
+    // ...but the device current itself is not readable: all NaN. Still not a usable
+    // transient current source; the 0 V ammeter in (b) is.
+    expect(col.cols['@d1[i]'].every((v) => Number.isNaN(v))).toBe(true)
   }, 30_000)
 
   it('(b) series 0V ammeter i(vmeas) streams the LED current, ~9-10 mA, positive', async () => {

@@ -30,14 +30,34 @@ export type SimCommand =
   | { type: 'resume' }
   | { type: 'stop' }
   | { type: 'setPace'; realtimeFactor: number | 'max' }
+  // ADDITIVE (issue #25). `watch` names the vectors the renderer wants as a full
+  // time series in every `samples` batch (the scope probes' nets, by ngspice
+  // vector name). Every other saved vector is reported only as its newest value
+  // in the batch's `latest` snapshot at display rate. Until the first `watch`,
+  // every vector is watched (full series), which is what a finite-run consumer
+  // such as SolveEngine.runTran needs; every `loadCircuit` resets it to that.
+  // Sticky across bench-window restarts; send it after the deck is loaded and
+  // again whenever the probe set changes.
+  | { type: 'watch'; vectors: string[] }
 
 // ─── simhost → renderer ──────────────────────────────────────────────────────
 
 export type SimEvent =
   | { type: 'ready'; ngspiceVersion: string }
   | { type: 'vectors'; names: string[] } // vector list after run starts
-  | { type: 'samples'; vectorNames: string[]; columns: Float64Array[]; simTime: Float64Array }
-  // batched: flushed every 16 ms or 4096 points, whichever first
+  | {
+      type: 'samples'
+      vectorNames: string[]
+      columns: Float64Array[]
+      simTime: Float64Array
+      latest?: LatestSnapshot
+    }
+  // One batch per 16 ms sample tick (at most 4096 points per batch, extra ticks
+  // run back to back while the plot is ahead). `vectorNames`/`columns` carry the
+  // watched vectors' new points, all the same length as `simTime`.
+  // `latest` (ADDITIVE, optional) carries the newest value of every other saved
+  // vector, refreshed about every 33 ms while the run advances; absent on the
+  // batches in between. Consumers that only tint or read a value need nothing else.
   | { type: 'opResult'; values: Record<string, number>; method?: OpSolveMethod }
   // KEY FORMAT (normative): node voltages keyed by the bare lowercase SPICE node name
   // ("out", never "v(out)" or "OUT"); source/device currents keyed "i(<device>)".
@@ -50,10 +70,31 @@ export type SimEvent =
       freq: Float64Array
       vectors: Record<string, { mag: Float64Array; phaseDeg: Float64Array }>
     }
+  // `running`: the run is live (false: finished, paused by the user, or ended on its own).
+  // Pacing and alter halts of the ngspice thread do not make it false.
   | { type: 'status'; running: boolean; simTimeSeconds: number; realtimeFactor: number }
   | { type: 'benchRestarted'; reason: 'window-elapsed' | 'memory' } // see §7.5 bench windows
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string } // ngspice stdout/stderr lines
   | { type: 'convergenceFailure'; detail: string }
+
+/** Newest values of the saved vectors that are not watched (see the `watch` command). */
+export interface LatestSnapshot {
+  /** Raw ngspice vector names, same spelling as `samples.vectorNames`. */
+  vectorNames: string[]
+  /** values[i] is the newest point of vectorNames[i]; NaN when it could not be read. */
+  values: Float64Array
+}
+
+// ─── bench tstep ─────────────────────────────────────────────────────────────
+
+/**
+ * Coarsest transient time-step the live bench asks for: what a bench with no
+ * fast source on it runs at (issue #25). ngspice refines below it on its own
+ * wherever the circuit demands (edges, switching), so it bounds only the
+ * quietest stretches, and the scope decimates to pixel columns anyway. Shared
+ * so the renderer's bandwidth-derived tstep and the real-time tests agree.
+ */
+export const BENCH_TSTEP_MAX_SECONDS = 100e-6
 
 // ─── op solve method (Spec §8.8 retry ladder — additive extension) ───────────
 
