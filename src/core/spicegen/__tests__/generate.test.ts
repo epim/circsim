@@ -976,6 +976,58 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
     expect(deckText).toContain('dac_bridge(out_low=0 out_high=12.0000)')
   })
 
+  describe('undriven nets across a capacitor (issue #43)', () => {
+    /** Drop the expansion-internal u1_* nodes of the chip's unused gates. */
+    const boardNodes = (groups: string[][]): string[][] =>
+      groups.map(g => g.filter(n => !n.startsWith('u1_'))).filter(g => g.length > 0)
+
+    function acCoupledInput(withCap: boolean) {
+      const circuit = makeDigitalCircuit()
+      circuit.parts.push(
+        { ref: 'R1', value: '10k', libId: 'Device:R', layer: 'F', padNet: new Map([['1', 4], ['2', 1]]), properties: {} },
+        { ref: 'C1', value: '1n', libId: 'Device:C', layer: 'F', padNet: new Map([['1', 3], ['2', 2]]), properties: {} },
+      )
+      const resolutions: Resolution[] = [
+        {
+          ref: 'U1', status: 'ok', tier: 3, warnings: [],
+          model: {
+            kind: 'xspice-digital', templateId: '74HC00',
+            pinMap: { '1': '1A', '2': '1B', '3': '1Y', '7': 'GND', '14': 'VCC' },
+          },
+        },
+        { ref: 'R1', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'r_r1 vcc a 10000' } },
+      ]
+      if (withCap) {
+        resolutions.push({ ref: 'C1', status: 'ok', tier: 2, warnings: [], model: { kind: 'primitive', card: 'c_c1 y b 1e-09' } })
+      }
+      return generateDeckWithDiagnostics({
+        circuit, resolutions,
+        instruments: [
+          { kind: 'ground-ref', netId: 5 },
+          { kind: 'dc-supply', id: '1', netId: 4, volts: 5, seriesOhms: 0.1 },
+        ],
+        groundNetId: 5,
+        modelTexts: { 'logic74hc.json': LOGIC_JSON },
+      })
+    }
+
+    test('an input AC-coupled to a gate output with no bias is undriven although the gate shares its island', () => {
+      const { lines, diagnostics } = acCoupledInput(true)
+      // The capacitor joins b and y into one island, and both are bled ...
+      expect(boardNodes(diagnostics.floatingIslands)).toEqual([['b', 'y']])
+      expect(lines).toContain('r_float_1 b 0 1e9')
+      expect(lines).toContain('r_float_2 y 0 1e9')
+      // ... but only y is driven: b has no DC path to the gate output.
+      expect(boardNodes(diagnostics.undrivenIslands)).toEqual([['b']])
+    })
+
+    test('without the capacitor the unbiased input is undriven and the gate output is not', () => {
+      const { diagnostics } = acCoupledInput(false)
+      expect(boardNodes(diagnostics.floatingIslands)).toEqual([['b'], ['y']])
+      expect(boardNodes(diagnostics.undrivenIslands)).toEqual([['b']])
+    })
+  })
+
   test('CD40106 Schmitt template expands to a self-referential hysteresis B-source (40%/60% band, 4.8/7.2 V at 12 V)', () => {
     const circuit = makeDigitalCircuit()
     circuit.parts[0].value = 'CD40106'

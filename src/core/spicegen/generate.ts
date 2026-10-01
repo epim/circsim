@@ -156,6 +156,8 @@ interface ModelTextIndex {
   modelsByFile: Map<string, Map<string, string>>
   /** M12 cache: `${file}::${lowercased name}` → terminal-index groups (null = no definition). */
   terminalGroups: Map<string, number[][] | null>
+  /** Same as `terminalGroups`, but capacitors do not join terminals (DC conductivity only). */
+  dcTerminalGroups: Map<string, number[][] | null>
   texts: Record<string, string>
 }
 
@@ -164,6 +166,7 @@ function makeModelTextIndex(texts: Record<string, string> | undefined): ModelTex
     subcktsByFile: new Map(),
     modelsByFile: new Map(),
     terminalGroups: new Map(),
+    dcTerminalGroups: new Map(),
     texts: texts ?? {},
   }
 }
@@ -489,18 +492,29 @@ function buildWaveSourceValue(inst: Extract<Instrument, { kind: 'function-gen' }
 class NodeUnionFind {
   /** parent map; insertion order is first-seen order (drives deterministic output). */
   private readonly parent = new Map<string, string>()
+  /**
+   * Second union-find over DC-conductive links only (issue #43): every link
+   * except the ones flagged `capacitive`. A capacitor joins nodes in `parent`
+   * (an island with a capacitor path is still wired up) but not here, so two
+   * nets joined only by a capacitor are separate DC components.
+   */
+  private readonly dcParent = new Map<string, string>()
 
-  private find(n: string): string {
+  private findIn(map: Map<string, string>, n: string): string {
     let root = n
-    while (this.parent.get(root) !== root) root = this.parent.get(root)!
+    while (map.get(root) !== root) root = map.get(root)!
     // Path compression.
     let cur = n
     while (cur !== root) {
-      const next = this.parent.get(cur)!
-      this.parent.set(cur, root)
+      const next = map.get(cur)!
+      map.set(cur, root)
       cur = next
     }
     return root
+  }
+
+  private find(n: string): string {
+    return this.findIn(this.parent, n)
   }
 
   /**
@@ -512,16 +526,31 @@ class NodeUnionFind {
     return this.parent.has(n) ? this.find(n) : undefined
   }
 
-  /** Register a card's analog nodes and union them into one component. */
-  link(nodes: string[]): void {
+  /**
+   * Root of a node's DC-conductive component. A node that only ever met
+   * capacitive links (or was never registered) is its own component.
+   */
+  dcRootOf(n: string): string {
+    return this.dcParent.has(n) ? this.findIn(this.dcParent, n) : n
+  }
+
+  /**
+   * Register a card's analog nodes and union them into one component. A
+   * `capacitive` link (a capacitor, which passes no DC) joins the island
+   * component only, never the DC component.
+   */
+  link(nodes: string[], capacitive = false): void {
     const clean = nodes.filter(n => n.length > 0)
-    for (const n of clean) {
-      if (!this.parent.has(n)) this.parent.set(n, n)
-    }
-    for (let i = 1; i < clean.length; i++) {
-      const a = this.find(clean[0])
-      const b = this.find(clean[i])
-      if (a !== b) this.parent.set(b, a)
+    const maps = capacitive ? [this.parent] : [this.parent, this.dcParent]
+    for (const map of maps) {
+      for (const n of clean) {
+        if (!map.has(n)) map.set(n, n)
+      }
+      for (let i = 1; i < clean.length; i++) {
+        const a = this.findIn(map, clean[0])
+        const b = this.findIn(map, clean[i])
+        if (a !== b) map.set(b, a)
+      }
     }
   }
 
@@ -625,11 +654,14 @@ function primitiveCardNodeGroups(card: string): string[][] {
  *       way the pre-M12 blanket union did; it never strands a real path.
  *
  * `x` cards are handled by the caller (child terminal-group substitution).
+ * With `dc` set, capacitor cards contribute nothing (they pass no DC).
  */
-function subcktBodyCardGroups(card: string): string[][] {
+function subcktBodyCardGroups(card: string, dc = false): string[][] {
   const toks = card.trim().split(/\s+/)
   if (toks.length < 3) return []
   const letter = toks[0].charAt(0).toLowerCase()
+  // DC view (issue #43): a capacitor passes no DC, so it joins nothing.
+  if (dc && letter === 'c') return []
   if (letter === 'b') return [toks.slice(1, 3)]
   if ('rclvidqjmegfh'.includes(letter)) return primitiveCardNodeGroups(card)
   // Unknown element letter inside a lib body: conservative two-node pair.
@@ -656,20 +688,25 @@ function subcktBodyCardGroups(card: string): string[][] {
  * worst adds a harmless 1 GΩ bleed on an otherwise-driven net — never the
  * reverse. Bleeds therefore remain a SUPERSET of the pre-M12 set, minus
  * nothing (strictly additive refinement).
+ *
+ * With `dc` set the same analysis ignores capacitors (separate cache), giving
+ * the DC-conductive grouping the undriven-net diagnostic needs (issue #43).
  */
 function terminalGroupsFor(
   idx: ModelTextIndex,
   file: string,
   name: string,
   visiting: Set<string> = new Set(),
+  dc = false,
 ): number[][] | undefined {
   const key = `${file}::${name.toLowerCase()}`
-  const cached = idx.terminalGroups.get(key)
+  const cache = dc ? idx.dcTerminalGroups : idx.terminalGroups
+  const cached = cache.get(key)
   if (cached !== undefined) return cached ?? undefined
   if (visiting.has(key)) return undefined // cycle — no info for this instance
   const def = getSubcktDef(idx, file, name)
   if (!def) {
-    idx.terminalGroups.set(key, null)
+    cache.set(key, null)
     return undefined
   }
   visiting.add(key)
@@ -684,7 +721,7 @@ function terminalGroupsFor(
       const childDef = nameTok ? getSubcktDef(idx, file, nameTok) : undefined
       if (childDef) {
         const nodeToks = toks.slice(1, 1 + childDef.terminals.length).map((n) => n.toLowerCase())
-        const childGroups = terminalGroupsFor(idx, file, nameTok, visiting)
+        const childGroups = terminalGroupsFor(idx, file, nameTok, visiting, dc)
         if (childGroups) {
           // Substitute the child's terminal conductivity: union the parent
           // nodes sitting at internally-connected child-terminal positions;
@@ -703,7 +740,7 @@ function terminalGroupsFor(
       }
       continue
     }
-    for (const g of subcktBodyCardGroups(t)) uf.link(g.map((n) => n.toLowerCase()))
+    for (const g of subcktBodyCardGroups(t, dc)) uf.link(g.map((n) => n.toLowerCase()))
   }
   visiting.delete(key)
   // Group the declared terminals by their internal connected component.
@@ -724,7 +761,7 @@ function terminalGroupsFor(
     groupByRoot.set(root, g)
     groups.push(g)
   })
-  idx.terminalGroups.set(key, groups)
+  cache.set(key, groups)
   return groups
 }
 
@@ -1183,6 +1220,37 @@ export function generateDeck(opts: GenerateOptions): string[] {
 }
 
 /**
+ * The parts of the bled islands that nothing drives (issue #43), as ordered
+ * node lists. An island is first split into its DC-conductive components,
+ * because a capacitor joins nets into one island without carrying any DC: an
+ * AC-coupled gate input stays bled to 0 V even though the gate that drives the
+ * other side of the capacitor sits in the same island. A DC component is driven
+ * only when an expanded chip output is DC-connected to it.
+ */
+function undrivenIslandsOf(
+  islands: string[][],
+  graph: NodeUnionFind,
+  drivenNodes: Set<string>,
+): string[][] {
+  const drivenRoots = new Set<string>()
+  for (const n of drivenNodes) drivenRoots.add(graph.dcRootOf(n))
+  const out: string[][] = []
+  for (const island of islands) {
+    const byRoot = new Map<string, string[]>()
+    for (const node of island) {
+      const root = graph.dcRootOf(node)
+      const group = byRoot.get(root)
+      if (group) group.push(node)
+      else byRoot.set(root, [node])
+    }
+    for (const [root, nodes] of byRoot) {
+      if (!drivenRoots.has(root)) out.push(nodes)
+    }
+  }
+  return out
+}
+
+/**
  * What the generator learned while building a deck that the deck text alone
  * does not carry to a caller (issue #43).
  */
@@ -1196,11 +1264,14 @@ export interface DeckDiagnostics {
    */
   floatingIslands: string[][]
   /**
-   * The subset of `floatingIslands` that nothing drives: no expanded digital
-   * chip output sits in the island, so its nodes read 0 V only because of the
-   * bleed. These are what the app surfaces to the user (issue #43). A gate's
-   * output net with no DC path to ground is bled too, but it is driven, so it
-   * is not listed here.
+   * The part of `floatingIslands` that nothing drives, split into DC-conductive
+   * components: no expanded digital chip output is DC-connected to the nodes
+   * listed, so they read 0 V only because of the bleed. Capacitors link nets
+   * into one island but pass no DC, so an AC-coupled input (gate output, then a
+   * capacitor, then a gate input with no bias) is listed even though a driven
+   * net sits on the other side of the capacitor. These are what the app
+   * surfaces to the user (issue #43). A gate's output net with no DC path to
+   * ground is bled too, but it is driven, so it is not listed here.
    */
   undrivenIslands: string[][]
 }
@@ -1279,7 +1350,11 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
       islandNodes.link(nodes)
       return
     }
-    for (const g of groups) islandNodes.link(g.map((i) => nodes[i]))
+    // Island connectivity counts capacitors (capacitive link: island map only);
+    // the DC grouping then adds the conductive links to both maps.
+    for (const g of groups) islandNodes.link(g.map((i) => nodes[i]), true)
+    const dcGroups = terminalGroupsFor(modelIndex, libFile, subcktName, new Set(), true) ?? groups
+    for (const g of dcGroups) islandNodes.link(g.map((i) => nodes[i]))
   }
 
   // ── Line 0: title (SPICE requires first line to be a title comment) ────────
@@ -1456,7 +1531,9 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
       } else {
         lines.push(model.card)
       }
-      for (const group of primitiveCardNodeGroups(model.card)) islandNodes.link(group)
+      // A capacitor joins the island but passes no DC (issue #43).
+      const capacitive = model.card.trim().charAt(0).toLowerCase() === 'c'
+      for (const group of primitiveCardNodeGroups(model.card)) islandNodes.link(group, capacitive)
       continue
     }
 
@@ -1687,7 +1764,7 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
     lines,
     diagnostics: {
       floatingIslands: islands,
-      undrivenIslands: islands.filter(island => !island.some(n => drivenNodes.has(n))),
+      undrivenIslands: undrivenIslandsOf(islands, islandNodes, drivenNodes),
     },
   }
 }
