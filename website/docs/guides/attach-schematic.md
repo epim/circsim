@@ -1,6 +1,6 @@
 # Attach a schematic
 
-The board file gives circsim the full circuit connectivity, but the matching **`.kicad_sch`** schematic adds fidelity the board can't: KiCad `Sim.*` model fields, symbol pin names, and no-connect markers. Attaching it is optional but recommended, especially if your board has diodes, LEDs, or parts you've annotated with simulation fields.
+The board file gives circsim the full circuit connectivity, but the matching **`.kicad_sch`** schematic adds fidelity the board can't: KiCad `Sim.*` model fields, symbol pin names, and the pins you marked no-connect. Attaching it is optional but recommended, especially if your board has diodes, LEDs, or parts you've annotated with simulation fields.
 
 ## Why bother
 

@@ -19,6 +19,7 @@ import { createAppStore, type AppState } from '../../store/appStore'
 import { createMockSimClient } from '../../ipc/simClient'
 import type { Resolution } from '../../../../core/models/types'
 import { SCHEMATIC_PINMAP_NOTE } from '../../../../core/models/libraryMatch'
+import { parseBoard } from '../../../../core/kicad/board'
 
 function unresolved(ref: string): Resolution {
   return { ref, status: 'unresolved', tier: 6, warnings: [] }
@@ -497,5 +498,54 @@ describe('op fallback caveat (issue #19): details control for the solver vocabul
 
   it('a direct solve (no caveat) renders nothing', () => {
     expect(renderWithCaveat(null)).toBe('')
+  })
+})
+
+// ─── Board outline warnings (#50) ────────────────────────────────────────────
+
+function renderBarWithBoard(boardText: string): string {
+  const store = createAppStore({ simClient: createMockSimClient() })
+  store.setState({ board: parseBoard(boardText) })
+  ;(store as unknown as { getServerState?: () => AppState }).getServerState = () =>
+    store.getState()
+  return renderToStaticMarkup(
+    <AppStoreProvider store={store}>
+      <WarningsBar />
+    </AppStoreProvider>,
+  )
+}
+
+describe('board outline warnings (#50)', () => {
+  const header = '(kicad_pcb (version 20260206) (generator "pcbnew") (general (thickness 1.6))'
+
+  it('a board with no Edge.Cuts outline shows a visible warning row', () => {
+    const html = renderBarWithBoard(`${header})`)
+    expect(html).toContain('data-testid="outline-warning"')
+    expect(html).toContain('no board outline found on the Edge.Cuts layer')
+    // The internal "outline:" prefix is stripped from the user-facing copy.
+    expect(html).not.toContain('outline: no board outline')
+  })
+
+  it('an open outline chain shows the stitcher warning', () => {
+    const html = renderBarWithBoard(
+      `${header}
+        (gr_line (start 0 0) (end 10 0) (layer "Edge.Cuts") (uuid "a"))
+        (gr_line (start 10 0) (end 10 10) (layer "Edge.Cuts") (uuid "b")))`,
+    )
+    expect(html).toContain('data-testid="outline-warning"')
+    expect(html).toContain('open chain')
+  })
+
+  it('a clean outline shows nothing', () => {
+    const html = renderBarWithBoard(
+      `${header}
+        (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts") (uuid "a")))`,
+    )
+    expect(html).not.toContain('outline-warning')
+    expect(html).toBe('')
+  })
+
+  it('no board loaded shows nothing', () => {
+    expect(renderBar([])).toBe('')
   })
 })

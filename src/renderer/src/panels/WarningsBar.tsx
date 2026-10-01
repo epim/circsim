@@ -16,6 +16,10 @@
  *   - Undriven nets: nets with no path to ground and no driver, which the deck
  *     holds at 0 V through a 1 GOhm bleed. Listed by name so a bled 0 V is never
  *     mistaken for a measurement (issue #43). Cleared by any deck-dirtying edit.
+ *   - Board outline warnings (#50): load-time diagnostics from the Edge.Cuts
+ *     stitcher (no outline found, open chain, unsupported primitive). Persistent
+ *     for the loaded board; without them the 3D view just shows copper floating
+ *     in space or a bounding-box substrate with no explanation.
  *   - Bench-restart toast: brief "bench restarted" notice (window/memory), with
  *     the sequential-logic caveat when digital parts are present. Dismissable.
  *   - Crash toast: SimHost crashed. Auto-recovering, or (fatal, after 5 rapid
@@ -89,6 +93,9 @@ export function _applyRailOverride(
   void store.getState().powerOn()
 }
 
+/** Stable empty list so the no-board case does not allocate per render. */
+const NO_WARNINGS: readonly string[] = []
+
 /**
  * Select the part or net a convergence failure named, so the card turns the
  * diagnosis into a click (#71). A part is revealed in the Model Doctor (nonce
@@ -126,6 +133,8 @@ export default function WarningsBar(): React.ReactElement | null {
   const railNotes = useApp(s => s.railNotes)
   const undrivenNets = useApp(s => s.undrivenNets)
   const fidelityMinimizedSig = useApp(s => s.fidelityMinimizedSig)
+  const board = useApp(s => s.board)
+  const outlineWarnings = board ? board.outline.warnings : NO_WARNINGS
 
   const fidelity = fidelityBannerItems(resolutions)
   const fidelityMinimized = isFidelityMinimized(fidelity, fidelityMinimizedSig)
@@ -180,7 +189,8 @@ export default function WarningsBar(): React.ReactElement | null {
     opCaveat ||
     railNotes.length > 0 ||
     undrivenNets.length > 0 ||
-    schematicPinNotes.length > 0
+    schematicPinNotes.length > 0 ||
+    outlineWarnings.length > 0
   if (!anything) return null
 
   return (
@@ -384,6 +394,13 @@ export default function WarningsBar(): React.ReactElement | null {
           not guarantee.
         </div>
       )}
+
+      {/* ── Board outline warnings (#50): why the substrate looks wrong ───── */}
+      {outlineWarnings.map((w, i) => (
+        <div key={`${i}:${w}`} style={outlineWarningStyle} data-testid="outline-warning">
+          <strong>Board outline.</strong> {w.replace(/^outline:\s*/, '')}
+        </div>
+      ))}
 
       {/* ── Schematic pin-map corrections (informational, spec 2026-07-15) ── */}
       {schematicPinNotes.map(r => (
@@ -606,6 +623,13 @@ const railBtnStyle: React.CSSProperties = {
   padding: '4px 8px',
   fontSize: 12,
   cursor: 'pointer',
+}
+// Outline warnings: same amber caveat tone as the op fallback.
+const outlineWarningStyle: React.CSSProperties = {
+  ...baseRow,
+  background: '#3a2a10',
+  color: '#ffd9a0',
+  borderTop: '1px solid #5a4418',
 }
 const schematicPinNoteStyle: React.CSSProperties = {
   ...baseRow,
