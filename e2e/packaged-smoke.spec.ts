@@ -134,18 +134,30 @@ test('packaged app: open First Light → energize → op annotations (real ngspi
 
     // Silkscreen text renders in the packaged build (issue #39): one mesh with
     // glyph quads in it. Before the fix the labels never appeared.
-    await expect
-      .poll(
-        () =>
-          page.evaluate(
-            () => (window as unknown as { __circsimSilkscreen?: { glyphs: number } }).__circsimSilkscreen?.glyphs ?? 0,
-          ),
-        { timeout: 15_000 },
+    //
+    // Some runners have no GL path under Electron 44 (macos-15-intel, issue
+    // #133), so the 3D scene never starts and the viewport shows its fallback
+    // notice (PR #110). There the glyph count cannot be asserted; assert the
+    // notice instead. Legs with GL keep the exact glyph assertion, so this does
+    // not weaken the check anywhere it can hold.
+    const unavailable = page.locator('[data-testid="viewport-unavailable"]')
+    const readGlyphs = (): Promise<number> =>
+      page.evaluate(
+        () => (window as unknown as { __circsimSilkscreen?: { glyphs: number } }).__circsimSilkscreen?.glyphs ?? 0,
       )
-      .toBeGreaterThan(0)
+    await expect
+      .poll(async () => (await unavailable.count()) > 0 || (await readGlyphs()) > 0, { timeout: 15_000 })
+      .toBe(true)
+    if ((await unavailable.count()) > 0) {
+      await expect(unavailable).toBeVisible()
+      await expect(unavailable).toContainText('3D view unavailable')
+    } else {
+      await expect.poll(readGlyphs, { timeout: 15_000 }).toBeGreaterThan(0)
+    }
 
     // The offline promise holds in the packaged build (issue #38): the main
     // process saw the whole open and energize and not one request left the machine.
+    // This holds with or without GL, so it is asserted on every leg.
     await page.waitForTimeout(1500)
     const audit = await app.evaluate(
       () =>
