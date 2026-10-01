@@ -25,6 +25,17 @@
       "source": "1N4148 datasheet VF at 100 mA (about 1.0 V typ per lib header; +/-0.2 V covers vendor curve spread)"
     },
     {
+      "id": "diode-1n4148-vf-10ma",
+      "entry": "diode-1n4148",
+      "quantity": "Vf at IF=10 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":0.65,"max":1},
+      "source": "1N4148 datasheet (onsemi/Fairchild): VF 1.0 V maximum at IF=10 mA"
+    },
+    {
       "id": "diode-1n4148-vbr-100ua",
       "entry": "diode-1n4148",
       "quantity": "reverse breakdown voltage at IR=100 uA",
@@ -91,6 +102,17 @@
       "source": "1N5819 datasheet: VF about 0.45 V typ, 0.60 V maximum at 1 A, 25 C"
     },
     {
+      "id": "diode-1n5819-vf-3a",
+      "entry": "diode-1n5819",
+      "quantity": "Vf at IF=3 A",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 3","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":0.6,"max":0.9},
+      "source": "1N5819 datasheet: VF 0.9 V maximum at IF=3 A"
+    },
+    {
       "id": "diode-1n5819-vbr-1ma",
       "entry": "diode-1n5819",
       "quantity": "reverse breakdown voltage at IR=1 mA",
@@ -139,7 +161,7 @@
       "entry": "tvs-smaj24a",
       "quantity": "breakdown voltage at IT=1 mA",
       "unit": "V",
-      "setup": {"kind":"deck","deck":["i1 a 0 dc 1m","d1 a 0 {{model}}"]},
+      "setup": {"kind":"deck","deck":["i1 a 0 dc 1m","x1 a 0 {{model}}"]},
       "analysis": {"type":"op"},
       "measure": {"expr":"-v(a)"},
       "expect": {"min":26.7,"max":29.5},
@@ -150,18 +172,18 @@
       "entry": "tvs-smaj24a",
       "quantity": "clamping voltage at Ipp=10.3 A",
       "unit": "V",
-      "setup": {"kind":"deck","deck":["i1 a 0 dc 10.3","d1 a 0 {{model}}"]},
+      "setup": {"kind":"deck","deck":["i1 a 0 dc 10.3","x1 a 0 {{model}}"]},
       "analysis": {"type":"op"},
       "measure": {"expr":"-v(a)"},
       "expect": {"typ":38.9,"abs":1},
-      "source": "SMAJ24A datasheet: VC 38.9 V at IPP=10.3 A (10/1000 us); the lib fits its series resistance to this figure"
+      "source": "SMAJ24A datasheet: VC 38.9 V at IPP=10.3 A (10/1000 us); the lib fits the breakdown branch of its reverse clamp to this figure"
     },
     {
       "id": "tvs-smaj24a-ir-standoff",
       "entry": "tvs-smaj24a",
       "quantity": "leakage at VRWM=24 V",
       "unit": "A",
-      "setup": {"kind":"deck","deck":["v1 a 0 dc -24","d1 a 0 {{model}}"]},
+      "setup": {"kind":"deck","deck":["v1 a 0 dc -24","x1 a 0 {{model}}"]},
       "analysis": {"type":"op"},
       "measure": {"expr":"abs(i(v1))"},
       "expect": {"min":0,"max":0.000001},
@@ -172,12 +194,22 @@
       "entry": "tvs-smaj24a",
       "quantity": "forward voltage at IF=1 A",
       "unit": "V",
-      "setup": {"kind":"deck","deck":["i1 0 a dc 1","d1 a 0 {{model}}"]},
+      "setup": {"kind":"deck","deck":["i1 0 a dc 1","x1 a 0 {{model}}"]},
       "analysis": {"type":"op"},
       "measure": {"expr":"v(a)"},
       "expect": {"min":0.7,"max":1.5},
-      "source": "SMAJ series datasheet: forward path is an ordinary silicon junction, about 1 V at 1 A (band is wide and family-typical)",
-      "knownFailing": "#86"
+      "source": "SMAJ series datasheet: forward path is an ordinary silicon junction, about 1 V at 1 A (band is wide and family-typical); the reverse clamp is a separate branch so the forward drop does not inherit its series resistance (#86)"
+    },
+    {
+      "id": "tvs-smaj24a-vf-25a",
+      "entry": "tvs-smaj24a",
+      "quantity": "forward voltage at IF=25 A",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 25","x1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"min":2,"max":3.5},
+      "source": "SMAJ series datasheet: VF 3.5 V maximum at IF=25 A (issue #86: the clamp series resistance used to put this near 30 V)"
     },
     {
       "id": "zener-5v1-vz-5ma",
@@ -254,8 +286,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"v(a)"},
       "expect": {"min":1.8,"max":2},
-      "source": "typical red indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib",
-      "knownFailing": "#41"
+      "source": "typical red indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib"
     },
     {
       "id": "led-red-vf-20ma",
@@ -266,8 +297,18 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"v(a)"},
       "expect": {"min":1.8,"max":2},
-      "source": "typical red indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib",
-      "knownFailing": "#41"
+      "source": "typical red indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib"
+    },
+    {
+      "id": "led-red-vf-10ma",
+      "entry": "led-red",
+      "quantity": "Vf at IF=10 mA (red)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"typ":1.85,"abs":0.1},
+      "source": "red indicator LED class, 1.8 to 2.0 V at 20 mA (led.lib); derived from the stated 20 mA target and the card slope (n, rs), band +/-0.1 V; datasheets state Vf at 20 mA only"
     },
     {
       "id": "led-green-vf-20ma",
@@ -278,8 +319,18 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"v(a)"},
       "expect": {"min":2.1,"max":2.2},
-      "source": "typical green indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib",
-      "knownFailing": "#41"
+      "source": "typical green indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib"
+    },
+    {
+      "id": "led-green-vf-10ma",
+      "entry": "led-green",
+      "quantity": "Vf at IF=10 mA (green)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"typ":2.09,"abs":0.1},
+      "source": "green indicator LED class, 2.1 to 2.2 V at 20 mA (led.lib); derived from the stated 20 mA target and the card slope (n, rs), band +/-0.1 V; datasheets state Vf at 20 mA only"
     },
     {
       "id": "led-blue-vf-20ma",
@@ -290,8 +341,18 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"v(a)"},
       "expect": {"min":3,"max":3.2},
-      "source": "typical blue indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib",
-      "knownFailing": "#41"
+      "source": "typical blue indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib"
+    },
+    {
+      "id": "led-blue-vf-10ma",
+      "entry": "led-blue",
+      "quantity": "Vf at IF=10 mA (blue)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"typ":3,"abs":0.1},
+      "source": "blue indicator LED class, 3.0 to 3.2 V at 20 mA (led.lib); derived from the stated 20 mA target and the card slope (n, rs), band +/-0.1 V; datasheets state Vf at 20 mA only"
     },
     {
       "id": "led-white-vf-20ma",
@@ -302,8 +363,18 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"v(a)"},
       "expect": {"min":3,"max":3.4},
-      "source": "typical white indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib",
-      "knownFailing": "#41"
+      "source": "typical white indicator LED datasheets, Vf at 20 mA; targets as documented in resources/models/led.lib"
+    },
+    {
+      "id": "led-white-vf-10ma",
+      "entry": "led-white",
+      "quantity": "Vf at IF=10 mA (white)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["i1 0 a dc 10m","d1 a 0 {{model}}"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(a)"},
+      "expect": {"typ":3.1,"abs":0.1},
+      "source": "white indicator LED class, 3.0 to 3.4 V at 20 mA (led.lib); derived from the stated 20 mA target and the card slope (n, rs), band +/-0.1 V; datasheets state Vf at 20 mA only"
     },
     {
       "id": "led-red-vr",
