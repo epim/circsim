@@ -49,8 +49,8 @@ const SNAP_GRID_MM = 1e-3
 const PAD_SNAP_SLACK_MM = 0.1
 /** Coarsest pour mesh: cells per zone before the pitch is stretched. */
 const MAX_POUR_CELLS = 6000
-/** A track in a pour is cut into at most this many pieces. */
-const MAX_TRACK_PIECES = 400
+/** Runs of a track shorter than this (mm) inside one pour cell are not given a node. */
+const MIN_RUN_MM = 1e-6
 /** Loads below this (A) are treated as no load. */
 export const MIN_LOAD_A = 1e-9
 /** Connector-ish refs, preferred as the rail's supply entry. */
@@ -247,6 +247,15 @@ export function buildRailGraph(ctx: CriticContext, netId: number): RailGraph {
     return bonded
   }
 
+  /** Short a copper node to the one pour cell that holds `p` on its layer. */
+  const bondToPourCell = (node: number, layer: string, p: Vec2, reach: number): void => {
+    for (const lat of latticesOn(layer)) {
+      if (!touchesZone(lat, p, reach)) continue
+      const target = latticeCellAt(lat, p, reach)
+      if (target >= 0 && target !== node) edges.push({ a: node, b: target, ohms: SHORT_OHMS, kind: 'short', lengthMm: 0 })
+    }
+  }
+
   // ── track segments ────────────────────────────────────────────────────────
   const railLayers = new Set<string>()
   for (const lat of lattices) railLayers.add(lat.layer)
@@ -270,7 +279,7 @@ export function buildRailGraph(ctx: CriticContext, netId: number): RailGraph {
         Math.max(t.start.y, t.end.y) >= l.minY &&
         Math.min(t.start.y, t.end.y) <= l.maxY,
     )
-    if (nearPour.length === 0 || t.kind !== 'segment') {
+    if (nearPour.length === 0 || t.kind !== 'segment' || lengthMm < MIN_RUN_MM) {
       if (nearPour.length > 0) {
         bondToPour(a, t.layer, t.start, t.widthMm / 2)
         bondToPour(b, t.layer, t.end, t.widthMm / 2)
@@ -288,46 +297,52 @@ export function buildRailGraph(ctx: CriticContext, netId: number): RailGraph {
       continue
     }
 
-    // A straight track lying in a same-net pour: cut it up and bond each cut
-    // point that is inside the pour.
-    const pitch = Math.min(...nearPour.map((l) => l.h))
-    const pieces = Math.min(MAX_TRACK_PIECES, Math.max(1, Math.ceil(lengthMm / pitch)))
+    // A straight track lying in a same-net pour is the same copper as the pour
+    // where they overlap, so it conducts in parallel with the cells it crosses.
+    // Cut it wherever it crosses a cell boundary: each run inside one cell gets a
+    // node at its midpoint, shorted to that one cell, and the runs are joined by
+    // the track's own resistance between midpoints. Bonding a cut point to every
+    // cell near it (as an earlier version did) shorted neighbouring runs together
+    // through shared cells and collapsed the pour under the track to one node.
+    const ts = new Set<number>([0, 1])
+    for (const l of nearPour) {
+      addCrossings(ts, t.start.x, t.end.x, l.x0, l.h)
+      addCrossings(ts, t.start.y, t.end.y, l.y0, l.h)
+    }
+    const cuts = [...ts].sort((x, y) => x - y)
+    const at = (u: number): Vec2 => ({
+      x: t.start.x + (t.end.x - t.start.x) * u,
+      y: t.start.y + (t.end.y - t.start.y) * u,
+    })
     let prev = a
-    for (let k = 1; k <= pieces; k++) {
-      const p =
-        k === pieces
-          ? t.end
-          : {
-              x: t.start.x + ((t.end.x - t.start.x) * k) / pieces,
-              y: t.start.y + ((t.end.y - t.start.y) * k) / pieces,
-            }
-      const node = k === pieces ? b : nodeOf(t.layer, p)
-      noteWidth(node, t.widthMm)
-      if (node !== prev) {
+    let prevPos = t.start
+    const addPiece = (to: number, toPos: Vec2): void => {
+      const len = dist(prevPos, toPos)
+      if (to !== prev && len > 0) {
         edges.push({
           a: prev,
-          b: node,
-          ohms: trackResistanceOhms(lengthMm / pieces, t.widthMm, opts.copperOz),
+          b: to,
+          ohms: trackResistanceOhms(len, t.widthMm, opts.copperOz),
           kind: 'track',
-          lengthMm: lengthMm / pieces,
+          lengthMm: len,
           widthMm: t.widthMm,
           track: t,
         })
       }
-      prev = node
+      prev = to
+      prevPos = toPos
     }
-    // Bond from the endpoints and every cut point.
-    bondToPour(a, t.layer, t.start, t.widthMm / 2)
-    for (let k = 1; k <= pieces; k++) {
-      const p =
-        k === pieces
-          ? t.end
-          : {
-              x: t.start.x + ((t.end.x - t.start.x) * k) / pieces,
-              y: t.start.y + ((t.end.y - t.start.y) * k) / pieces,
-            }
-      bondToPour(k === pieces ? b : nodeOf(t.layer, p), t.layer, p, t.widthMm / 2)
+    for (let k = 0; k + 1 < cuts.length; k++) {
+      if ((cuts[k + 1] - cuts[k]) * lengthMm < MIN_RUN_MM) continue
+      const pm = at((cuts[k] + cuts[k + 1]) / 2)
+      const node = nodeOf(t.layer, pm)
+      noteWidth(node, t.widthMm)
+      addPiece(node, pm)
+      bondToPourCell(node, t.layer, pm, t.widthMm / 2)
     }
+    addPiece(b, t.end)
+    bondToPourCell(a, t.layer, t.start, t.widthMm / 2)
+    bondToPourCell(b, t.layer, t.end, t.widthMm / 2)
   }
 
   // ── vias ──────────────────────────────────────────────────────────────────
@@ -500,28 +515,72 @@ function buildLattice(
   return any ? lat : null
 }
 
-/** Pour cells a point at `p` bonds to: the ones within about a cell of it. */
-function latticeTargets(lat: Lattice, p: Vec2, reach: number): number[] {
-  const u = (p.x - lat.x0) / lat.h - 0.5
-  const v = (p.y - lat.y0) / lat.h - 0.5
-  const i0 = Math.floor(u)
-  const j0 = Math.floor(v)
-  const within = 0.8 * lat.h + Math.min(reach, lat.h)
-  const cand: { id: number; d: number }[] = []
-  for (let j = j0 - 1; j <= j0 + 2; j++) {
-    for (let i = i0 - 1; i <= i0 + 2; i++) {
+/** Add the parameters (0..1) at which a segment crosses the grid lines o + k h on one axis. */
+function addCrossings(ts: Set<number>, s: number, e: number, o: number, h: number): void {
+  const d = e - s
+  if (Math.abs(d) < 1e-12) return
+  const lo = Math.min(s, e)
+  const hi = Math.max(s, e)
+  for (let k = Math.floor((lo - o) / h) + 1; o + k * h < hi; k++) {
+    const u = (o + k * h - s) / d
+    if (u > 0 && u < 1) ts.add(u)
+  }
+}
+
+/** The node of the nearest live cell to `p` within a cell or so, or -1. */
+function nearestCell(lat: Lattice, p: Vec2, reach: number): number {
+  const i0 = Math.floor((p.x - lat.x0) / lat.h)
+  const j0 = Math.floor((p.y - lat.y0) / lat.h)
+  let best = -1
+  let bestD = Infinity
+  for (let j = j0 - 1; j <= j0 + 1; j++) {
+    for (let i = i0 - 1; i <= i0 + 1; i++) {
       if (i < 0 || j < 0 || i >= lat.nx || j >= lat.ny) continue
       const id = lat.ids[j * lat.nx + i]
       if (id < 0) continue
       const d = Math.hypot(lat.x0 + (i + 0.5) * lat.h - p.x, lat.y0 + (j + 0.5) * lat.h - p.y)
-      cand.push({ id, d })
+      if (d < bestD) {
+        bestD = d
+        best = id
+      }
     }
   }
-  if (cand.length === 0) return []
-  const near = cand.filter((c) => c.d <= within)
-  if (near.length > 0) return near.map((c) => c.id)
-  cand.sort((a, b) => a.d - b.d)
-  return cand[0].d <= 1.6 * lat.h + reach ? [cand[0].id] : []
+  return bestD <= 1.6 * lat.h + reach ? best : -1
+}
+
+/** The one pour cell that holds `p` (the nearest live cell if its own is outside the pour), or -1. */
+function latticeCellAt(lat: Lattice, p: Vec2, reach: number): number {
+  const i = Math.min(lat.nx - 1, Math.max(0, Math.floor((p.x - lat.x0) / lat.h)))
+  const j = Math.min(lat.ny - 1, Math.max(0, Math.floor((p.y - lat.y0) / lat.h)))
+  const id = lat.ids[j * lat.nx + i]
+  return id >= 0 ? id : nearestCell(lat, p, reach)
+}
+
+/**
+ * Pour cells a conductor of radius `reach` centred at `p` physically overlaps:
+ * those whose square the disc touches. With no reach that is the one cell
+ * holding `p`. A conductor never shorts a cell it does not touch, so a point
+ * contact cannot fuse the cells around it into one node.
+ */
+function latticeTargets(lat: Lattice, p: Vec2, reach: number): number[] {
+  const r = Math.max(0, reach)
+  const i0 = Math.max(0, Math.floor((p.x - r - lat.x0) / lat.h))
+  const i1 = Math.min(lat.nx - 1, Math.floor((p.x + r - lat.x0) / lat.h))
+  const j0 = Math.max(0, Math.floor((p.y - r - lat.y0) / lat.h))
+  const j1 = Math.min(lat.ny - 1, Math.floor((p.y + r - lat.y0) / lat.h))
+  const out: number[] = []
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      const id = lat.ids[j * lat.nx + i]
+      if (id < 0) continue
+      const dx = Math.max(0, Math.abs(lat.x0 + (i + 0.5) * lat.h - p.x) - lat.h / 2)
+      const dy = Math.max(0, Math.abs(lat.y0 + (j + 0.5) * lat.h - p.y) - lat.h / 2)
+      if (dx * dx + dy * dy <= r * r + 1e-12) out.push(id)
+    }
+  }
+  if (out.length > 0) return out
+  const near = nearestCell(lat, p, r)
+  return near >= 0 ? [near] : []
 }
 
 // ─── solve ────────────────────────────────────────────────────────────────────
@@ -554,7 +613,14 @@ export interface RailSolution {
   adjacency: number[][]
 }
 
-const solutionCache = new WeakMap<CriticContext, Map<number, RailSolution | null>>()
+/** What a rail's solve came to: a solution, or null with the reason when current had nowhere to go. */
+interface RailOutcome {
+  sol: RailSolution | null
+  /** Set when the rail carries current the solve could not place (never for a rail with nothing to assess). */
+  gap?: string
+}
+
+const solutionCache = new WeakMap<CriticContext, Map<number, RailOutcome>>()
 
 /** Whether the op carries any branch currents at all. */
 export function hasBranchCurrents(ctx: CriticContext): boolean {
@@ -562,17 +628,55 @@ export function hasBranchCurrents(ctx: CriticContext): boolean {
   return !!op && (op.padCurrents !== undefined || op.partCurrents !== undefined)
 }
 
-/** The rail's solved copper graph, memoised per critic run; null when there is nothing to solve. */
-export function solveRail(ctx: CriticContext, netId: number, isGround: boolean): RailSolution | null {
+function outcomeOf(ctx: CriticContext, netId: number, isGround: boolean): RailOutcome {
   let byNet = solutionCache.get(ctx)
   if (!byNet) {
     byNet = new Map()
     solutionCache.set(ctx, byNet)
   }
-  if (byNet.has(netId)) return byNet.get(netId) ?? null
-  const sol = computeRail(ctx, netId, isGround)
-  byNet.set(netId, sol)
-  return sol
+  let out = byNet.get(netId)
+  if (!out) {
+    out = computeRail(ctx, netId, isGround)
+    byNet.set(netId, out)
+  }
+  return out
+}
+
+/** The rail's solved copper graph, memoised per critic run; null when there is nothing to solve. */
+export function solveRail(ctx: CriticContext, netId: number, isGround: boolean): RailSolution | null {
+  return outcomeOf(ctx, netId, isGround).sol
+}
+
+function padList(pads: RailLoad[]): string {
+  const shown = pads
+    .slice(0, 4)
+    .map((l) => `${l.pad.ref}.${l.pad.padNumber}`)
+    .join(', ')
+  return pads.length > 4 ? `${shown} and ${pads.length - 4} more` : shown
+}
+
+/**
+ * What the solve could not place on this rail, as not-assessed notes: a rail it
+ * could not solve at all while its pads carry current (no copper, no pad on
+ * copper, or a solve that did not converge), pads the copper does not connect to
+ * the supply entry, and parts whose current is unresolved. A rail that carries
+ * no current yields none. Shared by the IR-drop and ampacity checks so neither
+ * lists a rail as assessed when its loads were never solved.
+ */
+export function railGapNotes(ctx: CriticContext, netId: number, isGround: boolean, name: string): string[] {
+  const { sol, gap } = outcomeOf(ctx, netId, isGround)
+  const notes: string[] = []
+  if (!sol) {
+    if (gap) notes.push(`${name}: ${gap}`)
+    return notes
+  }
+  if (sol.stranded.length > 0) {
+    notes.push(`${name}: ${padList(sol.stranded)} carry current but no modelled copper reaches them from the supply entry`)
+  }
+  if (sol.unresolved.length > 0) {
+    notes.push(`${name}: the solve could not resolve the current of ${sol.unresolved.join(', ')}`)
+  }
+  return notes
 }
 
 function chooseSource(graph: RailGraph): RailPad | undefined {
@@ -604,12 +708,34 @@ function padDraw(ctx: CriticContext, ref: string, padNumber: string, isGround: b
   return ((isGround ? -1 : 1) * amps) / Math.max(1, padsOnRail)
 }
 
-function computeRail(ctx: CriticContext, netId: number, isGround: boolean): RailSolution | null {
-  if (!hasBranchCurrents(ctx)) return null
+function computeRail(ctx: CriticContext, netId: number, isGround: boolean): RailOutcome {
+  if (!hasBranchCurrents(ctx)) return { sol: null }
   const graph = buildRailGraph(ctx, netId)
-  if (!graph.hasCopper || graph.pads.length === 0) return null
+
+  // Pads that put current on this rail, grouped by part. Current can only be
+  // said to go unassessed when some other part's pad is there to supply it.
+  const padsByRef = new Map<string, RailPad[]>()
+  for (const p of graph.pads) {
+    const list = padsByRef.get(p.ref) ?? []
+    list.push(p)
+    padsByRef.set(p.ref, list)
+  }
+  const carriers: RailLoad[] = []
+  for (const [ref, pads] of padsByRef) {
+    for (const pad of pads) {
+      const amps = padDraw(ctx, ref, pad.padNumber, isGround, pads.length)
+      if (amps !== undefined && Number.isFinite(amps) && Math.abs(amps) >= MIN_LOAD_A) carriers.push({ pad, amps })
+    }
+  }
+  const unsolved = (why: string): RailOutcome =>
+    carriers.length > 0 && padsByRef.size >= 2
+      ? { sol: null, gap: `${padList(carriers)} carry current but ${why}` }
+      : { sol: null }
+
+  if (!graph.hasCopper) return unsolved('the board has no copper on this net to solve')
+  if (graph.pads.length === 0) return { sol: null }
   const source = chooseSource(graph)
-  if (!source) return null
+  if (!source) return unsolved('no modelled copper touches any pad on the rail')
 
   const nNodes = graph.nodePos.length
   const adjacency: number[][] = Array.from({ length: nNodes }, () => [])
@@ -635,12 +761,6 @@ function computeRail(ctx: CriticContext, netId: number, isGround: boolean): Rail
   }
 
   // Loads: every pad of a part other than the source's, with a known draw.
-  const padsByRef = new Map<string, RailPad[]>()
-  for (const p of graph.pads) {
-    const list = padsByRef.get(p.ref) ?? []
-    list.push(p)
-    padsByRef.set(p.ref, list)
-  }
   const loads: RailLoad[] = []
   const stranded: RailLoad[] = []
   for (const [ref, pads] of padsByRef) {
@@ -710,7 +830,7 @@ function computeRail(ctx: CriticContext, netId: number, isGround: boolean): Rail
       inject,
     )
   }
-  if (v === null) return null
+  if (v === null) return unsolved('the copper solve did not converge')
 
   for (let k = 0; k < nNodes; k++) if (inComp[k]) volts[k] = v[index[find(k)]]
   graph.edges.forEach((e, k) => {
@@ -718,7 +838,7 @@ function computeRail(ctx: CriticContext, netId: number, isGround: boolean): Rail
     edgeAmps[k] = isBond(e) ? 0 : (volts[e.a] - volts[e.b]) / e.ohms
   })
 
-  return { netId, isGround, graph, source, volts, edgeAmps, loads, stranded, loadAmps, unresolved, adjacency }
+  return { sol: { netId, isGround, graph, source, volts, edgeAmps, loads, stranded, loadAmps, unresolved, adjacency } }
 }
 
 // ─── path search ──────────────────────────────────────────────────────────────

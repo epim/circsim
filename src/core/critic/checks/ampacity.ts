@@ -12,7 +12,8 @@
  * Needs an operating-point sim (registry `needs:'op'`) that carries branch
  * currents; with none it reports "not assessed" rather than a clean pass. Parts
  * whose current the solve could not resolve, and pads the copper model cannot
- * connect to the supply entry, are named in the not-assessed line. Copper
+ * connect to the supply entry, are named in the not-assessed line, as is a rail
+ * that carries current but could not be solved at all. Copper
  * pours are not rated: a pour is a sheet, and its current density is an IR-drop
  * matter, not a fuse-a-trace matter.
  *
@@ -25,7 +26,7 @@ import type { CheckOutput, Finding } from '../types'
 import type { CriticContext } from '../context'
 import type { TrackSegment, Vec2 } from '../../kicad/types'
 import { classifyRails } from '../classify'
-import { hasBranchCurrents, solveRail } from '../railGraph'
+import { hasBranchCurrents, railGapNotes, solveRail } from '../railGraph'
 
 /** IPC-2221 external-layer constant and the ΔT (°C) this check assumes. */
 const IPC_K = 0.048
@@ -66,18 +67,9 @@ export function checkAmpacity(ctx: CriticContext): CheckOutput {
 
   for (const { id: netId, isGround } of nets) {
     const netName = board.netById.get(netId)?.name ?? `net ${netId}`
+    notes.push(...railGapNotes(ctx, netId, isGround, netName))
     const sol = solveRail(ctx, netId, isGround)
     if (!sol) continue
-    if (sol.stranded.length > 0) {
-      const shown = sol.stranded
-        .slice(0, 4)
-        .map((l) => `${l.pad.ref}.${l.pad.padNumber}`)
-        .join(', ')
-      notes.push(`${netName}: ${shown} carry current but no modelled copper reaches them from the supply entry`)
-    }
-    if (sol.unresolved.length > 0) {
-      notes.push(`${netName}: the solve could not resolve the current of ${sol.unresolved.join(', ')}`)
-    }
 
     // The current through each board track: the largest of its pieces' currents.
     const carried = new Map<TrackSegment, number>()

@@ -67,6 +67,8 @@ function zone(net: number, name: string, layer: string, x0: number, y0: number, 
 }
 
 const TRACK = `(segment (start 10 10) (end 110 10) (width 0.25) (layer "F.Cu") (net 1))`
+/** A fat GND track J1 to U1: a routed return that stays well under the warn line. */
+const GND_TRACK = `(segment (start 10 13) (end 110 13) (width 3) (layer "F.Cu") (net 2))`
 /** A pour covering J1, U1 and U2 and everything between: 120 x 40 mm. */
 const WIDE_POUR = zone(1, 'VCC', 'F.Cu', 5, -10, 125, 30)
 /** A 100 mm long, 4 mm wide strip of pour from J1 to U1: 25 squares. */
@@ -101,7 +103,7 @@ describe('IR drop with copper pours (issue #10)', () => {
     // The pour carries the rail; the thin track underneath is bonded to it along
     // its whole length. Pre-fix this produced the identical 0.19 V warning and
     // the suggestion to add the pour that was already there.
-    const { ir, report } = run(makeBoard({ copper: `${TRACK} ${WIDE_POUR}` }), { U1: 1 })
+    const { ir, report } = run(makeBoard({ copper: `${TRACK} ${WIDE_POUR} ${GND_TRACK}` }), { U1: 1 })
     expect(ir).toHaveLength(0)
     expect(report.ranBy).toContain('ir-drop')
     expect(report.skipped.find((s) => s.check === 'ir-drop')).toBeUndefined()
@@ -122,7 +124,7 @@ describe('IR drop with copper pours (issue #10)', () => {
   })
 
   it('case C: a wide pour with no track at all stays quiet and is reported as assessed', () => {
-    const { ir, report } = run(makeBoard({ copper: WIDE_POUR }), { U1: 2 })
+    const { ir, report } = run(makeBoard({ copper: `${WIDE_POUR} ${GND_TRACK}` }), { U1: 2 })
     expect(ir).toHaveLength(0)
     expect(report.ranBy).toContain('ir-drop')
     expect(report.skipped.find((s) => s.check === 'ir-drop')).toBeUndefined()
@@ -180,7 +182,7 @@ describe('not assessed instead of silence (issue #9)', () => {
   })
 
   it('names a part whose current the solve could not resolve instead of counting it as zero', () => {
-    const board = makeBoard({ copper: TRACK })
+    const board = makeBoard({ copper: `${TRACK} ${GND_TRACK}` })
     const circuit = extract(board)
     const op = { ...opFor(circuit, { U1: 1 }), unresolvedRefs: ['U9'] }
     // U9 is not on the board: nothing to name, stays assessed.
@@ -189,5 +191,37 @@ describe('not assessed instead of silence (issue #9)', () => {
     const report = runCritic(board, circuit, op2)
     expect(report.skipped.find((s) => s.check === 'ir-drop')?.reason).toMatch(/U1/)
     expect(report.ranBy).not.toContain('ir-drop')
+  })
+
+  it('names a rail with no copper at all that still carries current, in both checks', () => {
+    // J1 and U1 on VCC, U1 drawing 5 A, no VCC copper: nothing was solved.
+    const board = makeBoard({ copper: GND_TRACK })
+    const circuit = extract(board)
+    const report = runCritic(board, circuit, opFor(circuit, { U1: 5 }))
+    for (const check of ['ir-drop', 'ampacity'] as const) {
+      expect(report.ranBy, check).not.toContain(check)
+      expect(report.skipped.find((s) => s.check === check)?.reason, check).toMatch(/VCC: U1\.8 carry current but the board has no copper/)
+    }
+  })
+
+  it('names a rail whose copper touches no pad (every load stranded), in both checks', () => {
+    // A VCC track in the middle of nowhere: copper exists, no pad is on it.
+    const board = makeBoard({
+      copper: `(segment (start 40 40) (end 60 40) (width 0.25) (layer "F.Cu") (net 1)) ${GND_TRACK}`,
+    })
+    const circuit = extract(board)
+    const report = runCritic(board, circuit, opFor(circuit, { U1: 5 }))
+    for (const check of ['ir-drop', 'ampacity'] as const) {
+      expect(report.ranBy, check).not.toContain(check)
+      expect(report.skipped.find((s) => s.check === check)?.reason, check).toMatch(/VCC: U1\.8 carry current but no modelled copper touches any pad/)
+    }
+  })
+
+  it('says nothing about a rail that carries no current', () => {
+    const board = makeBoard({ copper: `${TRACK} ${GND_TRACK}` })
+    const circuit = extract(board)
+    const report = runCritic(board, circuit, opFor(circuit, { U1: 0 }))
+    expect(report.ranBy).toContain('ir-drop')
+    expect(report.ranBy).toContain('ampacity')
   })
 })

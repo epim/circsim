@@ -123,6 +123,71 @@ describe('pour meshing', () => {
   })
 })
 
+describe('a track lying in a pour', () => {
+  // Regression: cut points of a track under a pour were each shorted to every
+  // cell near them, so consecutive cut points shared cells and the pour row
+  // under the track collapsed to one node: no drop, no current in the track,
+  // for most phases of the pour lattice against the track.
+  const TRACK = '(segment (start 10 10) (end 110 10) (width 0.25) (layer "F.Cu") (net 1))'
+  const PHASES = [8, 8.17, 8.33, 8.5, 8.67, 9, 9.4]
+
+  function solveWith(pourPts: [number, number][], amps: number) {
+    const { circuit, ctx } = ctxFor(
+      `${fp('J1', 10, 10)} ${fp('U1', 110, 10)} ${TRACK} ${zone('F.Cu', pourPts)}`,
+      { U1: amps },
+    )
+    const sol = solveRail(ctx, netId(circuit, 'VCC'), false)!
+    // The track's current at mid-span, away from the pad ends where it depends on how the pad lands on cells.
+    let trackA = 0
+    sol.graph.edges.forEach((e, k) => {
+      if (e.kind !== 'track') return
+      const x = (sol.graph.nodePos[e.a].x + sol.graph.nodePos[e.b].x) / 2
+      if (Math.abs(x - 60) < 4) trackA = Math.max(trackA, Math.abs(sol.edgeAmps[k]))
+    })
+    return { dropV: -sol.volts[sol.loads[0].pad.node], trackA }
+  }
+
+  it('a 4 mm neck keeps its resistance whatever the lattice phase against the track', () => {
+    // 100 mm of 4 mm strip is 25 squares: 12.07 mOhm, 0.121 V at 10 A.
+    const want = 10 * SHEET * 25
+    for (const x0 of PHASES) {
+      const { dropV } = solveWith(rect(x0, 8, 112, 12), 10)
+      expect(dropV, `x0=${x0}`).toBeGreaterThan(want * 0.85)
+      expect(dropV, `x0=${x0}`).toBeLessThan(want * 1.15)
+    }
+  })
+
+  it('the track carries a steady share of the current at every phase, never none', () => {
+    const wide = PHASES.map((x0) => solveWith(rect(x0, -10, 125, 30), 5).trackA)
+    const neck = PHASES.map((x0) => solveWith(rect(x0, 8, 112, 12), 10).trackA)
+    for (const set of [wide, neck]) {
+      const lo = Math.min(...set)
+      const hi = Math.max(...set)
+      expect(lo).toBeGreaterThan(0.01)
+      expect(hi / lo).toBeLessThan(1.05)
+    }
+  })
+
+  it('the neck splits the current as the parallel resistors do: track 0.193 ohm, neck 12.07 mOhm', () => {
+    const rTrack = (SHEET * 100) / 0.25
+    const rNeck = SHEET * 25
+    const want = (10 * rNeck) / (rTrack + rNeck)
+    const { trackA } = solveWith(rect(8.3, 8, 112, 12), 10)
+    expect(trackA).toBeGreaterThan(want * 0.9)
+    expect(trackA).toBeLessThan(want * 1.1)
+  })
+
+  it('the same holds with the pour offset in y', () => {
+    const base = solveWith(rect(8, 8, 112, 12), 10)
+    for (const dy of [0.2, 0.45, 0.7]) {
+      const shifted = solveWith(rect(8, 8 - dy, 112, 12 - dy + 0.4), 10)
+      expect(shifted.dropV).toBeGreaterThan(base.dropV * 0.8)
+      expect(shifted.dropV).toBeLessThan(base.dropV * 1.35)
+      expect(shifted.trackA).toBeGreaterThan(0.01)
+    }
+  })
+})
+
 describe('via resistance', () => {
   it('is derived from drill, plating and board thickness: 0.3 mm drill, 1.6 mm board is 1.43 mOhm', () => {
     const ohms = viaResistanceOhms({ at: { x: 0, y: 0 }, sizeMm: 0.6, drillMm: 0.3, layers: ['F.Cu', 'B.Cu'] }, 1.6)

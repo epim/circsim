@@ -16,7 +16,9 @@
  * power pads and returning it on its ground pads). With no currents at all the
  * check reports "not assessed". Parts whose current the solve could not resolve
  * and pads the copper model does not connect to the supply entry are named in
- * the not-assessed line: they are never silently counted as zero.
+ * the not-assessed line: they are never silently counted as zero. A rail whose
+ * pads carry current but which could not be solved at all (no copper on the net,
+ * no pad on any copper, a solve that did not converge) is named there too.
  *
  * Supply-entry heuristic (the OpResult does not identify which pad the bench
  * supply is attached to; see issue #47):
@@ -25,7 +27,7 @@
  *   3. else the first pad in (ref, pad-number) order that touches copper.
  *
  * Never throws: a rail whose copper cannot be solved yields no finding for that
- * rail. Pure core; deterministic (rails and parts iterated in sorted order).
+ * rail, and says so in the not-assessed line when it carries current. Pure core; deterministic (rails and parts iterated in sorted order).
  */
 
 import type { CheckOutput, Finding, Severity } from '../types'
@@ -34,6 +36,7 @@ import { classifyRails } from '../classify'
 import {
   hasBranchCurrents,
   minResistancePath,
+  railGapNotes,
   solveRail,
   viaResistanceOhms,
   type GraphEdge,
@@ -70,10 +73,6 @@ function pathHeadline(path: GraphEdge[]): Headline {
   return { trackMm, pourMm, minWidthMm, across: parts.length > 0 ? ` across ${parts.join(' and ')}` : '' }
 }
 
-function padName(l: RailLoad): string {
-  return `${l.pad.ref}.${l.pad.padNumber}`
-}
-
 export function checkIrDrop(ctx: CriticContext): CheckOutput {
   const { board, circuit, opResult, opts } = ctx
   if (!hasBranchCurrents(ctx)) {
@@ -103,9 +102,9 @@ export function checkIrDrop(ctx: CriticContext): CheckOutput {
   // ── ground return: rise above the return entry, per load ───────────────────
   const groundRiseByRef = new Map<string, number>()
   for (const gid of [...groundNetIds].sort((a, b) => a - b)) {
+    notes.push(...railGapNotes(ctx, gid, true, netName(gid)))
     const sol = solveRail(ctx, gid, true)
     if (!sol) continue
-    noteGaps(notes, sol, netName(gid))
     let worst: { load: RailLoad; riseV: number } | undefined
     for (const l of sol.loads) {
       const riseV = Math.max(0, sol.volts[l.pad.node])
@@ -152,9 +151,9 @@ export function checkIrDrop(ctx: CriticContext): CheckOutput {
     // undefined: skip rather than invent a number.
     const nominal = nominalOf(railId)
     if (nominal === undefined) continue
+    notes.push(...railGapNotes(ctx, railId, false, netName(railId)))
     const sol = solveRail(ctx, railId, false)
     if (!sol) continue
-    noteGaps(notes, sol, netName(railId))
     if (sol.loadAmps < 1e-9) continue
 
     // Sag toward 0 V: a +5 V rail falls below the entry, a -12 V rail rises above it.
@@ -212,18 +211,6 @@ export function checkIrDrop(ctx: CriticContext): CheckOutput {
 
   if (notes.length === 0) return findings
   return { findings, notAssessed: `partly assessed: ${notes.join('; ')}` }
-}
-
-/** Name what the solve could not place on this rail: stranded pads and unresolved parts. */
-function noteGaps(notes: string[], sol: RailSolution, name: string): void {
-  if (sol.stranded.length > 0) {
-    const shown = sol.stranded.slice(0, 4).map(padName).join(', ')
-    const more = sol.stranded.length > 4 ? ` and ${sol.stranded.length - 4} more` : ''
-    notes.push(`${name}: ${shown}${more} carry current but no modelled copper reaches them from the supply entry`)
-  }
-  if (sol.unresolved.length > 0) {
-    notes.push(`${name}: the solve could not resolve the current of ${sol.unresolved.join(', ')}`)
-  }
 }
 
 function assumptionFor(ctx: CriticContext, sol: RailSolution, kind: 'supply' | 'return', withReturn = false): string {
