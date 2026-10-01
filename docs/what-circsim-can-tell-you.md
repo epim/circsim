@@ -25,6 +25,8 @@ circsim runs a SPICE simulation of your circuit. SPICE simulations are powerful,
 Most IC models in circsim (op-amps, the 555, linear regulators) are **behavioral macromodels**: they reproduce the terminal behavior (gain, bandwidth, saturation voltages) without modeling the internal transistors. This means:
 
 - Slew rate and GBW of op-amps are set from datasheet numbers, but high-frequency parasitic behavior is approximate.
+- Supply pins carry the load: an op-amp, the 555, a linear regulator, or a logic gate draws its output current plus its datasheet quiescent current from its supply pin, so the bench supply, protection parts, and rail copper see the real load.
+- A saturated op-amp leaves its rail as soon as the input reverses (limited by slew rate), and a linear regulator's dropout follows the load per the datasheet curves (light-load figure at light load, rated-load figure at full current).
 - Thermal effects on bias current and offset voltage are not modeled.
 - Power supply rejection, common-mode rejection, and output impedance vary from the real part.
 

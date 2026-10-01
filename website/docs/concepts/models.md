@@ -35,7 +35,7 @@ Diodes, LEDs, bipolar transistors, and discrete MOSFETs are modeled as **ngspice
 
 ### Behavioral macromodels
 
-Op-amps, comparators, the NE555, linear regulators, the TL431 reference, and a few power-management ICs are **behavioral subcircuits**. They reproduce the part's terminal behavior (gain, bandwidth, slew rate, saturation voltages, current limit) without simulating the internal transistors. A behavioral op-amp will clip at the right rail and slew at the right rate, but its high-frequency and thermal quirks are approximate. It's good enough to catch design mistakes, but it isn't a substitute for the real chip. See [fidelity](./fidelity).
+Op-amps, comparators, the NE555, linear regulators, the TL431 reference, and a few power-management ICs are **behavioral subcircuits**. They reproduce the part's terminal behavior (gain, bandwidth, slew rate, saturation voltages, current limit) without simulating the internal transistors. A behavioral op-amp will clip at the right rail, slew at the right rate, and leave a rail promptly when its input reverses, and its supply pins carry its load current (as do the 555's, a regulator's, and a logic gate's), but its high-frequency and thermal quirks are approximate. It's good enough to catch design mistakes, but it isn't a substitute for the real chip. See [fidelity](./fidelity).
 
 Some behavioral models are deliberately *simplified operating-point stubs*: a battery-protection IC modeled in its normal (non-tripped) state, a switching LED driver modeled as its DC-average current sink. circsim documents exactly what each one does and doesn't capture.
 

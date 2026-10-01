@@ -611,8 +611,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.0003,"max":0.0012},
-      "source": "LM358 datasheet: ICC 0.7 mA typ, 1.2 mA max at V+=5 V, no load, both amplifiers",
-      "knownFailing": "#2"
+      "source": "LM358 datasheet: ICC 0.7 mA typ, 1.2 mA max at V+=5 V, no load, both amplifiers"
     },
     {
       "id": "opamp-lm324-vos-follower",
@@ -634,8 +633,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.0003,"max":0.0012},
-      "source": "LM324 datasheet: ICC 0.7 mA typ, 1.2 mA max at V+=5 V, no load, all four amplifiers",
-      "knownFailing": "#2"
+      "source": "LM324 datasheet: ICC 0.7 mA typ, 1.2 mA max at V+=5 V, no load, all four amplifiers"
     },
     {
       "id": "opamp-tl072-vos-follower",
@@ -657,8 +655,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.0005,"max":0.0025},
-      "source": "TL072 datasheet: ICC 1.4 mA typ, 2.5 mA max per package, no load",
-      "knownFailing": "#2"
+      "source": "TL072 datasheet: ICC 1.4 mA typ, 2.5 mA max per package, no load"
     },
     {
       "id": "opamp-lm358-voh",
@@ -679,9 +676,52 @@
       "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vin in 0 dc 1","x1 0 in out vcc 0 {{model}}","rl vcc out 10k"]},
       "analysis": {"type":"op"},
       "measure": {"expr":"v(out)"},
-      "expect": {"min":0,"max":0.05},
-      "source": "LM358 datasheet: VOL 5 mV typ, 20 mV max at V+=5 V, RL=10 k to V+",
-      "knownFailing": "#87"
+      "expect": {"min":0,"max":0.02},
+      "source": "LM358 datasheet: VOL 5 mV typ, 20 mV max at V+=5 V, RL=10 k to V+ (band is the 20 mV datasheet maximum)"
+    },
+    {
+      "id": "opamp-lm324-vol",
+      "entry": "opamp-lm324",
+      "quantity": "output low level, V-=0, RL=10k to V+",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vin in 0 dc 1","x1 0 in out vcc 0 {{model}}","rl vcc out 10k"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(out)"},
+      "expect": {"min":0,"max":0.02},
+      "source": "LM324 datasheet: VOL 5 mV typ, 20 mV max at V+=5 V, RL=10 k to V+"
+    },
+    {
+      "id": "opamp-lm358-icc-sourcing-40ma",
+      "entry": "opamp-lm358",
+      "quantity": "supply current while a follower sources 40 mA into 100 ohm (load current plus Iq)",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 12","vin in 0 dc 4","x1 in out out vcc 0 {{model}}","rl out 0 100"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vcc)"},
+      "expect": {"typ":0.0407,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): Isupply = Iload (40 mA) + ICC (0.7 mA typ, LM358 datasheet)"
+    },
+    {
+      "id": "opamp-lm358-comparator-recovery",
+      "entry": "opamp-lm358",
+      "quantity": "output 30 us after the input crosses, following 1 ms of saturation at +10.5 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 12","vp p 0 dc 3 pulse(3 1 1m 10n 10n 1m 2m)","vn n 0 dc 2","x1 p n out vcc 0 {{model}}","rl out 0 10k"]},
+      "analysis": {"type":"tran","step":"100n","stop":"1.2m"},
+      "measure": {"expr":"v(out)","at":0.00103},
+      "expect": {"min":0,"max":5},
+      "source": "LM358 datasheet slew 0.5 V/us: the output leaves a rail within one slew time (about 11 us to mid-supply), not after as long as it was saturated (issue #13)"
+    },
+    {
+      "id": "opamp-lm358-pole-node-bounded",
+      "entry": "opamp-lm358",
+      "quantity": "internal pole node 1 ms into saturation (must sit at the output rail limit, 10.5 V)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 12","vp p 0 dc 3 pulse(3 1 1m 10n 10n 1m 2m)","vn n 0 dc 2","x1 p n out vcc 0 {{model}}","rl out 0 10k"]},
+      "analysis": {"type":"tran","step":"100n","stop":"1.2m"},
+      "measure": {"expr":"v(x1.xa.vpole)","at":0.00099},
+      "expect": {"min":10,"max":11},
+      "source": "Model invariant: vcc - vsathi = 10.5 V; an unclamped pole node reached 483 V (issue #13)"
     },
     {
       "id": "opamp-lm324-voh",
@@ -714,8 +754,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.005,"max":0.0062},
-      "source": "KCL: the supply delivers the quiescent current plus every milliamp the output sources (LM358 ICC 0.7 mA typ plus 5 mA load)",
-      "knownFailing": "#2"
+      "source": "KCL: the supply delivers the quiescent current plus every milliamp the output sources (LM358 ICC 0.7 mA typ plus 5 mA load)"
     },
     {
       "id": "opamp-lm358-slew",
@@ -803,8 +842,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.0001,"max":0.001},
-      "source": "LM393 datasheet: ICC 0.4 mA typ, 1.0 mA max at VCC=5 V, both comparators, no load",
-      "knownFailing": "#2"
+      "source": "LM393 datasheet: ICC 0.4 mA typ, 1.0 mA max at VCC=5 V, both comparators, no load"
     },
     {
       "id": "comparator-lm339-icc",
@@ -815,8 +853,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.0002,"max":0.002},
-      "source": "LM339 datasheet: ICC 0.8 mA typ, 2.0 mA max at VCC=5 V, all four comparators, no load",
-      "knownFailing": "#2"
+      "source": "LM339 datasheet: ICC 0.8 mA typ, 2.0 mA max at VCC=5 V, all four comparators, no load"
     },
     {
       "id": "reg-7805-vout",
@@ -841,6 +878,17 @@
       "source": "7805 datasheet: dropout 2 V typ at IO=1 A"
     },
     {
+      "id": "reg-7805-dropout-100ma",
+      "entry": "reg-7805",
+      "quantity": "dropout (Vin minus Vout) at Iout=100 mA, Vin=6 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 6","x1 vin 0 vout {{model}}","il vout 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(vout)"},
+      "expect": {"typ":1.5,"abs":0.3},
+      "source": "7805 datasheet dropout-vs-load curve: about 1.5 V at light load (2 V at 1 A) (dropout falls with load, issue #42)"
+    },
+    {
       "id": "reg-7805-iin-1a",
       "entry": "reg-7805",
       "quantity": "input current at Iout=1 A (at least 1 A plus Iq)",
@@ -849,8 +897,29 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vin)"},
       "expect": {"min":1,"max":1.02},
-      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current",
-      "knownFailing": "#2"
+      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current"
+    },
+    {
+      "id": "reg-7805-iin-100ma",
+      "entry": "reg-7805",
+      "quantity": "input current at Iout=100 mA (load current plus Iq)",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 10","x1 vin 0 vout {{model}}","il vout 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vin)"},
+      "expect": {"min":0.1,"max":0.112},
+      "source": "Current conservation at the input pin (issue #2): Iin = Iout (100 mA) + Iq (5 mA typ, 7805 datasheet)"
+    },
+    {
+      "id": "reg-7805-6v5-90ma",
+      "entry": "reg-7805",
+      "quantity": "output at Vin=6.5 V, Iout=90 mA (in regulation: light-load dropout is about 1.5 V)",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 6.5","x1 vin 0 vout {{model}}","il vout 0 dc 0.09"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vout)"},
+      "expect": {"min":4.9,"max":5.1},
+      "source": "7805 datasheet dropout-vs-load curve: about 1.5 V at 100 mA, so Vin=6.5 V regulates at 5 V (issue #42 measured 4.50 V)"
     },
     {
       "id": "reg-7805-iq",
@@ -886,6 +955,17 @@
       "source": "7812 datasheet: dropout 2 V typ at IO=1 A"
     },
     {
+      "id": "reg-7812-dropout-100ma",
+      "entry": "reg-7812",
+      "quantity": "dropout (Vin minus Vout) at Iout=100 mA, Vin=13 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 13","x1 vin 0 vout {{model}}","il vout 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(vout)"},
+      "expect": {"typ":1.5,"abs":0.3},
+      "source": "7812 datasheet dropout-vs-load curve: about 1.5 V at light load (2 V at 1 A) (dropout falls with load, issue #42)"
+    },
+    {
       "id": "reg-7812-iin-1a",
       "entry": "reg-7812",
       "quantity": "input current at Iout=1 A (at least 1 A plus Iq)",
@@ -894,8 +974,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vin)"},
       "expect": {"min":1,"max":1.02},
-      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current",
-      "knownFailing": "#2"
+      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current"
     },
     {
       "id": "reg-7812-iq",
@@ -931,6 +1010,17 @@
       "source": "lib header: dropout about 1.7 V (78xx style)"
     },
     {
+      "id": "reg-7833-dropout-100ma",
+      "entry": "reg-7833",
+      "quantity": "dropout (Vin minus Vout) at Iout=100 mA, Vin=4.4 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 4.4","x1 vin 0 vout {{model}}","il vout 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(vout)"},
+      "expect": {"typ":1.3,"abs":0.3},
+      "source": "78xx 3.3 V dropout-vs-load curve: about 1.3 V at light load (1.7 V at rated load) (dropout falls with load, issue #42)"
+    },
+    {
       "id": "reg-7833-iin-1a",
       "entry": "reg-7833",
       "quantity": "input current at Iout=1 A (at least 1 A plus Iq)",
@@ -939,8 +1029,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vin)"},
       "expect": {"min":1,"max":1.02},
-      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current",
-      "knownFailing": "#2"
+      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current"
     },
     {
       "id": "reg-7833-iq",
@@ -973,8 +1062,29 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"v(vin)-v(vout)"},
       "expect": {"typ":1.15,"abs":0.15},
-      "source": "AMS1117 datasheet: dropout 1.1 V typ, 1.3 V max at IO=1 A",
-      "knownFailing": "#42"
+      "source": "AMS1117 datasheet: dropout 1.1 V typ, 1.3 V max at IO=1 A"
+    },
+    {
+      "id": "reg-ams1117-3v3-dropout-100ma",
+      "entry": "reg-ams1117-3v3",
+      "quantity": "dropout (Vin minus Vout) at Iout=100 mA, Vin=4.1 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 4.1","x1 vin 0 vout {{model}}","il vout 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(vout)"},
+      "expect": {"typ":1,"abs":0.15},
+      "source": "AMS1117 datasheet dropout-vs-load curve: about 1.0 V at 100 mA (1.2 V at 1 A) (dropout falls with load, issue #42)"
+    },
+    {
+      "id": "reg-ams1117-3v3-liion-90ma",
+      "entry": "reg-ams1117-3v3",
+      "quantity": "output from a 4.2 V Li-ion cell at Iout=90 mA",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 4.2","x1 vin 0 vout {{model}}","il vout 0 dc 0.09"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vout)"},
+      "expect": {"typ":3.2,"abs":0.1},
+      "source": "AMS1117 datasheet dropout-vs-load curve: about 1.0 V at 100 mA, so 4.2 V in gives about 3.2 V out (issue #42 measured 2.90 V)"
     },
     {
       "id": "reg-ams1117-3v3-iin-1a",
@@ -985,8 +1095,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vin)"},
       "expect": {"min":1,"max":1.02},
-      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current",
-      "knownFailing": "#2"
+      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current"
     },
     {
       "id": "reg-ams1117-3v3-iq",
@@ -1013,14 +1122,24 @@
     {
       "id": "reg-ams1117-5v0-dropout-1a",
       "entry": "reg-ams1117-5v0",
-      "quantity": "dropout (Vin minus Vout) at Iout=1 A, Vin=6.3 V",
+      "quantity": "dropout (Vin minus Vout) at Iout=1 A, Vin=6.1 V",
       "unit": "V",
-      "setup": {"kind":"deck","deck":["vin vin 0 dc 6.3","x1 vin 0 vout {{model}}","il vout 0 dc 1"]},
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 6.1","x1 vin 0 vout {{model}}","il vout 0 dc 1"]},
       "analysis": {"type":"op"},
       "measure": {"expr":"v(vin)-v(vout)"},
       "expect": {"typ":1.15,"abs":0.15},
-      "source": "AMS1117 datasheet: dropout 1.1 V typ, 1.3 V max at IO=1 A",
-      "knownFailing": "#42"
+      "source": "AMS1117 datasheet: dropout 1.1 V typ, 1.3 V max at IO=1 A"
+    },
+    {
+      "id": "reg-ams1117-5v0-dropout-100ma",
+      "entry": "reg-ams1117-5v0",
+      "quantity": "dropout (Vin minus Vout) at Iout=100 mA, Vin=5.9 V",
+      "unit": "V",
+      "setup": {"kind":"deck","deck":["vin vin 0 dc 5.9","x1 vin 0 vout {{model}}","il vout 0 dc 0.1"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"v(vin)-v(vout)"},
+      "expect": {"typ":1,"abs":0.15},
+      "source": "AMS1117 datasheet dropout-vs-load curve: about 1.0 V at 100 mA (1.2 V at 1 A) (dropout falls with load, issue #42)"
     },
     {
       "id": "reg-ams1117-5v0-iin-1a",
@@ -1031,8 +1150,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vin)"},
       "expect": {"min":1,"max":1.02},
-      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current",
-      "knownFailing": "#2"
+      "source": "KCL for a linear regulator: Iin = Iout + Iq (Iq 5 to 10 mA); the pass element carries the load current"
     },
     {
       "id": "reg-ams1117-5v0-iq",
@@ -1109,8 +1227,7 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vdd)"},
       "expect": {"min":0.000002,"max":0.00002},
-      "source": "BQ77915 datasheet: ICC about 8 uA typ in NORMAL mode (lib header)",
-      "knownFailing": "#2"
+      "source": "BQ77915 datasheet: ICC about 8 uA typ in NORMAL mode (lib header)"
     },
     {
       "id": "charger-ltc4020-intvcc",
@@ -1220,8 +1337,18 @@
       "analysis": {"type":"op"},
       "measure": {"expr":"-i(vcc)"},
       "expect": {"min":0.001,"max":0.006},
-      "source": "NE555 datasheet: ICC 3 mA typ, 6 mA max at Vcc=5 V, output low, no load",
-      "knownFailing": "#2"
+      "source": "NE555 datasheet: ICC 3 mA typ, 6 mA max at Vcc=5 V, output low, no load"
+    },
+    {
+      "id": "timer-ne555-icc-loaded",
+      "entry": "timer-ne555",
+      "quantity": "supply current, output high into 100 ohm, Vcc=5 V (load current plus ICC)",
+      "unit": "A",
+      "setup": {"kind":"deck","deck":["vcc vcc 0 dc 5","vt trig 0 dc 0","vth thres 0 dc 0","vr reset 0 dc 5","x1 0 trig out reset ctrl thres disch vcc {{model}}","rl out 0 100"]},
+      "analysis": {"type":"op"},
+      "measure": {"expr":"-i(vcc)"},
+      "expect": {"typ":0.044,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): Isupply = Iload (about 41 mA at VOH = Vcc - 0.5 V) + ICC (about 3 mA, NE555 datasheet)"
     },
     {
       "id": "logic-74hc00-voh",
@@ -1541,6 +1668,61 @@
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"min":0,"max":0.05},
       "source": "CD4011/CD40106 datasheet (TI), VDD=10 V, 25 C: VOL 0.05 V maximum at IO under 1 uA"
+    },
+    {
+      "id": "logic-74hc00-icc-loaded",
+      "entry": "logic-74hc00",
+      "quantity": "supply current with 1Y high into 1 kohm at Vcc=4.5 V (load current)",
+      "unit": "A",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"1A":0,"1B":1},"loadsOhms":{"1Y":1000}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"-i(vpsu_vcc)","at":0.0000018},
+      "expect": {"typ":0.0045,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): the dac_bridge output current is drawn from VCC; Iload = 4.5 V / 1 kohm"
+    },
+    {
+      "id": "logic-74hc00-icc-low",
+      "entry": "logic-74hc00",
+      "quantity": "supply current with 1Y low into 1 kohm at Vcc=4.5 V (no load current from VCC)",
+      "unit": "A",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"1A":1,"1B":1},"loadsOhms":{"1Y":1000}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"-i(vpsu_vcc)","at":0.0000018},
+      "expect": {"min":-0.000001,"max":0.000001},
+      "source": "A low output sinks nothing from VCC; CMOS static supply current is microamps, below this band (issue #2)"
+    },
+    {
+      "id": "logic-74hc14-icc-loaded",
+      "entry": "logic-74hc14",
+      "quantity": "supply current with the Schmitt output 1Y high into 1 kohm at Vcc=4.5 V",
+      "unit": "A",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"1A":0},"loadsOhms":{"1Y":1000}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"-i(vpsu_vcc)","at":0.0000018},
+      "expect": {"typ":0.0045,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): the Schmitt B-source current is drawn from VCC; Iload = 4.5 V / 1 kohm"
+    },
+    {
+      "id": "logic-cd4011-icc-loaded",
+      "entry": "logic-cd4011",
+      "quantity": "supply current with 1Y high into 2.2 kohm at Vcc=10 V",
+      "unit": "A",
+      "setup": {"kind":"logic","vcc":10,"inputs":{"1A":0,"1B":1},"loadsOhms":{"1Y":2200}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"-i(vpsu_vcc)","at":0.0000018},
+      "expect": {"typ":0.00409,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): Iload = Vpad / 2.2 kohm, with the pad sagging to about 9 V through the output stage resistance (issue #12, see logic-cd4011-voh-drive)"
+    },
+    {
+      "id": "logic-cd40106-icc-loaded",
+      "entry": "logic-cd40106",
+      "quantity": "supply current with the Schmitt output 1Y high into 2.2 kohm at Vcc=10 V",
+      "unit": "A",
+      "setup": {"kind":"logic","vcc":10,"inputs":{"1A":0},"loadsOhms":{"1Y":2200}},
+      "analysis": {"type":"tran","step":"10n","stop":"2u"},
+      "measure": {"expr":"-i(vpsu_vcc)","at":0.0000018},
+      "expect": {"typ":0.00409,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): Iload = Vpad / 2.2 kohm, with the pad sagging to about 9 V through the output stage resistance (issue #12, see logic-cd4011-voh-drive)"
     },
     {
       "id": "logic-cd4011-voh-drive",
