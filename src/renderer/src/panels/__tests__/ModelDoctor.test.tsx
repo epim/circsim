@@ -247,3 +247,26 @@ describe('_revealDoctorCard — scroll helper', () => {
     expect(() => _revealDoctorCard({} as { scrollIntoView?: () => void })).not.toThrow()
   })
 })
+
+// ─── #17: Import .lib binds the model text, never a stub ───────────────────────
+
+describe('ModelDoctor / LibImport wiring (issue #17)', () => {
+  // The panels are interaction-only (no DOM test harness in this repo), so the
+  // wiring is pinned at the source: the Model Doctor hands the model text the
+  // import flow built to saveUserModel, and the import flow builds it with
+  // bundleSubckt. The behavior behind both is covered by libText.test.ts and
+  // src/simhost/__tests__/lib-import.integration.test.ts.
+  const doctorSrc = readFileSync(join(__dirname, '..', 'ModelDoctor.tsx'), 'utf8')
+  const importSrc = readFileSync(join(__dirname, '..', 'LibImport.tsx'), 'utf8')
+
+  it('the Model Doctor never stores a path or comment stub as the model text', () => {
+    expect(doctorSrc).not.toMatch(/user-import from/)
+    expect(doctorSrc).toMatch(/saveUserModel\(res\.ref, mpn, modelText, subcktName, pinMap, 'user-import'\)/)
+  })
+
+  it('LibImport builds the bound text with bundleSubckt and only saves when it is usable', () => {
+    expect(importSrc).toMatch(/bundleSubckt\(fileText, selectedSubckt\)/)
+    expect(importSrc).toMatch(/onSave\(mpn, filePath, selectedSubckt, pinMap, bundle\.text\)/)
+    expect(importSrc).toMatch(/!bundle\.ok\) return/)
+  })
+})
