@@ -6,13 +6,17 @@
  * and generateDeck looked each resolution's part up with a linear find. Each was
  * parts x (nets | library | parts).
  *
- * The timing test compares one board size with another a few times larger and
- * asserts the ratio of the two times, never an absolute duration (CI runners are
- * up to 5x slower than a dev machine, which scales both times alike). A linear
- * pass takes SCALE times as long on SCALE times the parts; the bound leaves
- * generous headroom over that for timer noise and GC, and sits well under what
- * the quadratic loops cost. The differential tests pin behavior: the indexed
- * library match must agree with a plain scan of the library for every part.
+ * The timing tests compare one board size with another ten times larger and
+ * assert the ratio of the two times, never an absolute duration (CI runners are
+ * up to 5x slower than a dev machine, which scales both times alike). The two
+ * sizes are timed in alternation, so a burst of load from other test files
+ * lands on both alike, and each is scored by its fastest run. Linear code
+ * measures about 11 for resolveAll and 14 to 18 for generateDeck at this
+ * scale (a little over SCALE: the large board falls out of cache); the
+ * quadratic loops measured 48 or more and 69 or more. Each bound sits between
+ * the two with at least a 1.5x margin on both sides. The differential tests pin
+ * behavior: the indexed library match must agree with a plain scan of the
+ * library for every part.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -23,22 +27,32 @@ import { resolveAll } from '../resolve'
 import type { LibraryEntry } from '../types'
 import { bundledLibrary, scaleCircuit } from './scaleCircuit'
 
-const SMALL = 1500
-const SCALE = 5
+const SMALL = 1000
+const SCALE = 10
 const LARGE = SMALL * SCALE
 
-/** A linear pass takes about SCALE; the quadratic loops took well over twice that. */
-const MAX_RATIO = SCALE * 1.8
+/** Linear code measures about 11; the quadratic loops measured 48 and up. */
+const MAX_RESOLVE_RATIO = 25
+/** Linear code measures 14 to 18; the quadratic loops measured 69 and up. */
+const MAX_DECK_RATIO = 35
 
-/** Best of several runs: the minimum is the run least disturbed by GC and the scheduler. */
-function bestMs(fn: () => unknown, runs = 9): number {
-  let best = Infinity
+/**
+ * Fastest run of each of two functions, alternating small and large so both see
+ * the same machine conditions. The minimum is the run least disturbed by GC and
+ * the scheduler.
+ */
+function bestPairMs(small: () => unknown, large: () => unknown, runs = 15): [number, number] {
+  let bestSmall = Infinity
+  let bestLarge = Infinity
   for (let i = 0; i < runs; i++) {
-    const t0 = performance.now()
-    fn()
-    best = Math.min(best, performance.now() - t0)
+    let t0 = performance.now()
+    small()
+    bestSmall = Math.min(bestSmall, performance.now() - t0)
+    t0 = performance.now()
+    large()
+    bestLarge = Math.min(bestLarge, performance.now() - t0)
   }
-  return best
+  return [bestSmall, bestLarge]
 }
 
 describe('resolveAll and generateDeck growth (issue #76)', () => {
@@ -58,15 +72,14 @@ describe('resolveAll and generateDeck growth (issue #76)', () => {
     expect(byTier.has('unresolved:6')).toBe(true)
   })
 
-  it('resolveAll time grows linearly with parts', { timeout: 60_000 }, () => {
+  it('resolveAll time grows linearly with parts', { timeout: 180_000 }, () => {
     const run = (c: typeof small) => resolveAll(c, undefined, undefined, library)
     run(small) // warm the JIT before timing
-    const tSmall = bestMs(() => run(small))
-    const tLarge = bestMs(() => run(large))
-    expect(tLarge / tSmall).toBeLessThan(MAX_RATIO)
+    const [tSmall, tLarge] = bestPairMs(() => run(small), () => run(large))
+    expect(tLarge / tSmall).toBeLessThan(MAX_RESOLVE_RATIO)
   })
 
-  it('generateDeck time grows linearly with parts', { timeout: 60_000 }, () => {
+  it('generateDeck time grows linearly with parts', { timeout: 180_000 }, () => {
     const prepare = (c: typeof small) => {
       const ground = c.nets.find((n) => n.spiceNode === '0')!
       const resolutions = resolveAll(c, undefined, undefined, library)
@@ -75,9 +88,8 @@ describe('resolveAll and generateDeck growth (issue #76)', () => {
     const deckSmall = prepare(small)
     const deckLarge = prepare(large)
     deckSmall()
-    const tSmall = bestMs(deckSmall)
-    const tLarge = bestMs(deckLarge)
-    expect(tLarge / tSmall).toBeLessThan(MAX_RATIO)
+    const [tSmall, tLarge] = bestPairMs(deckSmall, deckLarge)
+    expect(tLarge / tSmall).toBeLessThan(MAX_DECK_RATIO)
   })
 })
 
