@@ -161,7 +161,8 @@ const BenchLeads = forwardRef<BenchLeadsHandle, {
     const target = resolveDrop(hit ?? null, d.jack)
     const st = store.getState()
     if (target) {
-      st.assignTerminal(d.jack.instId, d.jack.terminal, target)
+      // pointMm is where the clip landed (KiCad mm): recorded as the lead's copper position.
+      st.assignTerminal(d.jack.instId, d.jack.terminal, target, hit?.pointMm)
     } else if (d.jack.target && !(d.jack.instId === GROUND_INST_ID)) {
       // A wired clip released off-board detaches (ground never detaches, spec §7).
       st.detachTerminalWire(d.jack.instId, d.jack.terminal)

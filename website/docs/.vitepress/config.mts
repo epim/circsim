@@ -73,6 +73,7 @@ export default defineConfig({
             { text: 'Drive a microcontroller’s pins', link: '/guides/interactive-pins' },
             { text: 'Fix an unresolved part', link: '/guides/model-doctor' },
             { text: 'Run the Board Critic audit', link: '/guides/run-critic' },
+            { text: 'Save your setup & export a report', link: '/guides/save-and-report' },
             { text: 'Read the warnings & fidelity banner', link: '/guides/warnings' },
           ],
         },

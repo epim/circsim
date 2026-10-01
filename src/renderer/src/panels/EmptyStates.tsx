@@ -18,6 +18,7 @@
  */
 
 import React from 'react'
+import { baseName } from '../../../core/persist/paths'
 import { btnPrimary, btnSecondary } from '../ui/buttonStyles'
 
 // ─── Parse-error card ─────────────────────────────────────────────────────────
@@ -149,6 +150,14 @@ export interface NoBoardStateProps {
   onOpenSample: () => void
   /** Open the one-LED First Light demo. */
   onOpenFirstLight: () => void
+  /** Recently opened board paths, most recent first (issue #27). Hidden when empty. */
+  recent?: string[]
+  /** Open one of the recent boards by path. */
+  onOpenRecent?: (path: string) => void
+  /** Empty the recent list. */
+  onClearRecent?: () => void
+  /** One-line notice above the recent list (e.g. a recent board that could not be opened). */
+  notice?: string | null
 }
 
 /**
@@ -161,6 +170,10 @@ export function NoBoardState({
   onOpen,
   onOpenSample,
   onOpenFirstLight,
+  recent,
+  onOpenRecent,
+  onClearRecent,
+  notice,
 }: NoBoardStateProps): React.ReactElement {
   return (
     <div style={noBoardStyle}>
@@ -184,11 +197,79 @@ export function NoBoardState({
         click. First Light is a one-LED dimmer if you want the smallest possible
         start.
       </div>
+      {notice && (
+        <div style={{ color: '#f99', marginTop: 12, fontSize: 12, maxWidth: 520 }} data-testid="recent-notice">
+          {notice}
+        </div>
+      )}
+      {recent && recent.length > 0 && onOpenRecent && (
+        <div style={recentWrapStyle} data-testid="recent-boards">
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 4 }}>
+            <span style={{ color: '#aab', fontSize: 13 }}>Recent boards</span>
+            {onClearRecent && (
+              <button style={recentClearStyle} onClick={onClearRecent} data-testid="recent-clear-btn">
+                Clear
+              </button>
+            )}
+          </div>
+          {recent.map(path => (
+            <button
+              key={path}
+              style={recentItemStyle}
+              onClick={() => onOpenRecent(path)}
+              title={path}
+              data-testid="recent-board"
+            >
+              <span style={{ color: '#dde' }}>{recentName(path)}</span>
+              <span style={{ color: '#667', marginLeft: 8, fontSize: 11 }}>{recentDir(path)}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
 
+/** File name of a board path (either separator). */
+export function recentName(path: string): string {
+  return baseName(path)
+}
+
+/** Containing folder of a board path (either separator); empty for a bare name. */
+export function recentDir(path: string): string {
+  const name = baseName(path)
+  return path.length > name.length ? path.slice(0, path.length - name.length - 1) : ''
+}
+
 // ─── styles ───────────────────────────────────────────────────────────────────
+
+const recentWrapStyle: React.CSSProperties = {
+  marginTop: 20,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-start',
+  maxWidth: 520,
+}
+const recentItemStyle: React.CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  textAlign: 'left',
+  padding: '3px 0',
+  cursor: 'pointer',
+  fontSize: 13,
+  maxWidth: '100%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+const recentClearStyle: React.CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  color: '#778',
+  cursor: 'pointer',
+  fontSize: 11,
+  padding: 0,
+}
 
 const parseErrStyle: React.CSSProperties = {
   background: '#2a1010',

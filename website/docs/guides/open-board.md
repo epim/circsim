@@ -9,6 +9,7 @@ With no board loaded, the viewport offers:
 - **Open sample project**: the bundled 555 blinker.
 - **Open First Light demo**: the bundled one-LED dimmer.
 - **Open…**: a file picker for your own board.
+- **Recent boards**: the boards you opened before, newest first (see [Save your setup & export a report](./save-and-report)).
 
 ## From the header
 
@@ -25,7 +26,8 @@ The moment a board loads, circsim:
 1. renders it in **3D** (drag to orbit, scroll to zoom);
 2. rebuilds the **circuit** from the copper and fills the **Parts** panel; each part gets a colored dot for its [model status](../concepts/models);
 3. auto-suggests a **ground** net and **supply** nets in the Ground & Power panel;
-4. runs the static [Board Critic](./run-critic) checks (floating nets, clearance, decoupling, loop area).
+4. restores the **setup saved beside the board** (`my-board.circsim.json`: ground, bench, overrides, models), if there is one, replacing those suggestions, and tells you what it restored;
+5. runs the static [Board Critic](./run-critic) checks (floating nets, clearance, decoupling, loop area).
 
 The header shows a live summary, `"12 parts · 10 ok · 2 unresolved"`, so you immediately see whether anything needs attention.
 
