@@ -35,7 +35,7 @@
  * Issue #29.
  */
 
-import type { Circuit, Part } from '../netlist/extract'
+import type { Circuit, CircuitNet, Part } from '../netlist/extract'
 import { valueMatchAllowed, type SchematicPin } from './libraryMatch'
 import type { LibraryEntry, PinMap, Resolution } from './types'
 
@@ -221,8 +221,25 @@ export function findSupplyPads(
   schematicPins: readonly SchematicPin[] | undefined,
   entry?: LibraryEntry,
 ): SupplyPads | null {
+  return findSupplyPadsIn(part, netsById(circuit), schematicPins, entry)
+}
+
+/** Net id to net, for lookups that must not scan the net list per part. */
+export type NetsById = ReadonlyMap<number, CircuitNet>
+
+/** Index a circuit's nets by id. resolveAll builds it once and reuses it for every part (issue #76). */
+export function netsById(circuit: Pick<Circuit, 'nets'>): Map<number, CircuitNet> {
+  return new Map(circuit.nets.map(n => [n.id, n]))
+}
+
+/** findSupplyPads over a prebuilt net index: the per-part cost is the part's own pads, not the net count. */
+export function findSupplyPadsIn(
+  part: Part,
+  netInfo: NetsById,
+  schematicPins: readonly SchematicPin[] | undefined,
+  entry?: LibraryEntry,
+): SupplyPads | null {
   const pads = sortedPads(part.padNet.keys())
-  const netInfo = new Map(circuit.nets.map(n => [n.id, n]))
   const netName = (pad: string): string => {
     const id = part.padNet.get(pad)
     return id === undefined ? '' : (netInfo.get(id)?.kicadName ?? '')
@@ -359,8 +376,8 @@ function formatMa(ma: number): string {
  */
 export function resolveStubPart(
   part: Part,
-  circuit: Pick<Circuit, 'nets'>,
-  library: readonly LibraryEntry[] | undefined,
+  netInfo: NetsById,
+  entryById: ReadonlyMap<string, LibraryEntry> | undefined,
   schematicPins: readonly SchematicPin[] | undefined,
 ): Resolution | null {
   const cls = classifyStubPart(part)
@@ -387,7 +404,7 @@ export function resolveStubPart(
   }
 
   const { rule } = cls
-  const entry = library?.find(e => e.id === rule.entryId)
+  const entry = entryById?.get(rule.entryId)
   if (!entry || entry.model.type !== 'subckt' || !entry.model.file) {
     return interactivePinsStub(
       part,
@@ -396,7 +413,7 @@ export function resolveStubPart(
     )
   }
 
-  const pads = findSupplyPads(part, circuit, schematicPins, entry)
+  const pads = findSupplyPadsIn(part, netInfo, schematicPins, entry)
   if (!pads) {
     return interactivePinsStub(
       part,
@@ -407,7 +424,7 @@ export function resolveStubPart(
 
   const pinMap: PinMap = { [pads.vdd]: 'vdd', [pads.gnd]: 'gnd' }
   const railId = part.padNet.get(pads.vdd)
-  const rail = circuit.nets.find(n => n.id === railId)?.kicadName ?? `pad ${pads.vdd}`
+  const rail = (railId === undefined ? undefined : netInfo.get(railId)?.kicadName) ?? `pad ${pads.vdd}`
   return {
     ref: part.ref,
     status: 'stubbed',

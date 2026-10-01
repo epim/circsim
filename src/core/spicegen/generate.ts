@@ -21,7 +21,7 @@
  * No imports from electron, react, or three. Pure TS, Vitest-safe.
  */
 
-import type { Circuit, CircuitNet } from '../netlist/extract'
+import type { Circuit, CircuitNet, Part } from '../netlist/extract'
 import type { Resolution } from '../models/types'
 import type { Instrument, AlterPlanResult } from './instruments'
 import { clampPotOhms, potResistorNames } from './instruments'
@@ -1836,8 +1836,12 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
   }
 
   // ── Part elements ──────────────────────────────────────────────────────────
+  // ref to Part, first part wins on a duplicate ref exactly as the linear
+  // `find` this replaced did (issue #76: that scan was parts x resolutions).
+  const partsByRef = new Map<string, Part>()
+  for (const p of circuit.parts) if (!partsByRef.has(p.ref)) partsByRef.set(p.ref, p)
   for (const res of resolutions) {
-    const part = circuit.parts.find(p => p.ref === res.ref)
+    const part = partsByRef.get(res.ref)
     if (!part) continue
 
     if (!res.model) {
