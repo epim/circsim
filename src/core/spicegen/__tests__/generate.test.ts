@@ -857,8 +857,13 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
     expect(deckText).toMatch(/d_nand\(rise_delay=9n fall_delay=9n\)/)
     // adc_bridge on input 1A reads the board net 'a' (pad 1 → net A → node a).
     expect(deckText).toMatch(/abr_u1_1a \[a\] \[u1_d_1a\]/)
-    // dac_bridge drives output 1Y back onto board net 'y' (pad 3 → net Y → node y).
-    expect(deckText).toMatch(/abr_u1_out_1y \[u1_d_1y\] \[y\]/)
+    // dac_bridge drives output 1Y back onto board net 'y' (pad 3 → net Y → node y)
+    // through a 0 V sense source (VCC is wired, so the supply side is loaded too).
+    expect(deckText).toMatch(/abr_u1_out_1y \[u1_d_1y\] \[u1_o_1y\]/)
+    expect(deckText).toMatch(/^v_u1_o_1y u1_o_1y y DC 0$/m)
+    // One current source from the VCC board node to ground carries the sourced
+    // output current, faded out below about 2 V on the rail (issue #2).
+    expect(deckText).toMatch(/^b_u1_icc vcc 0 I = 0\.5\*\(1 \+ tanh\(\(v\(vcc\) - 1\)\/0\.25\)\)\*\(.*i\(v_u1_o_1y\).*\)$/m)
     // adc/dac rails from vHigh=5.
     expect(deckText).toContain('adc_bridge(in_low=1.5000 in_high=3.5000)')
     expect(deckText).toContain('dac_bridge(out_low=0 out_high=5.0000)')
@@ -1009,6 +1014,31 @@ describe('generateDeck — expands xspice-digital from a logic74hc template', ()
     expect(deckText).not.toContain('adc_bridge')
     expect(deckText).not.toContain('dac_bridge')
     expect(deckText).not.toContain('d_inverter')
+    // The gate's delivered current (-i of its B-source) is drawn from the VCC
+    // board node (issue #2).
+    expect(deckText).toMatch(/^b_u1_icc vcc 0 I = .*-i\(b_u1_1\)/m)
+  })
+
+  test('with VCC unwired the digital expansion adds no supply source and keeps the direct dac_bridge output', () => {
+    const circuit = makeDigitalCircuit()
+    circuit.parts[0].padNet.delete('14')
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: {
+        kind: 'xspice-digital', templateId: '74HC00',
+        pinMap: { '1': '1A', '2': '1B', '3': '1Y', '7': 'GND', '14': 'VCC' },
+      },
+    }]
+    const deck = generateDeck({
+      circuit, resolutions,
+      instruments: [{ kind: 'ground-ref', netId: 5 }],
+      groundNetId: 5,
+      modelTexts: { 'logic74hc.json': LOGIC_JSON },
+    })
+    const deckText = deck.join('\n')
+    expect(deckText).not.toContain('b_u1_icc')
+    expect(deckText).not.toContain('v_u1_o_1y')
+    expect(deckText).toMatch(/abr_u1_out_1y \[u1_d_1y\] \[y\]/)
   })
 
   test('74HC00 still expands from logic74hc.json (5 V rails) when both family files are loaded', () => {
@@ -1717,28 +1747,29 @@ describe('generateDeck — LM339 quad comparator from the real bundled opamp.lib
 describe('M12 — subckt terminal-conductivity analysis (real bundled opamp.lib)', () => {
   const REAL_OPAMP_LIB = readFileSync(join(process.cwd(), 'resources', 'models', 'opamp.lib'), 'utf8')
 
-  test('opamp_core: every terminal is its own group — inp/inn/vcc/vee are sense-only, out conducts only to internal ground-referenced nodes', () => {
-    // Body truth: bin/bg/rp/cp/bout tie e/vpole/obuf/out to internal node 0;
-    // inp/inn appear ONLY inside the b-source expression (v(inp)-v(inn)) and
-    // vcc/vee ONLY inside the clamp expression — none is a branch node. So no
-    // TERMINAL conducts to another terminal.
+  test('opamp_core: inp/inn are sense-only; out, vcc and vee are one group through the supply-current sources', () => {
+    // Body truth: bin senses inp/inn only inside its b-source expression, so
+    // neither is a branch node. The output buffer is referenced to vee (bout
+    // obuf vee, rout obuf osns, vsns osns out), and the supply-current sources
+    // (bsrc and biq) sit between vcc and vee, so out, vcc and vee conduct to one
+    // another. Both sources are scaled by the rails-present measure, so a
+    // floating rail carries no draw.
     expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'opamp_core')).toEqual([
-      ['inp'], ['inn'], ['out'], ['vcc'], ['vee'],
+      ['inp'], ['inn'], ['out', 'vcc', 'vee'],
     ])
   })
 
-  test('LM393 (one nesting level): bsw makes {out,vee} one conductive group; inp/inn/vcc stay sense-only', () => {
+  test('LM393 (one nesting level): inp/inn sense-only; out, vcc and vee one conductive group', () => {
     expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'LM393')).toEqual([
-      ['inp'], ['inn'], ['out', 'vee'], ['vcc'],
+      ['inp'], ['inn'], ['out', 'vcc', 'vee'],
     ])
   })
 
-  test('LM339_QUAD (two nesting levels): out1-4+vee one group via the four LM393 cells; all 8 inputs and vcc sense-only', () => {
+  test('LM339_QUAD (two nesting levels): out1-4, vcc and vee one group via the four LM393 cells; all 8 inputs sense-only', () => {
     expect(subcktTerminalConductivity(REAL_OPAMP_LIB, 'LM339_QUAD')).toEqual([
       ['in1p'], ['in1n'],
-      ['out1', 'out2', 'out3', 'out4', 'vee'],
+      ['out1', 'out2', 'out3', 'out4', 'vcc', 'vee'],
       ['in2p'], ['in2n'], ['in3p'], ['in3n'], ['in4p'], ['in4n'],
-      ['vcc'],
     ])
   })
 
@@ -1760,7 +1791,7 @@ describe('M12 — subckt terminal-conductivity analysis (real bundled opamp.lib)
     // SYNTHETIC fixture isolating the E-source rule: the two source-branch
     // pairs union {vss,chg,dsg}; vdd appears only in sense positions. NOTE:
     // this is deliberately NOT the shipped BQ7791502 — the real power-ic.lib
-    // body also carries `rq vdd vss 10Meg` (genuine conductance), which welds
+    // body also carries `rq vdd vss 1.5Meg` (genuine conductance), which welds
     // vdd into the group. The real file is pinned in the suite below.
     const LIB = [
       '* fixture',
@@ -2653,5 +2684,135 @@ describe('Deck structure invariants', () => {
     expect(commentLine).toContain('R1')
     expect(commentLine).toContain('R2')
     expect(commentLine).toContain('tier 2')
+  })
+})
+
+describe('generateDeck: logic output stage and active-low controls (issues #12, #85)', () => {
+  const FAMILY = {
+    vHighDefault: 5.0,
+    adc: { inLowFrac: 0.3, inHighFrac: 0.7 },
+    schmittAdc: { inLowFrac: 0.4, inHighFrac: 0.6 },
+    output: { atVolts: 5, rOhms: 400, iMaxMa: 3 },
+  }
+  const TEXT = JSON.stringify({
+    family: FAMILY,
+    templates: {
+      NAND: {
+        gates: [{ prim: 'd_nand', in: ['1A', '1B'], out: '1Y' }],
+        inputs: ['1A', '1B'],
+        outputs: ['1Y'],
+        power: { vcc: 'VCC', gnd: 'GND' },
+        delaysNs: 9,
+      },
+      SCHMITT: {
+        schmitt: true,
+        gates: [{ prim: 'd_inverter', in: ['1A'], out: '1Y' }],
+        inputs: ['1A'],
+        outputs: ['1Y'],
+        power: { vcc: 'VCC', gnd: 'GND' },
+        delaysNs: 80,
+      },
+      DFF: {
+        gates: [
+          { prim: 'd_dff', data: 'D', clk: 'CLK', set: 'PRE_N', reset: 'CLR_N', q: 'Q', qbar: 'Q_N' },
+        ],
+        inputs: ['D', 'CLK', 'PRE_N', 'CLR_N'],
+        outputs: ['Q', 'Q_N'],
+        activeLow: ['PRE_N', 'CLR_N'],
+        power: { vcc: 'VCC', gnd: 'GND' },
+        delaysNs: 18,
+      },
+    },
+  })
+  const IDEAL = JSON.stringify({ ...JSON.parse(TEXT), family: { ...FAMILY, output: undefined } })
+  const NAND_PINS = { '1': '1A', '2': '1Y', '7': 'GND', '14': 'VCC' }
+
+  function deckFor(
+    templateId: string,
+    pinMap: Record<string, string>,
+    text: string,
+    supplyVolts = 5,
+  ): string[] {
+    const circuit: Circuit = {
+      nets: [
+        { id: 1, kicadName: 'A', spiceNode: 'a', padRefs: [] },
+        { id: 2, kicadName: 'Y', spiceNode: 'y', padRefs: [] },
+        { id: 3, kicadName: 'VCC', spiceNode: 'vcc', padRefs: [] },
+        { id: 4, kicadName: 'GND', spiceNode: '0', padRefs: [] },
+      ],
+      parts: [{
+        ref: 'U1', value: templateId, libId: `Logic:${templateId}`, layer: 'F',
+        padNet: new Map([['1', 1], ['2', 2], ['7', 4], ['14', 3]]),
+        properties: {},
+      }],
+      warnings: [],
+    }
+    const resolutions: Resolution[] = [{
+      ref: 'U1', status: 'ok', tier: 3, warnings: [],
+      model: { kind: 'xspice-digital', templateId, pinMap },
+    }]
+    return generateDeck({
+      circuit, resolutions,
+      instruments: [
+        { kind: 'ground-ref', netId: 4 },
+        { kind: 'dc-supply', id: '1', netId: 3, volts: supplyVolts, seriesOhms: 0.1 },
+      ],
+      groundNetId: 4,
+      modelTexts: { 'logic74hc.json': text },
+    })
+  }
+
+  test('a dac_bridge output reaches the pad through a saturating current source', () => {
+    const text = deckFor('NAND', NAND_PINS, TEXT).join('\n')
+    // The bridge drives an unloaded source node, not the pad.
+    expect(text).toContain('abr_u1_out_1y [u1_d_1y] [u1_o_1y] dacm_u1')
+    // 400 ohm and 3 mA at 5 V: knee = 1.2 V, limit = 3 mA.
+    expect(text).toContain('b_u1_out_1y u1_o_1y y I = 0.003*tanh((v(u1_o_1y)-v(y))/1.2)')
+    // The stage current is also the supply-pin draw (issue #2); no sense source.
+    expect(text).toMatch(/b_u1_icc vcc 0 I = .*0\.003\*tanh\(\(v\(u1_o_1y\)-v\(y\)\)\/1\.2\)/)
+    expect(text).not.toContain('v_u1_o_1y')
+  })
+
+  test('the output stage scales with the rail in use (current limit up, knee constant)', () => {
+    const text = deckFor('NAND', NAND_PINS, TEXT, 10).join('\n')
+    // 10 V is twice the 5 V reference: 200 ohm and 6 mA, knee still 1.2 V.
+    expect(text).toContain('I = 0.006*tanh((v(u1_o_1y)-v(y))/1.2)')
+  })
+
+  test('a Schmitt output holds its hysteresis on the unloaded source node', () => {
+    const deck = deckFor('SCHMITT', NAND_PINS, TEXT)
+    expect(deck).toContain(
+      'b_u1_1 u1_o_1y 0 V = (v(a) > (v(u1_o_1y) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000',
+    )
+    expect(deck).toContain('b_u1_out_1y u1_o_1y y I = 0.003*tanh((v(u1_o_1y)-v(y))/1.2)')
+  })
+
+  test('a family with no output block keeps the ideal source (historic decks)', () => {
+    const nand = deckFor('NAND', NAND_PINS, IDEAL).join('\n')
+    // No output stage: the bridge is ideal. With VCC wired it reaches the pad only
+    // through the 0 V sense source that feeds the supply-pin current (issue #2).
+    expect(nand).toMatch(/abr_u1_out_1y \[u1_d_1y\] \[u1_o_1y\]/)
+    expect(nand).toContain('v_u1_o_1y u1_o_1y y DC 0')
+    expect(nand).not.toContain('b_u1_out_1y')
+    const sch = deckFor('SCHMITT', NAND_PINS, IDEAL)
+    expect(sch).toContain('b_u1_1 y 0 V = (v(a) > (v(y) > 2.5000 ? 3.0000 : 2.0000)) ? 0 : 5.0000')
+  })
+
+  test('active-low set and reset controls pass through one d_inverter each', () => {
+    const pinMap = { '1': 'D', '2': 'Q', '3': 'CLK', '4': 'PRE_N', '5': 'CLR_N', '7': 'GND', '14': 'VCC' }
+    const text = deckFor('DFF', pinMap, TEXT).join('\n')
+    expect(text).toContain('a_u1_inv_pre_n u1_d_pre_n u1_d_pre_n_h a_u1_inv_pre_n_m')
+    expect(text).toContain('a_u1_inv_clr_n u1_d_clr_n u1_d_clr_n_h a_u1_inv_clr_n_m')
+    // d_dff terminals: data clk set reset | q qbar, set and reset on the inverted nodes.
+    expect(text).toMatch(/a_u1_1 u1_d_d u1_d_clk u1_d_pre_n_h u1_d_clr_n_h u1_d_q u1_d_q_n a_u1_1_m/)
+  })
+
+  test('a template without activeLow still wires set and reset straight through', () => {
+    const noAl = JSON.parse(TEXT)
+    delete noAl.templates.DFF.activeLow
+    const pinMap = { '1': 'D', '2': 'Q', '3': 'CLK', '4': 'PRE_N', '5': 'CLR_N', '7': 'GND', '14': 'VCC' }
+    const text = deckFor('DFF', pinMap, JSON.stringify(noAl)).join('\n')
+    expect(text).not.toContain('a_u1_inv_')
+    expect(text).toMatch(/a_u1_1 u1_d_d u1_d_clk u1_d_pre_n u1_d_clr_n u1_d_q u1_d_q_n a_u1_1_m/)
   })
 })

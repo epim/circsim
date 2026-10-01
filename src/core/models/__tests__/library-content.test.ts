@@ -533,10 +533,11 @@ describe('bundled model library — Milestone 3 behavioral power-IC stubs', () =
     const block = powerIcText.match(/\.subckt\s+BQ7791502[\s\S]*?\.ends\s+BQ7791502/i)?.[0] ?? ''
     expect(block, '.subckt BQ7791502 block must exist').toBeTruthy()
     // E-sources holding chg and dsg at v(vdd) relative to vss (NORMAL mode:
-    // both external-FET drivers ON), plus a tiny load so the part draws ~0.
+    // both external-FET drivers ON), plus a 1.5Meg load that draws the datasheet
+    // Iq (about 8 uA at 12 V) from the supply pin (issue #2).
     expect(block).toMatch(/^\s*echg\s+chg\s+vss\s+vdd\s+vss\s+1\b/im)
     expect(block).toMatch(/^\s*edsg\s+dsg\s+vss\s+vdd\s+vss\s+1\b/im)
-    expect(block).toMatch(/^\s*r\w*\s+vdd\s+vss\s+10Meg\b/im)
+    expect(block).toMatch(/^\s*r\w*\s+vdd\s+vss\s+1\.5Meg\b/im)
     // Documented simplifications: no protection trips, no balancing, no AVDD/VTB.
     expect(powerIcText).toMatch(/no protection trips/i)
     expect(powerIcText).toMatch(/cell balancing/i)
@@ -689,6 +690,162 @@ describe('bundled model library — M9 documented opens', () => {
     expect(e!.note).toMatch(/Dual precision monostable/i)
     expect(e!.note).toMatch(/edge-triggered event model/i)
     expect(e!.note).toMatch(/XSPICE digital family/i)
+  })
+})
+
+describe('macromodel structure: supply-pin current, pole clamp, smooth decisions (issues #2, #13, #19, #42, #87)', () => {
+  const lib = (f: string): string => readFileSync(join(MODELS_DIR, f), 'utf8').replace(/\r?\n\+/g, ' ')
+  /** The text of one .subckt body, continuation lines folded. */
+  function body(file: string, name: string): string {
+    const m = lib(file).match(new RegExp(`^\\s*\\.subckt\\s+${name}\\b[\\s\\S]*?^\\s*\\.ends\\b`, 'im'))
+    expect(m, `${file}: .subckt ${name} must exist`).toBeTruthy()
+    return m![0]
+  }
+
+  it('opamp_core: a 0 V sense source after rout feeds supply sources between vcc and vee (no draw through ground)', () => {
+    const b = body('opamp.lib', 'opamp_core')
+    expect(b).toMatch(/^\s*rout\s+obuf\s+osns\b/im)
+    expect(b).toMatch(/^\s*vsns\s+osns\s+out\s+0\s*$/im)
+    // The output buffer is referenced to the vee pin, not to node 0.
+    expect(b).toMatch(/^\s*bout\s+obuf\s+vee\s+v\s*=/im)
+    // Sourced output current moves vcc -> vee; quiescent current is constant.
+    expect(b).toMatch(/^\s*bsrc\s+vcc\s+vee\s+i\s*=.*i\(vsns\)/im)
+    expect(b).toMatch(/^\s*biq\s+vcc\s+vee\s+i\s*=\s*iq\b/im)
+    // No source in the core returns its current through the global ground node
+    // except the internal signal-level ones (e, vpole, limits).
+    expect(b).not.toMatch(/^\s*bout\s+obuf\s+0\b/im)
+  })
+
+  it('opamp_core: iq is a parameter and every wrapper states its package supply current', () => {
+    const core = body('opamp.lib', 'opamp_core')
+    expect(core).toMatch(/\.subckt\s+opamp_core[^\n]*params:[^\n]*\biq=/i)
+    for (const [name, iq] of [['LM358', '0.7m'], ['LM324', '0.7m'], ['TL072', '1.4m']] as const) {
+      expect(body('opamp.lib', name), `${name} iq`).toMatch(new RegExp(`\\biq=${iq.replace('.', '\\.')}\\b`))
+    }
+    // LM339 is four LM393 cells sharing the rails: 0.2 mA each (0.8 mA typ).
+    expect(body('opamp.lib', 'LM339_QUAD').match(/params:\s*iq=0\.2m/gi)).toHaveLength(4)
+  })
+
+  it('opamp_core: the pole node is bounded to the output rail limits (issue #13)', () => {
+    const b = body('opamp.lib', 'opamp_core')
+    // A clamp current on vpole and drive gates that close at each limit.
+    expect(b).toMatch(/^\s*bclp\s+vpole\s+0\s+i\s*=/im)
+    expect(b).toMatch(/^\s*bg\s+0\s+vpole\s+i\s*=.*tanh\(\(v\(vpole\)\s*-\s*v\(chi\)\)/im)
+    expect(b).toMatch(/^\s*bg\s+0\s+vpole\s+i\s*=.*tanh\(\(v\(vpole\)\s*-\s*v\(clo\)\)/im)
+  })
+
+  it('opamp_core: keeps the node names the solve uses to find and settle a latched op-amp', () => {
+    // src/core/solve/bistable.ts finds every op-amp core by its vpole, clo, chi
+    // and vmid nodes, pins vpole to probe stability, and re-solves with a
+    // .nodeset on vpole. Renaming any of them silently turns that check off.
+    const b = body('opamp.lib', 'opamp_core')
+    expect(b).toMatch(/^\s*blo\s+clo\s+0\s+v\s*=/im)
+    expect(b).toMatch(/^\s*bhi\s+chi\s+0\s+v\s*=/im)
+    expect(b).toMatch(/^\s*bmid\s+vmid\s+0\s+v\s*=/im)
+    expect(b).toMatch(/^\s*cp\s+vpole\s+0\b/im)
+    // The output follows vpole, so a pole parked at a limit is an output at that limit.
+    expect(b).toMatch(/^\s*bout\s+obuf\s+vee\s+v\s*=\s*v\(vpole\)\s*-\s*v\(vee\)/im)
+  })
+
+  it('opamp_core and NE555 decisions are smooth at the operating point: no hard comparator or clamp ternaries (issue #19)', () => {
+    // The NE555 latch-state decision is the one hard ternary allowed, and only
+    // multiplied by the memory ramp, which is 0 at time 0: the operating point
+    // never sees it (see the latch test below).
+    const latchGated = /\(time < 1e-6 \? time\/1e-6 : 1\)\*\(v\(q,gnd\) > 0\.5 \? 1 : 0\)/g
+    const noHard = (text: string, what: string, allowLatch: boolean): void => {
+      for (const line of text.split(/\r?\n/)) {
+        if (/^\s*\*/.test(line)) continue
+        // Otherwise the only ternary allowed is the NE555 start-up ramp on `time`.
+        const stripped = (allowLatch ? line.replace(latchGated, '') : line).replace(/\(time < 1e-6 \? [^)]*\)/g, '')
+        expect(stripped, `${what}: hard ternary in: ${line}`).not.toMatch(/\?/)
+      }
+    }
+    noHard(body('opamp.lib', 'opamp_core'), 'opamp_core', false)
+    noHard(body('timer555.lib', 'NE555'), 'NE555', true)
+  })
+
+  it('LM358 and LM324 saturate to a low on-resistance so VOL meets the datasheet (issue #87)', () => {
+    for (const name of ['LM358', 'LM324']) {
+      const b = body('opamp.lib', name)
+      expect(b, name).toMatch(/\bdsat=80\b/)
+      expect(b, name).toMatch(/\bvsatlo=0\.005\b/)
+    }
+  })
+
+  it('NE555: output current is mirrored into vcc, and the supply draw is datasheet-sized', () => {
+    const b = body('timer555.lib', 'NE555')
+    expect(b).toMatch(/^\s*vsns\s+osns\s+out\s+0\s*$/im)
+    expect(b).toMatch(/^\s*bsrc\s+vcc\s+gnd\s+i\s*=.*i\(vsns\)/im)
+    expect(b).toMatch(/^\s*rq\s+vcc\s+gnd\s+1\.8k\b/im)
+    // The latch is algebraic and references its own output (that is its memory),
+    // not a bare integrator and not a lagged node.
+    expect(b).toMatch(/^\s*bq\s+q\s+gnd\s+v\s*=.*v\(q,\s*gnd\)/im)
+    expect(b).not.toMatch(/^\s*blatch\s+0\s+q\s+i\b/im)
+  })
+
+  it('NE555: no capacitor or resistor sits on the latch node (solver-step chatter, review of PR #118)', () => {
+    // A stiff lag on a regenerative node rings under trapezoidal integration when
+    // the solver step is many times the lag (a function generator picks 5 us at
+    // 1 kHz), which chattered the output at every threshold crossing. The latch
+    // must stay algebraic: no capacitor or resistor may touch q or qd.
+    const b = body('timer555.lib', 'NE555')
+    for (const line of b.split(/\r?\n/).filter((l) => !/^\s*\*/.test(l))) {
+      const tok = line.trim().split(/\s+/)
+      if (/^[cr]/i.test(tok[0] ?? '')) {
+        expect(tok.slice(1, 3), `reactive or resistive element on a latch node: ${line}`).not.toContain('q')
+        expect(tok.slice(1, 3), `reactive or resistive element on a latch node: ${line}`).not.toContain('qd')
+      }
+    }
+  })
+
+  it('NE555: the latch memory is a hard decision on q, off at time 0, and the readouts use it (review of PR #118)', () => {
+    // A smooth regenerative memory (a tanh of q inside the q equation) folds: as
+    // THRES creeps through the comparator band, the branch the latch sits on
+    // ends with the slope of its equation at zero, Newton cannot step past it,
+    // and ngspice aborted the sample blinker with "Timestep too small ... node
+    // x_u1.q" at 2 us and 5 us steps. A hard decision ends the branch at a jump
+    // where the slope stays 1. It is multiplied by the memory ramp so the
+    // operating point never sees it, and the output and discharge readouts use
+    // the same decision so neither moves along a branch (a readout that did let
+    // the discharge switch hold THRES at the threshold).
+    const b = body('timer555.lib', 'NE555')
+    const gated = '(time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0)'
+    const lineOf = (name: string): string =>
+      b.split(/\r?\n/).find((l) => new RegExp(`^\\s*${name}\\s`, 'i').test(l)) ?? ''
+    for (const name of ['bq', 'bqd', 'bdisch']) {
+      expect(lineOf(name), `${name} reads the latch through the gated hard decision`).toContain(gated)
+    }
+    expect(lineOf('bq'), 'no smooth function of q inside the latch memory').not.toMatch(/tanh\([^)]*v\(q,gnd\)/i)
+    // Every hard decision on q is gated by the memory ramp.
+    const decisions = b.match(/v\(q,gnd\) > 0\.5 \?/g) ?? []
+    expect(decisions.length).toBe(b.split(gated).length - 1)
+  })
+
+  it('reg_lin: input current is the delivered output current plus Iq (issue #2) and dropout depends on load (issue #42)', () => {
+    const b = body('regulators.lib', 'reg_lin')
+    expect(b).toMatch(/^\s*biq\s+vin\s+gnd\s+i\s*=.*i\(vsense\).*iq\b/im)
+    expect(b).toMatch(/^\s*bdrp\s+dp\s+gnd\s+v\s*=\s*dropl\s*\+\s*\(drop\s*-\s*dropl\)\s*\*/im)
+    expect(b).toMatch(/^\s*blf\s+lf\s+gnd\s+v\s*=.*i\(vsense\)/im)
+    expect(b).not.toMatch(/^\s*biq\s+vin\s+gnd\s+i\s*=\s*iq\s*$/im)
+  })
+
+  it('every regulator wrapper states a light-load dropout below its rated-load dropout', () => {
+    const text = lib('regulators.lib')
+    const wrappers = [...text.matchAll(/^\s*xr\s+vin\s+gnd\s+vout\s+reg_lin\s+params:(.*)$/gim)]
+    expect(wrappers.length).toBeGreaterThanOrEqual(5)
+    for (const w of wrappers) {
+      const num = (k: string): number => Number(new RegExp(`\\b${k}=([0-9.]+)`).exec(w[1])?.[1])
+      expect(num('dropl'), w[0]).toBeGreaterThan(0)
+      expect(num('dropl'), w[0]).toBeLessThan(num('drop'))
+      expect(num('ilim'), w[0]).toBeGreaterThan(num('irated'))
+    }
+  })
+
+  it('light-load dropout values: 78xx 1.5 V, AMS1117 1.0 V (datasheet dropout-vs-load curves)', () => {
+    expect(body('regulators.lib', '7805')).toMatch(/drop=2\.0 dropl=1\.5\b/)
+    expect(body('regulators.lib', '7812')).toMatch(/drop=2\.0 dropl=1\.5\b/)
+    expect(body('regulators.lib', 'AMS1117-3.3')).toMatch(/drop=1\.2 dropl=1\.0\b/)
+    expect(body('regulators.lib', 'AMS1117-5.0')).toMatch(/drop=1\.2 dropl=1\.0\b/)
   })
 })
 
