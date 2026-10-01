@@ -69,7 +69,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #28 No headless CLI: critic, deck generation and op solve are reachable only through the GUI | U | in-review | feat/28-headless-cli | #115 | 1 | | sonnet rung, reviewers APPROVE; merge queue |
 | #29 No automatic MCU stubbing and a 51-entry model library leave target boards mostly unmodeled | U | todo | | | 0 | | |
 | #32 Energize and Power On no-op silently on auto-named nets; the spec's guided states were never mounted | U | in-review | fix/32-energize-guided-states | #113 | 1 | | sonnet rung, reviewers APPROVE; merge queue |
-| #33 3D board collapses to 84 px at the default window size and to 4 px at 720p | U | in-review | fix/33-viewport-minimum-layout | #121 | 1 | | sonnet rung, reviewers APPROVE; merge queue |
+| #33 3D board collapses to 84 px at the default window size and to 4 px at 720p | U | merged | fix/33-viewport-minimum-layout | #121 | 1 | 925d0cf | sonnet rung, both reviewers APPROVE; post-approval E2E spec fix (knob scrollIntoView at narrow widths); merged 2026-09-30 22:57 PDT; canary green |
 | #62 openDocs discards shell.openPath's error string; the fidelity link can fail silently | U | in-review | fix/71-culprit-lists-opendocs | #119 | 1 | | sonnet rung, reviewers APPROVE; merge queue |
 | #70 Color-only status and voltage encoding, no voltage legend, and sub-AA contrast on hints | U | in-review | fix/70-legend-labels-contrast | #120 | 2 | | sonnet rung, reviewers APPROVE; merge queue |
 | #71 Convergence culprit is not clickable and the fatal crash toast offers no restart | U | in-review | fix/71-culprit-lists-opendocs | #119 | 1 | | sonnet rung, reviewers APPROVE; merge queue |
