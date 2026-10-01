@@ -186,13 +186,17 @@ test('capture README hero and demo gif', async () => {
   test.setTimeout(180_000)
 
   const videoDir = mkdtempSync(join(tmpdir(), 'circsim-demo-'))
-  const launchedAt = Date.now()
   const app = await electron.launch({
     args: [APP_MAIN],
     env: { ...process.env, CIRCSIM_E2E: '1' },
     recordVideo: { dir: videoDir, size: { width: HERO_W, height: HERO_H } },
   })
   const page = await app.firstWindow()
+  // Playwright's video clock starts when the page is created, which is just
+  // before firstWindow() resolves. Measure from here, not from process spawn:
+  // spawn-to-window time (seconds of Electron startup) is not in the video, and
+  // using it cuts the start screen and the Open-sample click out of the GIF.
+  const videoT0 = Date.now()
   await resizeWindow(app)
   await page.waitForLoadState('load')
 
@@ -200,8 +204,10 @@ test('capture README hero and demo gif', async () => {
   try {
     // Start screen, then open the bundled 555 sample.
     await page.locator('[data-testid="open-sample-btn"]').waitFor({ timeout: 15_000 })
-    startOffset = Math.max(0, (Date.now() - launchedAt) / 1000 - 0.3)
-    await page.waitForTimeout(1200)
+    // Begin the GIF just before the start screen is ready (the video opens on a blank frame),
+    // then hold on it so the viewer sees the open step before the click.
+    startOffset = Math.max(0, (Date.now() - videoT0) / 1000 - 0.1)
+    await page.waitForTimeout(1500)
     await page.locator('[data-testid="open-sample-btn"]').click()
     await page.locator('[data-testid="energize-btn"]').waitFor({ timeout: 15_000 })
     await page.locator('[data-testid="part-row"]').first().waitFor({ timeout: 15_000 })
