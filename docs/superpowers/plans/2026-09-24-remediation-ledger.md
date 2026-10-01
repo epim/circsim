@@ -96,6 +96,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #136 74HC flip-flop and shift-register clock-to-output delay is twice the library delaysNs | M | todo | | | 0 | | filed by D2 (#138) 2026-10-01: 74HC74 and 74HC164 clk-to-Q 2.1x datasheet |
 | #144 openBoard parity test races the background board hash: boardSha256 null on a slow runner | U | merged | fix/144-board-hash-race | #146 | 1 | 9136ec0 | sonnet rung, reviewer APPROVE; merged 2026-10-01 04:30 PDT; canary green |
 | #147 Thermal check never runs: nothing derives per-part power from the solved branch currents | C | todo | | | 0 | | filed 2026-10-01 from the #93 merge; candidate for wave 2 alongside W2.1 copper-aware solve |
+| #149 alter-cadence integration test is timing-dependent on slow runners: case (2) asserts the run was still going when the knob started | S | todo | | | 0 | | filed 2026-10-01 from a #148 CI flake on macos-15-intel |
 
 ## Wave log
 
@@ -150,3 +151,4 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 - 2026-10-01 09:50 PDT: #112 (R6) merged. Wave 1 batch 1: 36 of 36 merged. Remaining wave 1 work: R3+R4 (#37 #39 #38, workflow wf_cbe45533-785 running). Wave 2 waits on the human go-ahead; args drafted in wave2-args.json.
 - 2026-10-01 10:40 PDT: R3+R4 MERGE_READY as #148 (4 agents, 507k tokens): one strict CSP, navigation guards, scoped readFile, session-level offline enforcement with a request audit (0 network requests on First Light), silkscreen renders (21 glyphs). In CI, merges on green. Last wave 1 item.
 - 2026-10-01 11:02 PDT: new flake class on macos-15-intel: src/simhost/__tests__/alter-cadence.integration.test.ts case (2) (a run that ends while the knob is still turning) asserted the run was still going when the knob started; timing-dependent, unrelated to #148 (CSP and main process). Rerun requested; file an issue if it recurs.
+- 2026-10-01 11:25 PDT: #148 attempt 2 failed its own new silkscreen assertion on the GPU-less macos-15-intel packaged smoke (#133 territory); agent making the assertion conditional on viewport availability while keeping the offline audit. #149 filed for the alter-cadence flake.
