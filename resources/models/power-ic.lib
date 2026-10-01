@@ -12,16 +12,16 @@
 * Nodes: vdd vss chg dsg
 * Datasheet basis: in NORMAL mode both external-FET drivers are ON — CHG and
 * DSG drive to the supply rail; Iq ~ 8 uA. E-sources hold chg and dsg at
-* v(vdd) relative to vss, and a 10Meg vdd->vss load keeps the part's own
-* draw ~0. The stub answers one bench question: "with the protector happy,
-* does the battery loop conduct?"
+* v(vdd) relative to vss, and a 1.5Meg vdd->vss load draws the datasheet
+* Iq (8 uA at 12 V) from the supply pin. The stub answers one bench question:
+* "with the protector happy, does the battery loop conduct?"
 * SIMPLIFICATIONS: no protection trips (OV/UV/OCD/SCD and the temperature
 * faults never fire — the drivers are unconditionally on), no cell balancing,
 * no AVDD/VTB outputs, no HIBERNATE/SHUTDOWN modes, no SRP/SRN sensing.
 .subckt BQ7791502 vdd vss chg dsg
 echg chg vss vdd vss 1
 edsg dsg vss vdd vss 1
-rq vdd vss 10Meg
+rq vdd vss 1.5Meg
 .ends BQ7791502
 
 * ---------------------------------------------------------------------------

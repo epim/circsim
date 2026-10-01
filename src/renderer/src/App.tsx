@@ -34,6 +34,9 @@ import type { PickEvent } from './viewport/picking'
 import type { SceneManager } from './viewport/scene'
 import type { OverlayMode } from './viewport/overlay'
 import { showNetsTabCue } from './ui/tabCues'
+import {
+  APP_MIN_HEIGHT, APP_MIN_WIDTH, DOCK_COLLAPSED_H, DOCK_HEIGHT, MIN_VIEWPORT_H, useCollapsed,
+} from './ui/layoutPrefs'
 
 export default function App({ store }: { store: AppStore }): React.ReactElement {
   return (
@@ -71,6 +74,8 @@ function Shell(): React.ReactElement {
   // Bottom-dock right pane: Sim log ↔ Net voltages readout (M7 F8).
   const [bottomTab, setBottomTab] = useState<'log' | 'nets'>('log')
   const [netsTabSeen, setNetsTabSeen] = useState(false)
+  // Bottom dock collapse (issue #33): remembered across launches.
+  const [dockCollapsed, setDockCollapsed] = useCollapsed('dock')
 
   // When an op result first arrives, snap the overlay to voltage (Spec §4 step 4).
   // Intentionally keyed only on opVoltages so manual overlay changes stick after.
@@ -297,7 +302,7 @@ function Shell(): React.ReactElement {
         </aside>
         <div style={centerColStyle}>
           <BenchLeads ref={benchRef} scene={sceneMgr}>
-            <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+            <div data-testid="viewport-region" style={viewportRegionStyle}>
               {board ? (
                 <Viewport
                   board={board}
@@ -323,8 +328,22 @@ function Shell(): React.ReactElement {
             </div>
           </BenchLeads>
           {/* Bottom dock: Oscilloscope + Sim log (Spec §11). */}
-          {board && (
-            <div style={bottomDockStyle}>
+          {board && dockCollapsed && (
+            <div style={bottomDockCollapsedStyle} data-testid="bottom-dock-collapsed">
+              <span>Scope and sim log</span>
+              <button
+                style={bottomTabBtn}
+                onClick={() => setDockCollapsed(false)}
+                data-testid="dock-toggle"
+                title="Show the oscilloscope and sim log"
+                aria-expanded={false}
+              >
+                Show
+              </button>
+            </div>
+          )}
+          {board && !dockCollapsed && (
+            <div style={bottomDockStyle} data-testid="bottom-dock">
               <div style={{ flex: 2, minWidth: 0, borderRight: '1px solid #2a2a3a' }}>
                 <Scope />
               </div>
@@ -354,6 +373,15 @@ function Shell(): React.ReactElement {
                       </span>
                     )}
                   </button>
+                  <button
+                    style={{ ...bottomTabBtn, marginLeft: 'auto' }}
+                    onClick={() => setDockCollapsed(true)}
+                    data-testid="dock-toggle"
+                    title="Hide the oscilloscope and sim log"
+                    aria-expanded={true}
+                  >
+                    Hide
+                  </button>
                 </div>
                 <div style={{ flex: 1, minHeight: 0 }}>
                   {bottomTab === 'log' ? <SimLog /> : <NetVoltages />}
@@ -379,7 +407,9 @@ function Shell(): React.ReactElement {
 const rootStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  height: '100vh',
+  height: '100%',
+  minWidth: APP_MIN_WIDTH,
+  minHeight: APP_MIN_HEIGHT,
   fontFamily: 'sans-serif',
   background: '#0c0c14',
 }
@@ -427,11 +457,32 @@ const centerColStyle: React.CSSProperties = {
   minWidth: 0,
   minHeight: 0,
 }
+// The viewport owns a hard minimum height (issue #33): the shelf and dock yield
+// to it, never the other way round.
+const viewportRegionStyle: React.CSSProperties = {
+  flex: '1 1 0',
+  position: 'relative',
+  minHeight: MIN_VIEWPORT_H,
+}
 const bottomDockStyle: React.CSSProperties = {
-  height: 260,
+  height: DOCK_HEIGHT,
+  flexShrink: 0,
   display: 'flex',
   borderTop: '1px solid #2a2a3a',
   minHeight: 0,
+}
+const bottomDockCollapsedStyle: React.CSSProperties = {
+  height: DOCK_COLLAPSED_H,
+  flexShrink: 0,
+  boxSizing: 'border-box',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '0 8px',
+  borderTop: '1px solid #2a2a3a',
+  background: '#0d1117',
+  color: '#99a',
+  fontSize: 11,
 }
 // Sim log ↔ Net voltages tab strip (M7 F8).
 const bottomTabRowStyle: React.CSSProperties = {

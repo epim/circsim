@@ -2,10 +2,10 @@
 * In-house BEHAVIORAL op-amp / comparator macromodels. No vendor model text is
 * copied: the topology below is a textbook three-block behavioral op-amp (input
 * stage -> single dominant pole with finite open-loop gain -> slew-limited,
-* rail-clamped output buffer), and the per-part .subckt wrappers simply pass the
+* rail-limited output buffer), and the per-part .subckt wrappers simply pass the
 * DATASHEET numbers (open-loop gain Aol, gain-bandwidth GBW, slew rate, output
-* swing relative to the rails) as parameters. Datasheet electrical
-* characteristics are facts, not copyrightable expression.
+* swing relative to the rails, supply current) as parameters. Datasheet
+* electrical characteristics are facts, not copyrightable expression.
 *
 * ---------------------------------------------------------------------------
 * GENERIC PARAMETERIZED OP-AMP CORE
@@ -16,96 +16,176 @@
 *   slew  slew rate (V/s)                      vos   input offset voltage (V)
 *   rout  open-loop output resistance (ohm)    vsathi headroom from +rail (V)
 *   vsatlo headroom from -rail (V)             ibias not modeled (hi-Z inputs)
+*   dsat  amount (ohm) by which the output resistance DROPS once the output is
+*         saturated against a rail (rout-dsat is the saturated on-resistance);
+*         0 keeps rout in saturation as well
+*   iq    quiescent supply current of the package (A), drawn from vcc to vee
 *
 * How it works:
-*   1. Ein senses (inp-inn+vos) into a high-impedance node 'e'.
+*   1. Bin senses (inp-inn+vos) into a high-impedance node 'e'.
 *   2. The dominant pole is realized by Gm into Rp||Cp; we set Rp so the DC gain
 *      across it is aol, and Cp so the pole is at fp = gbw/aol  (Cp = 1/(2*pi*Rp*fp)).
 *      Node 'vpole' therefore holds aol*(inp-inn) rolled off at fp -> unity gain at gbw.
-*   3. Slew limiting: the current into Cp is clipped to +/- (slew*Cp), so dV/dt on
+*   3. Slew limiting: the current into Cp is imax*tanh(e/imax), which is exactly
+*      gm=1 for small signals and saturates at +/- (slew*Cp), so dV/dt on
 *      vpole cannot exceed the datasheet slew rate.
-*   4. The output buffer Bout copies vpole but clamps to [vee+vsatlo, vcc-vsathi]
-*      and drives through rout.
+*   4. Rail limiting happens on the pole node itself, in two ways that share the
+*      limits [vee+vsatlo, vcc-vsathi]:
+*        - gates that shut off the drive current in the direction of a limit as
+*          vpole reaches it, so vpole parks at the limit instead of integrating
+*          the overdrive at the slew rate. Because vpole is what the output
+*          buffer copies, the output sits at the rail limit and, once the input
+*          reverses, leaves it immediately (no wound-up pole node to unwind).
+*        - a stiff clamp current that only acts 30 mV beyond a limit and only
+*          when the rails are present; it lets Newton iteration that overshoots
+*          on the first pass land back on the limit instead of cycling.
+*      The pole resistor returns to the midpoint of the two limits (not to 0 V)
+*      so the leak current is symmetric at both limits; that adds only
+*      vmid/aol (tens of microvolts) of offset. The limits move with output
+*      current by dsat*I, which gives the saturated output the lower saturation
+*      resistance (rout-dsat) while the linear region keeps rout.
+*   5. Convergence: the model is written so that the ngspice Newton iteration,
+*      which starts from all nodes at 0 V (rails included), sees a sane linear
+*      model on its first pass. The rail limits are linear in the rail pins (no
+*      max/min of the rails), the drive gates sit at mid-range when the rails are
+*      at 0 V, and the clamp is switched on by a smooth rails-present measure. A
+*      follower, an inverting or non-inverting gain stage and a comparator
+*      therefore all solve directly, with no gmin or source stepping. An
+*      unpowered amplifier parks its output near 0 V.
+*      The same linear first pass has a cost with positive feedback: a Schmitt
+*      trigger whose input sits inside its hysteresis band has three DC
+*      solutions, and Newton lands on the unstable one between the rails. No
+*      smooth model avoids that solution (it exists for any continuous gain
+*      curve), so the solve pipeline checks for it: src/core/solve/bistable.ts
+*      pins vpole 10 mV off, reads which way the circuit pushes it, and
+*      re-solves an unstable one from its low limit with a .nodeset on vpole.
+*      It finds the core by the node names vpole, clo, chi and vmid; keep them.
+*   6. Supply-pin current conservation: a 0 V sense source in series with rout
+*      measures the output current. Bout is referenced to the vee pin, so a sunk
+*      output current leaves through vee on its own, and a controlled source
+*      moves the sourced current from vcc to vee. A constant iq also flows
+*      vcc to vee. Nothing returns through the global ground node, so bench
+*      supplies, reverse-protection parts and rail copper see the real load.
 .subckt opamp_core inp inn out vcc vee
-+ params: aol=100k gbw=1e6 slew=0.5e6 vos=0 rout=75 vsathi=1.5 vsatlo=0.0
++ params: aol=100k gbw=1e6 slew=0.5e6 vos=0 rout=75 dsat=0 vsathi=1.5 vsatlo=0.0 iq=0.5m
 * input sense (high-Z): e = (inp - inn) + offset
-bin e 0 v = v(inp) - v(inn) + vos
+bin e 0 v = v(inp,inn) + vos
 * dominant-pole network. Rp chosen for DC gain = aol; Cp for pole at gbw/aol.
 * A transconductance gm=1 drives Rp||Cp, so V(vpole) = gm*V(e)*Rp at DC and the
 * pole sits at fp = 1/(2*pi*Rp*Cp). Set Rp=aol (gm=1 -> DC gain=aol) and
 * Cp = 1/(2*pi*Rp*fp) with fp = gbw/aol -> unity-gain crossing at gbw.
 .param rp = {aol}
 .param cp = {1/(6.283185307*rp*(gbw/aol))}
-* transconductance with slew-rate current clamp. The current delivered into the
-* pole node is gm*v(e) (gm=1) but limited to +/- imax = slew*Cp so the maximum
-* dV/dt on Cp equals the datasheet slew rate.
+* slew-rate current limit: gm*v(e) for small signals, +/- imax at most.
 .param imax = {slew*cp}
-bg 0 vpole i = (abs(v(e)) > imax) ? (imax*sgn(v(e))) : v(e)
-rp vpole 0 {rp}
+* gate width (V) and stiff-clamp conductance (A/V, 5 mV overshoot at imax).
+.param wg = 0.005
+.param kc = {imax/0.005}
+* output limits, live from the rail pins and shifted by dsat*Iout (item 4).
+blo clo 0 v = v(vee) + vsatlo + dsat*i(vsns)
+bhi chi 0 v = v(vcc) - vsathi + dsat*i(vsns)
+bmid vmid 0 v = 0.5*(v(clo) + v(chi))
+* smooth rails-present measure: 0 at 0 V across the rails, 1 above about 2 V.
+bpr pr 0 v = 0.5*(1 + tanh((v(vcc) - v(vee) - 1)/0.25))
+* drive current: imax*tanh(e/imax) (sign and saturation), times one gate per
+* limit: the upper gate closes the positive drive as vpole reaches chi, the lower
+* gate closes the negative drive as vpole reaches clo. Each gate is offset by
+* 3.6*wg so the drive has just fallen to the pole leak current when vpole reaches
+* the limit, which parks vpole at the limit itself. The expression is kept in one
+* piece on purpose: split into intermediate nodes, the zero starting value of
+* those nodes would hide the gm path from the first Newton pass.
+bg 0 vpole i = imax*tanh(v(e)/imax)*( 0.5*(1 + tanh(v(e)/imax))*0.5*(1 - tanh((v(vpole) - v(chi))/wg + 3.6))
++ + 0.5*(1 - tanh(v(e)/imax))*0.5*(1 + tanh((v(vpole) - v(clo))/wg - 3.6)) )
+rp vpole vmid {rp}
 cp vpole 0 {cp}
-* output buffer: follow vpole, clamp to the supply rails minus headroom, drive
-* through rout. Clamp limits computed live from the actual rail nodes.
-bout obuf 0 v = (v(vpole) > (v(vcc)-vsathi)) ? (v(vcc)-vsathi) :
-+ ((v(vpole) < (v(vee)+vsatlo)) ? (v(vee)+vsatlo) : v(vpole))
-rout obuf out {rout}
+* stiff clamp, 30 mV beyond each limit, active only with the rails present. The
+* upper knee is the high limit floored at the low limit (soft max), so a
+* collapsed or unpowered supply parks the pole node at the low limit instead of
+* the midpoint of an inverted window. The floor is written inline: as a node it
+* would be a nonlinear function of the rails whose value after the first Newton
+* pass is wrong, while chi and clo, being linear in the rails, are exact.
+bclp vpole 0 i = v(pr)*kc*( 0.5*((v(vpole)-v(clo)-0.5*((v(chi)-v(clo)) + sqrt((v(chi)-v(clo))*(v(chi)-v(clo)) + 0.01))-0.03) + sqrt((v(vpole)-v(clo)-0.5*((v(chi)-v(clo)) + sqrt((v(chi)-v(clo))*(v(chi)-v(clo)) + 0.01))-0.03)*(v(vpole)-v(clo)-0.5*((v(chi)-v(clo)) + sqrt((v(chi)-v(clo))*(v(chi)-v(clo)) + 0.01))-0.03) + 1e-6))
++ - 0.5*((v(clo)-0.03-v(vpole)) + sqrt((v(clo)-0.03-v(vpole))*(v(clo)-0.03-v(vpole)) + 1e-6)) )
+* output buffer: follow vpole, referenced to the vee pin, then drive the pin
+* through rout and a 0 V output-current sense source.
+bout obuf vee v = v(vpole) - v(vee)
+rout obuf osns {rout}
+vsns osns out 0
+* supply-pin currents: sourced output current moves vcc -> vee (sunk output
+* current already leaves through vee via the vee-referenced Bout); quiescent
+* current is constant. The sqrt form is the smooth positive part of i(vsns).
+* Both are scaled by the rails-present measure pr, so a rail that is floating
+* or not yet powered carries no draw (a current source alone on a floating rail
+* would push it to an absurd voltage) and the model draws exactly iq once
+* powered (pr is 1 above about 2 V).
+bsrc vcc vee i = v(pr)*0.5*( i(vsns) + sqrt(i(vsns)*i(vsns) + 1e-12) )
+biq vcc vee i = iq*v(pr)
 .ends opamp_core
 
 * ---------------------------------------------------------------------------
 * LM358 / LM2904 dual op-amp (single-supply, ground-sensing input).
 * Datasheet typ: Aol=100 dB (100k V/V), GBW=1.1 MHz, SR=0.5 V/us, Vos=2 mV,
-* output swings to within ~1.5 V of V+ (no rail-to-rail), down to ~20 mV of V-.
+* ICC ~0.7 mA for the package, output swings to within ~1.5 V of V+ (no
+* rail-to-rail). Output low level: VOL 5 mV typ, 20 mV max into 10 k to V+
+* at V+=5 V; vsatlo=5 mV plus a 20 ohm saturated on-resistance (rout 100 less
+* dsat 80) puts it at about 15 mV at that 0.5 mA load.
 .subckt LM358 inp inn out vcc vee
 xa inp inn out vcc vee opamp_core
-+ params: aol=100k gbw=1.1e6 slew=0.5e6 vos=2e-3 rout=100 vsathi=1.5 vsatlo=0.02
++ params: aol=100k gbw=1.1e6 slew=0.5e6 vos=2e-3 rout=100 dsat=80 vsathi=1.5 vsatlo=0.005 iq=0.7m
 .ends LM358
 
 * ---------------------------------------------------------------------------
-* LM324 quad op-amp — same single-supply core as LM358.
-* Datasheet typ: Aol=100k, GBW=1.2 MHz, SR=0.5 V/us, Vos=2 mV, swing as LM358.
+* LM324 quad op-amp, same single-supply core as LM358.
+* Datasheet typ: Aol=100k, GBW=1.2 MHz, SR=0.5 V/us, Vos=2 mV, ICC ~0.7 mA,
+* swing and VOL as LM358.
 .subckt LM324 inp inn out vcc vee
 xa inp inn out vcc vee opamp_core
-+ params: aol=100k gbw=1.2e6 slew=0.5e6 vos=2e-3 rout=100 vsathi=1.5 vsatlo=0.02
++ params: aol=100k gbw=1.2e6 slew=0.5e6 vos=2e-3 rout=100 dsat=80 vsathi=1.5 vsatlo=0.005 iq=0.7m
 .ends LM324
 
 * ---------------------------------------------------------------------------
 * TL072 / TL071 / TL074 JFET-input dual op-amp.
 * Datasheet typ: Aol=200 V/mV (200k), GBW=3 MHz, SR=13 V/us, Vos=3 mV,
-* output swing within ~1.5 V of either rail.
+* ICC ~1.4 mA for the package, output swing within ~1.5 V of either rail.
 .subckt TL072 inp inn out vcc vee
 xa inp inn out vcc vee opamp_core
-+ params: aol=200k gbw=3e6 slew=13e6 vos=3e-3 rout=120 vsathi=1.5 vsatlo=1.5
++ params: aol=200k gbw=3e6 slew=13e6 vos=3e-3 rout=120 vsathi=1.5 vsatlo=1.5 iq=1.4m
 .ends TL072
 
 * ---------------------------------------------------------------------------
-* LM393 / LM339 COMPARATOR — open-collector output variant.
+* LM393 / LM339 COMPARATOR, open-collector output variant.
 * The input stage + high gain is reused, but the output is an open-collector
 * NPN to V- (off = high-Z, on = pulled to V-). The user must add an external
 * pull-up; with no pull-up the output node floats (correct OC behavior).
 * Datasheet typ: large-signal gain ~200 V/mV, response time ~1.3 us
 * (modeled via a finite GBW so the comparator is not infinitely fast),
-* Vol(sat) ~ 250 mV @ 4 mA.
+* Vol(sat) ~ 250 mV @ 4 mA, ICC ~0.4 mA for the dual package (iq below; the
+* quad wrapper passes a quarter of the LM339 0.8 mA per cell).
 * Nodes: inp inn out vcc vee  (out is the open-collector pin)
 .subckt LM393 inp inn out vcc vee
++ params: iq=0.4m
 * high-gain decision node 'dec' relative to vee (single supply friendly)
 xc inp inn dec vcc vee opamp_core
-+ params: aol=200k gbw=0.8e6 slew=10e6 vos=1e-3 rout=50 vsathi=0.3 vsatlo=0.2
++ params: aol=200k gbw=0.8e6 slew=10e6 vos=1e-3 rout=50 vsathi=0.3 vsatlo=0.2 iq={iq}
 * open-collector pulldown: when dec is HIGH (>mid) the output transistor is OFF
 * (high-Z); when dec is LOW the transistor pulls 'out' toward vee through Ron.
-* Model as a voltage-controlled resistance from out to vee.
+* Model as a voltage-controlled resistance from out to vee. The sunk current
+* leaves through the vee pin, so the supply side needs no extra source.
 * gatev ~ 1 when output should be LOW (dec low), ~0 when output high-Z.
 bsw out vee i = (v(dec) < ((v(vcc)+v(vee))/2)) ?
 + ((v(out)-v(vee))/40) : ((v(out)-v(vee))/1e9)
 .ends LM393
 
 * ---------------------------------------------------------------------------
-* LM339 / LM2901 QUAD COMPARATOR — full-package wrapper (M11).
+* LM339 / LM2901 QUAD COMPARATOR, full-package wrapper (M11).
 * Four instances of the LM393 open-collector behavioral cell above, sharing
 * vcc/vee. Terminal names match the comparator-lm339 pinMap values in
 * index.json. Every output is open-collector: an external pull-up is required
-* (with no pull-up the output pin floats — correct OC behavior).
+* (with no pull-up the output pin floats, which is correct OC behavior).
+* Datasheet ICC is about 0.8 mA typ for the package: 0.2 mA per cell.
 .subckt LM339_QUAD in1p in1n out1 in2p in2n out2 in3p in3n out3 in4p in4n out4 vcc vee
-x1 in1p in1n out1 vcc vee LM393
-x2 in2p in2n out2 vcc vee LM393
-x3 in3p in3n out3 vcc vee LM393
-x4 in4p in4n out4 vcc vee LM393
+x1 in1p in1n out1 vcc vee LM393 params: iq=0.2m
+x2 in2p in2n out2 vcc vee LM393 params: iq=0.2m
+x3 in3p in3n out3 vcc vee LM393 params: iq=0.2m
+x4 in4p in4n out4 vcc vee LM393 params: iq=0.2m
 .ends LM339_QUAD

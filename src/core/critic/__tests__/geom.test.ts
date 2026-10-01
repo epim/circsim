@@ -144,6 +144,30 @@ describe('trackResistanceOhms', () => {
   it('returns Infinity for a zero-width trace (degenerate, avoid div-by-zero)', () => {
     expect(trackResistanceOhms(100, 0, 1)).toBe(Infinity)
   })
+
+  // Copper-weight scaling (issue #69): thickness is oz x 34.8 um, so resistance
+  // is inversely proportional to weight. Independent closed form, not a ratio
+  // of the function against itself.
+  it('matches the closed-form rho L/(w t) at 2 oz and 0.5 oz', () => {
+    const rho = 1.68e-8
+    const L = 0.1
+    const w = 0.5e-3
+    const r2 = (rho * L) / (w * 2 * 34.8e-6)
+    const rHalf = (rho * L) / (w * 0.5 * 34.8e-6)
+    expect(trackResistanceOhms(100, 0.5, 2)).toBeCloseTo(r2, 9)
+    expect(trackResistanceOhms(100, 0.5, 0.5)).toBeCloseTo(rHalf, 9)
+    // Pinned absolute values so a wrong constant cannot hide behind the formula.
+    expect(trackResistanceOhms(100, 0.5, 2)).toBeCloseTo(0.0483, 4)
+    expect(trackResistanceOhms(100, 0.5, 0.5)).toBeCloseTo(0.1931, 4)
+  })
+
+  it('halves when copper weight doubles and doubles when it halves', () => {
+    const r1 = trackResistanceOhms(100, 0.5, 1)
+    expect(trackResistanceOhms(100, 0.5, 2)).toBeCloseTo(r1 / 2, 9)
+    expect(trackResistanceOhms(100, 0.5, 0.5)).toBeCloseTo(r1 * 2, 9)
+    // Heavier copper must always be strictly lower resistance.
+    expect(trackResistanceOhms(100, 0.5, 2)).toBeLessThan(r1)
+  })
 })
 
 // ─── segPointDistanceMm ───────────────────────────────────────────────────────────

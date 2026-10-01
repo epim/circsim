@@ -69,10 +69,18 @@ export function buildSpiceNames(
       result.set(net.id, base)
       used.set(base, 1)
     } else {
-      // Collision — find next available suffix
-      const count = used.get(base)! + 1
+      // Collision: find the next suffix whose full name is not already taken.
+      // Generated candidates are registered in `used`, so a later net whose own
+      // sanitized name equals an earlier generated name is itself treated as a
+      // collision instead of silently sharing the node.
+      let count = used.get(base)!
+      let candidate: string
+      do {
+        count += 1
+        candidate = `${base}_${count}`
+      } while (used.has(candidate))
       used.set(base, count)
-      const candidate = `${base}_${count}`
+      used.set(candidate, 1)
       result.set(net.id, candidate)
     }
   }
