@@ -65,7 +65,7 @@ Each part shows a status in the **Parts** panel and, if it needs attention, in t
 | Stubbed | amber | You (or a heuristic) stubbed it open/short/interactive |
 | No model | red | Nothing matched, needs your attention |
 
-A diode or LED on a JLCPCB / EasyEDA footprint, with no schematic to name its pins, has a green dot (it has a model) but is also listed in the Model Doctor as **polarity unverified**, because its footprint name cannot say which pad is the anode. See [the diode-polarity trap](../reference/pin-maps#diode-polarity).
+A diode or LED on a JLCPCB / EasyEDA footprint, with no schematic to name its pins, has a green dot (it has a model), but its footprint name cannot say which pad is the anode: circsim simulates it with KiCad's default and names it in the sim log with a [`pinmap-unverified: polarity` warning](../guides/warnings#polarity-unverified) when the board opens. See [the diode-polarity trap](../reference/pin-maps#diode-polarity).
 
 A red "no model" part contributes nothing to the simulation and appears in the fidelity banner. The [Model Doctor](../guides/model-doctor) is where you fix it: import a `.lib`, get one from an LLM and validate it against ngspice, stub it, or set an interactive-pin panel.
 

@@ -1,6 +1,7 @@
 /**
- * Store wiring for issues #4, #6, #7: ngspice complaints about a part become
- * that part's status, and a BOM that does nothing says so in the log.
+ * Store wiring for issues #4, #5, #6, #7: ngspice complaints about a part
+ * become that part's status, a BOM that does nothing says so in the log, and
+ * notes on resolved parts (BOM changes, polarity guesses) reach the log.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
@@ -8,6 +9,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { createAppStore } from '../appStore'
 import { createMockSimClient } from '../../ipc/simClient'
+import type { LibraryEntry } from '../../../../core/models/types'
 
 const fixturesDir = join(__dirname, '../../../../../fixtures')
 const rcBoard = readFileSync(join(fixturesDir, 'fixture-rc.kicad_pcb'), 'utf-8')
@@ -105,5 +107,59 @@ describe('BOM import is never silent', () => {
     const s = createAppStore({ simClient: createMockSimClient() })
     s.getState().openBoardFromText(rcBoard, 'fixture-rc.kicad_pcb', { bomText: 'Reference,Value\nQ7,NPN\n' })
     expect(s.getState().logLines.some(l => /BOM: 1 of 1 rows name refs that are not on the board \(Q7\)/.test(l.text))).toBe(true)
+  })
+})
+
+// A part that resolves ok has no Model Doctor card (the Doctor lists parts whose
+// status is not ok), so what the BOM did to it (issue #4) and a polarity guess on
+// it (issue #5) are stated in the sim log, once, when the file is loaded.
+describe('notes on resolved parts reach the sim log', () => {
+  const library = (
+    JSON.parse(readFileSync(join(process.cwd(), 'resources', 'models', 'index.json'), 'utf8')) as {
+      entries: LibraryEntry[]
+    }
+  ).entries
+
+  // fixture-rc with R2 swapped for D8, the lantern's SS14 on its real EasyEDA footprint.
+  const at = rcBoard.lastIndexOf('(footprint "Resistor_SMD:R_0805_2012Metric"')
+  const jlcDiodeBoard =
+    rcBoard.slice(0, at) +
+    rcBoard
+      .slice(at)
+      .replace('Resistor_SMD:R_0805_2012Metric', 'SMA_L4.2-W2.6-LS5.0-RD_1')
+      .replace('reference "R2"', 'reference "D8"')
+      .replace('value "10k"', 'value "SS14"')
+
+  it('a BOM that changes a resolved part names the part and the change', () => {
+    const s = createAppStore({ simClient: createMockSimClient() })
+    s.getState().openBoardFromText(rcBoard, 'fixture-rc.kicad_pcb')
+    s.getState().setBomFromText('Reference,Value\nR1,22k\n')
+    expect(s.getState().resolutions.find(r => r.ref === 'R1')?.status).toBe('ok')
+    expect(s.getState().logLines.map(l => l.text)).toContain(
+      'BOM: R1: value "22k" from the BOM replaces the board value "10k"',
+    )
+  })
+
+  it('a BOM given at open time names the parts it changed', () => {
+    const s = createAppStore({ simClient: createMockSimClient() })
+    s.getState().openBoardFromText(rcBoard, 'fixture-rc.kicad_pcb', { bomText: 'Reference,Value\nR2,1k\n' })
+    expect(s.getState().logLines.map(l => l.text)).toContain(
+      'BOM: R2: value "1k" from the BOM replaces the board value "10k"',
+    )
+  })
+
+  it('opening a JLC-footprint diode without its schematic logs the polarity guess as a warning', () => {
+    const s = createAppStore({ simClient: createMockSimClient(), library })
+    s.getState().openBoardFromText(jlcDiodeBoard, 'jlc-diode.kicad_pcb')
+    expect(s.getState().resolutions.find(r => r.ref === 'D8')?.status).toBe('ok')
+    const lines = s.getState().logLines.filter(l => l.text.startsWith('D8: pinmap-unverified: polarity of "SMA_L4.2'))
+    expect(lines).toHaveLength(1)
+    expect(lines[0].level).toBe('warn')
+  })
+
+  it('a board with no polarity guess and no BOM logs nothing of the kind', () => {
+    const s = createAppStore({ simClient: createMockSimClient(), library })
+    s.getState().openBoardFromText(rcBoard, 'fixture-rc.kicad_pcb')
+    expect(s.getState().logLines.some(l => /pinmap-unverified|^BOM:/.test(l.text))).toBe(false)
   })
 })

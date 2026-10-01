@@ -31,6 +31,7 @@ import {
   selectPinMap,
   pinMapFromSchematicPins,
   SCHEMATIC_PINMAP_NOTE,
+  POLARITY_UNVERIFIED_PREFIX,
   type SchematicPin,
 } from './libraryMatch'
 import type { PartDescriptor } from './libraryMatch'
@@ -797,9 +798,30 @@ function applyBomRow(part: Part, row: BomRow | undefined): Part {
 }
 
 /**
- * Tell the user what the BOM did to a part, so Model Doctor can show it:
- * a value that replaced the board's, and an MPN that chose (or failed to
- * choose) a library model.
+ * True when the value the BOM gives a part is the board's value: the same text,
+ * or, for R/C/L, the same number in another notation ("4.7kOhm" and "4k7").
+ * `bomValue` is the value as applied (bomPrimitiveValue), not the raw Comment.
+ */
+function sameValue(ref: string, bomValue: string, boardValue: string): boolean {
+  if (bomValue.trim() === boardValue.trim()) return true
+  const prefix = refdesPrefix(ref)
+  if (!TIER2_PRIMITIVE_PREFIXES.has(prefix)) return false
+  const kind = prefix as 'R' | 'C' | 'L'
+  const a = parseValue(bomValue, kind)
+  const b = parseValue(boardValue, kind)
+  return a !== undefined && b !== undefined && Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b))
+}
+
+/** Machine prefix of a note saying what a BOM row did to a part (issue #4). */
+export const BOM_NOTE_PREFIX = 'bom:'
+
+/**
+ * Tell the user what the BOM did to a part: a value that replaced the board's,
+ * and an MPN that chose (or failed to choose) a library model. A BOM value that
+ * names the board's own value (a JLCPCB Comment with its rating) changed
+ * nothing and gets no note. The notes reach the user through the Model Doctor
+ * card for a part that needs attention and through the sim log
+ * (resolutionNoteLines) for every part.
  */
 function noteBomEffect(
   part: Part,
@@ -810,7 +832,7 @@ function noteBomEffect(
   if (!row) return res
   const extra: string[] = []
   const bomValue = row.value?.trim()
-  if (bomValue && bomValue !== part.value.trim()) {
+  if (bomValue && !sameValue(part.ref, bomPrimitiveValue(part.ref, bomValue), part.value)) {
     if (boardValueUsed) {
       // The BOM value found no model, the board's did: say which one decided.
       extra.push(
@@ -836,6 +858,35 @@ function noteBomEffect(
     }
   }
   return extra.length === 0 ? res : { ...res, warnings: [...res.warnings, ...extra] }
+}
+
+// ─── Resolution notes for the sim log ─────────────────────────────────────────
+
+/**
+ * Sim-log lines for the resolution notes that a status does not show. The Model
+ * Doctor lists only parts whose status is not ok, so a part that resolved has no
+ * card; the store logs these when a board or BOM is loaded.
+ *
+ * - `'bom'`: what a BOM row did to each part, resolved or not (issue #4), as
+ *   `BOM: <ref>: <what changed>`.
+ * - `'polarity'`: each diode or LED that resolved but whose polarity is a guess
+ *   from a JLC/EasyEDA footprint name (issue #5), as `<ref>: <the warning>`.
+ */
+export function resolutionNoteLines(
+  resolutions: readonly Resolution[],
+  kind: 'bom' | 'polarity',
+): string[] {
+  const lines: string[] = []
+  for (const r of resolutions) {
+    for (const w of r.warnings) {
+      if (kind === 'bom' && w.startsWith(BOM_NOTE_PREFIX)) {
+        lines.push(`BOM: ${r.ref}: ${w.slice(BOM_NOTE_PREFIX.length).trim()}`)
+      } else if (kind === 'polarity' && r.status === 'ok' && w.startsWith(POLARITY_UNVERIFIED_PREFIX)) {
+        lines.push(`${r.ref}: ${w}`)
+      }
+    }
+  }
+  return lines
 }
 
 // ─── Per-part resolution ──────────────────────────────────────────────────────

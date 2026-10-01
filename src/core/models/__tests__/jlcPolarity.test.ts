@@ -15,11 +15,12 @@ import { join } from 'node:path'
 
 import { describe, it, expect } from 'vitest'
 
-import { resolveAll } from '../resolve'
+import { resolveAll, resolutionNoteLines } from '../resolve'
 import {
   selectPinMap,
   isEasyEdaOriginFootprint,
   hasUnverifiedPolarity,
+  POLARITY_UNVERIFIED_PREFIX,
   SCHEMATIC_PINMAP_NOTE,
 } from '../libraryMatch'
 import type { SchematicSimData } from '../../kicad/schematic'
@@ -94,11 +95,27 @@ describe('JLC/EasyEDA diode footprints: polarity is never a silent footprint gue
     }
   })
 
-  // The Model Doctor lists a resolved part when this predicate holds, so it must
-  // be true exactly when nothing confirmed the polarity.
+  // This predicate decides which resolved parts the sim log names as a polarity
+  // guess, so it must be true exactly when nothing confirmed the polarity.
   it('hasUnverifiedPolarity: true without the schematic, false once its A/K names decide', () => {
     for (const r of resolveLantern(false)) expect(hasUnverifiedPolarity(r), r.ref).toBe(true)
     for (const r of resolveLantern(true)) expect(hasUnverifiedPolarity(r), r.ref).toBe(false)
+  })
+
+  // A part that resolved ok has no Model Doctor card (the Doctor lists parts
+  // whose status is not ok), so the sim log is where the guess is stated.
+  it('the sim-log lines name each resolved diode whose polarity is a guess, and none once the schematic decides', () => {
+    const lines = resolutionNoteLines(resolveLantern(false), 'polarity')
+    expect(lines.map(l => l.split(':')[0])).toEqual(['D2', 'D7', 'D8', 'D9'])
+    for (const l of lines) expect(l).toMatch(/^D\d: pinmap-unverified: polarity of "/)
+    expect(resolutionNoteLines(resolveLantern(true), 'polarity')).toEqual([])
+  })
+
+  it('the polarity warning names the confirmation a resolved part can reach: the schematic', () => {
+    const w = resolveLantern(false)[0].warnings.find(x => x.startsWith(POLARITY_UNVERIFIED_PREFIX))!
+    expect(w).toMatch(/attach the schematic/i)
+    // A resolved part has no Doctor card, so the warning must not send the user there.
+    expect(w).not.toMatch(/Model Doctor/)
   })
 
   it('hasUnverifiedPolarity: false on a KiCad-official diode footprint and on an unrelated pin-map warning', () => {

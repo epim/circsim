@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest'
 
-import { resolveAll, type BomData } from '../resolve'
+import { resolveAll, resolutionNoteLines, type BomData } from '../resolve'
 import { parseBom } from '../../bom/parseBom'
 import { bundledLibrary, makeCircuit, makePart } from './p2-helpers'
 
@@ -36,7 +36,7 @@ describe('BOM rows feed resolution (issue #4)', () => {
     expect(res[1].model).toMatchObject({ kind: 'subckt', subcktName: 'Q2N3904' })
   })
 
-  it('names the BOM as the source in the part warnings (Model Doctor)', () => {
+  it('names the BOM as the source in the part warnings', () => {
     const res = resolveAll(circuit, undefined, parseBom(csv).rows, lib)
     expect(res[0].warnings.some(w => w.startsWith('bom:') && w.includes('1N4148W'))).toBe(true)
   })
@@ -121,5 +121,54 @@ ${ref},"${comment}"
     const res = resolveAll(c, undefined, bomOf('R4', 'Thick film chip resistor'), lib)
     expect(res[0].status).toBe('unresolved')
     expect(res[0].warnings.some(w => w.startsWith('bom:') && w.includes('Thick film'))).toBe(true)
+  })
+
+  // A JLCPCB Comment repeats the board value with its rating on nearly every
+  // passive: a note there would bury the parts the BOM really changed.
+  it('a Comment that carries the board value (with a rating, or in another notation) adds no note', () => {
+    const c = makeCircuit([
+      makePart('C1', '100n', 'Capacitor_SMD:C_0805_2012Metric'),
+      makePart('R2', '4k7', 'Resistor_SMD:R_0805_2012Metric'),
+    ])
+    const bom: BomData = new Map([
+      ...bomOf('C1', '100nF 50V X7R'),
+      ...bomOf('R2', '4.7kOhm +-1% 1/10W'),
+    ])
+    const res = resolveAll(c, undefined, bom, lib)
+    expect(res.map(r => r.warnings)).toEqual([[], []])
+  })
+})
+
+// ─── Where a resolved part's BOM note is read ───────────────────────────────
+//
+// The Model Doctor lists only parts that need attention, so a part the BOM
+// resolved (status ok) has no card: its `bom:` note must reach the sim log.
+
+describe('bom: notes become sim-log lines (issue #4)', () => {
+  it('names every part a BOM row changed, resolved or not, and nothing else', () => {
+    const c = makeCircuit([
+      makePart('D1', 'Diode', 'Diode_SMD:D_SOD-123'),
+      makePart('R1', '1k', 'Resistor_SMD:R_0805_2012Metric'),
+      makePart('R2', '10k', 'Resistor_SMD:R_0805_2012Metric'),
+      makePart('Q9', 'NPN', 'Package_TO_SOT_SMD:SOT-23', {}, [['1', 1], ['2', 2], ['3', 1]]),
+    ])
+    const bom: BomData = new Map([
+      ['D1', { mpn: '1N4148W' }],
+      ['R1', { value: '22k' }],
+      ['R2', { value: '10k' }],
+      ['Q9', { mpn: 'NOT-A-PART' }],
+    ])
+    const res = resolveAll(c, undefined, bom, lib)
+    expect(res.map(r => r.status)).toEqual(['ok', 'ok', 'ok', 'unresolved'])
+    expect(resolutionNoteLines(res, 'bom')).toEqual([
+      'BOM: D1: MPN "1N4148W" from the BOM selected this model',
+      'BOM: R1: value "22k" from the BOM replaces the board value "1k"',
+      'BOM: Q9: MPN "NOT-A-PART" from the BOM matched no library model',
+    ])
+  })
+
+  it('a resolution with no BOM note gives no line', () => {
+    const c = makeCircuit([makePart('R1', '1k', 'Resistor_SMD:R_0805_2012Metric')])
+    expect(resolutionNoteLines(resolveAll(c, undefined, undefined, lib), 'bom')).toEqual([])
   })
 })
