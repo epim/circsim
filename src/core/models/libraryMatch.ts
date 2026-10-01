@@ -344,7 +344,23 @@ export interface PinMapResult {
 }
 
 /** Machine prefix of every unverified-pin-map warning. */
-export const POLARITY_UNVERIFIED_PREFIX = 'pinmap-unverified:'
+export const PINMAP_UNVERIFIED_PREFIX = 'pinmap-unverified:'
+
+/**
+ * Machine prefix of the one unverified-pin-map warning that marks a polarity
+ * guess: a polarized two-terminal part on a JLC/EasyEDA footprint that nothing
+ * (schematic A/K names, a Model Doctor pin map) has confirmed (issue #5).
+ */
+export const POLARITY_UNVERIFIED_PREFIX = `${PINMAP_UNVERIFIED_PREFIX} polarity `
+
+/**
+ * True when a resolution's diode/LED polarity is an unconfirmed guess. The
+ * Model Doctor lists such a part although it resolved: its model is right but
+ * which pad is the anode is not known, so it needs the user's attention.
+ */
+export function hasUnverifiedPolarity(res: { warnings: readonly string[] }): boolean {
+  return res.warnings.some(w => w.startsWith(POLARITY_UNVERIFIED_PREFIX))
+}
 
 /**
  * True for footprint names that come from the JLC/EasyEDA ecosystem: the JLC
@@ -381,7 +397,7 @@ export function selectPinMap(entry: LibraryEntry, libId: string): PinMapResult {
     Object.keys(entry.defaultPinMap).length > 0
   ) {
     warnings.push(
-      `${POLARITY_UNVERIFIED_PREFIX} polarity of "${libId}" cannot be known from a JLC/EasyEDA footprint name ` +
+      `${POLARITY_UNVERIFIED_PREFIX}of "${libId}" cannot be known from a JLC/EasyEDA footprint name ` +
       `(pad 1 is the anode on some and the cathode on others); assumed the KiCad convention, pad 1 = cathode. ` +
       `Attach the schematic or set the pin map in Model Doctor to confirm`
     )

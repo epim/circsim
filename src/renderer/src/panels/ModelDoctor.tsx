@@ -2,9 +2,12 @@
  * renderer/panels/ModelDoctor.tsx — Task 21 + Task 25
  *
  * Docked drawer (NEVER a blocking modal — Spec §8.6) listing every part whose
- * resolution status ≠ ok. Per part:
+ * resolution status ≠ ok, plus every resolved diode/LED whose polarity is an
+ * unconfirmed guess (issue #5). Per part:
  *   - amber/red status pill + warnings (grey "open by design" + informational
  *     why-note for documented opens — M9)
+ *   - issue #5: orange "polarity unverified" pill, or "pin map set" once the
+ *     user's pin map confirms the polarity
  *   - actions: [Stub open] [Stub short] [Interactive pins] [Import .lib…] [Ask your LLM]
  *   - a pin-map editor: a table mapping each pad number ↔ model terminal name
  *
@@ -21,6 +24,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
 import type { Resolution, PinMap } from '../../../core/models/types'
 import type { Part } from '../../../core/netlist/extract'
+import {
+  hasUnverifiedPolarity,
+  POLARITY_UNVERIFIED_PREFIX,
+} from '../../../core/models/libraryMatch'
 import LlmAssist from './LlmAssist'
 import LibImport from './LibImport'
 import type { PadInfo } from '../../../core/models/llmPrompt'
@@ -50,9 +57,12 @@ export default function ModelDoctor(props: ModelDoctorHandlers): React.ReactElem
   const resolutions = useApp(s => s.resolutions)
   const parts = useApp(s => s.circuit?.parts ?? EMPTY_PARTS)
 
-  // Parts needing attention: any status ≠ ok.
+  // Parts needing attention: any status ≠ ok, and a resolved diode/LED whose
+  // polarity nothing confirmed (issue #5: a JLC/EasyEDA footprint name cannot
+  // tell which pad is the anode). Listing it is what makes the guess visible
+  // and puts the pin-map editor that confirms it in reach.
   const problems = useMemo(
-    () => resolutions.filter(r => r.status !== 'ok'),
+    () => resolutions.filter(r => r.status !== 'ok' || hasUnverifiedPolarity(r)),
     [resolutions],
   )
 
@@ -193,6 +203,24 @@ function DoctorRow({
   const hasOverride = useApp(
     s => s.stubOverrides.has(res.ref) || s.pinMapOverrides.has(res.ref),
   )
+  // Issue #5: resolved, but which pad is the anode is a guess. The user's pin
+  // map is the confirmation: the card stays (so Reset stays in reach) but stops
+  // asking, and the now-stale "assumed pad 1 = cathode" line is hidden.
+  const isPolarityGuess = res.status === 'ok' && hasUnverifiedPolarity(res)
+  const hasPinMapOverride = useApp(s => s.pinMapOverrides.has(res.ref))
+  const polarityConfirmed = isPolarityGuess && hasPinMapOverride
+  const warnings = polarityConfirmed
+    ? res.warnings.filter(w => !w.startsWith(POLARITY_UNVERIFIED_PREFIX))
+    : res.warnings
+  const pill = isOpenByDesign
+    ? { label: 'open by design', color: '#95a5a6' }
+    : isStubbed
+      ? { label: 'stubbed', color: '#f1c40f' }
+      : isPolarityGuess
+        ? polarityConfirmed
+          ? { label: 'pin map set', color: '#7fb3d5' }
+          : { label: 'polarity unverified', color: '#e67e22' }
+        : { label: 'no model', color: '#e74c3c' }
 
   // Selection sync (F4): the highlight keys on selectedRef; the SCROLL keys on
   // the explicit revealDoctorRequest (ref + nonce), so re-requesting the
@@ -303,14 +331,7 @@ function DoctorRow({
       data-selected={isSelected || undefined}
     >
       <div style={rowHeaderStyle}>
-        <span
-          style={{
-            ...pillStyle,
-            background: isOpenByDesign ? '#95a5a6' : isStubbed ? '#f1c40f' : '#e74c3c',
-          }}
-        >
-          {isOpenByDesign ? 'open by design' : isStubbed ? 'stubbed' : 'no model'}
-        </span>
+        <span style={{ ...pillStyle, background: pill.color }}>{pill.label}</span>
         <strong>{res.ref}</strong>
         <span style={{ color: '#aaa' }}>{part.value || '—'}</span>
         <span style={{ color: '#777', fontSize: 11 }}>{part.libId}</span>
@@ -323,9 +344,9 @@ function DoctorRow({
         </div>
       )}
 
-      {res.warnings.length > 0 && (
+      {warnings.length > 0 && (
         <ul style={warnListStyle}>
-          {res.warnings.map((w, i) => (
+          {warnings.map((w, i) => (
             <li key={i}>{w}</li>
           ))}
         </ul>

@@ -6,7 +6,9 @@ Click a part in the fidelity banner's **open Model Doctor** link, or click the p
 
 ## What a card shows
 
-Each problem part shows a status pill: **no model** (red), **stubbed** (amber), or **open by design** (grey). It also shows a reference, value, and library id, plus any warnings (an ambiguous match, an unverified pin order, an electrolytic-polarity caution). Below that is a row of actions.
+Each problem part shows a status pill: **no model** (red), **stubbed** (amber), **open by design** (grey), or **polarity unverified** (orange). It also shows a reference, value, and library id, plus any warnings (an ambiguous match, an unverified pin order, an electrolytic-polarity caution). Below that is a row of actions.
+
+A **polarity unverified** card is a diode or LED that has a model but sits on a JLCPCB / EasyEDA footprint, where the footprint name cannot say which pad is the anode. circsim simulates it with KiCad's default (pad 1 = cathode). [Attach the schematic](./attach-schematic) and its `A`/`K` pin names settle it, or set the [pin map](#pin-map) yourself: the pill then reads **pin map set**. See [the diode-polarity trap](../reference/pin-maps#diode-polarity).
 
 ## Your options
 

@@ -33,7 +33,7 @@ You can **minimize** it (the **»** button) to a compact header badge (**⚠ N a
 
 ## "pinmap-unverified: polarity of ..."
 
-*(recorded on the part's resolution; the [Model Doctor](./model-doctor) lists only parts that need attention, so a diode that resolved to a model does not show it on a card)* A diode or LED sits on a JLCPCB / EasyEDA footprint, whose pad numbering follows the part rather than any convention, so circsim cannot tell which pad is the anode from the footprint name. It used KiCad's default (pad 1 = cathode) and flagged it. [Attach the schematic](./attach-schematic) so circsim can read the symbol's `A`/`K` pin names, or set the pin map yourself in the Model Doctor. See [the diode-polarity trap](../reference/pin-maps#diode-polarity).
+*(orange **polarity unverified** card in the [Model Doctor](./model-doctor))* A diode or LED sits on a JLCPCB / EasyEDA footprint, whose pad numbering follows the part rather than any convention, so circsim cannot tell which pad is the anode from the footprint name. It used KiCad's default (pad 1 = cathode) and lists the part in the Model Doctor, even though it has a model, until something confirms the polarity. [Attach the schematic](./attach-schematic) so circsim can read the symbol's `A`/`K` pin names (the card goes away), or open **Pin map** on the card and set it yourself (the pill turns **pin map set**; **Reset** undoes it). See [the diode-polarity trap](../reference/pin-maps#diode-polarity).
 
 ## A part the simulator dropped or rejected
 

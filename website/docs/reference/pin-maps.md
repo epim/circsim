@@ -18,7 +18,7 @@ Here's a real one worth understanding, because it will silently reverse a diode 
 - **KiCad's** standard diode footprints put **pad 1 = cathode**, every time.
 - **JLCPCB / EasyEDA** footprints have **no fixed convention**. Pad numbering follows whatever the part's own datasheet drawing used, so pad 1 is the anode on some and the cathode on others. On one real board (an LED lantern charger), the SMC Schottky has pad 1 = anode, while the SMA Schottkys and the SOD-123 diode on the same board have pad 1 = cathode.
 
-A routed board often carries footprints as bare dimension-pattern names (something like `SMC_L7.1-W6.2-...` or `SMA_L4.2-W2.6-LS5.0-RD_1`) with no "KiCad" or "JLC" label. circsim recognizes that dimension-pattern shape, and recognizes that it cannot tell polarity from the name. For those footprints it uses KiCad's default order and records a `pinmap-unverified` polarity warning on the part's resolution, instead of presenting a guess as fact. The Model Doctor lists only parts that need attention, and a diode that resolved to a model is not one of them, so the warning does not appear on a card: attach the schematic, or check the pad polarity yourself.
+A routed board often carries footprints as bare dimension-pattern names (something like `SMC_L7.1-W6.2-...` or `SMA_L4.2-W2.6-LS5.0-RD_1`) with no "KiCad" or "JLC" label. circsim recognizes that dimension-pattern shape, and recognizes that it cannot tell polarity from the name. For those footprints it uses KiCad's default order, instead of presenting a guess as fact, and lists the part in the Model Doctor with an orange **polarity unverified** pill and a `pinmap-unverified` polarity warning. The part keeps its model and simulates with that default; the card stays until the schematic or you confirm which pad is the anode.
 
 ### How the schematic saves you
 
@@ -26,7 +26,7 @@ This is exactly why **attaching the schematic matters** for diodes and LEDs. If 
 
 > ⓘ D7: pin map corrected from schematic (A/K): footprint convention was reversed. Override in Model Doctor if the schematic is stale.
 
-If your schematic is the thing that's out of date, you can override in the Model Doctor. Without a schematic, check the polarity of every JLC/EasyEDA diode flagged `pinmap-unverified` against your board before you trust a converter or charger result.
+If your schematic is the thing that's out of date, you can override in the Model Doctor. Without a schematic, check each **polarity unverified** diode against your board (its datasheet drawing or the silkscreen) and set its pin map on the Doctor card before you trust a converter or charger result. Once you set it, the pill reads **pin map set**, and **Reset** returns the part to the unverified default.
 
 ## Checking and fixing a pin map
 

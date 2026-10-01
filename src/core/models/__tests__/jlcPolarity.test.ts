@@ -16,7 +16,12 @@ import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 
 import { resolveAll } from '../resolve'
-import { selectPinMap, isEasyEdaOriginFootprint, SCHEMATIC_PINMAP_NOTE } from '../libraryMatch'
+import {
+  selectPinMap,
+  isEasyEdaOriginFootprint,
+  hasUnverifiedPolarity,
+  SCHEMATIC_PINMAP_NOTE,
+} from '../libraryMatch'
 import type { SchematicSimData } from '../../kicad/schematic'
 import { bundledLibrary, makeCircuit, makePart, simInfo } from './p2-helpers'
 
@@ -87,6 +92,28 @@ describe('JLC/EasyEDA diode footprints: polarity is never a silent footprint gue
         expect(warnings.some(w => w.startsWith('pinmap-unverified:')), `${e.id} ${fp}`).toBe(true)
       }
     }
+  })
+
+  // The Model Doctor lists a resolved part when this predicate holds, so it must
+  // be true exactly when nothing confirmed the polarity.
+  it('hasUnverifiedPolarity: true without the schematic, false once its A/K names decide', () => {
+    for (const r of resolveLantern(false)) expect(hasUnverifiedPolarity(r), r.ref).toBe(true)
+    for (const r of resolveLantern(true)) expect(hasUnverifiedPolarity(r), r.ref).toBe(false)
+  })
+
+  it('hasUnverifiedPolarity: false on a KiCad-official diode footprint and on an unrelated pin-map warning', () => {
+    const kicad = resolveAll(
+      makeCircuit([makePart('D1', 'SS14', 'Diode_SMD:D_SMA', { MPN: 'SS14' })]),
+      undefined,
+      undefined,
+      lib,
+    )[0]
+    expect(kicad.status).toBe('ok')
+    expect(hasUnverifiedPolarity(kicad)).toBe(false)
+    const e = lib.find(x => x.id === 'diode-1n5819')!
+    const generic = selectPinMap(e, 'MyLib:Odd_Package')
+    expect(generic.warnings[0]).toMatch(/^pinmap-unverified:/)
+    expect(hasUnverifiedPolarity({ warnings: generic.warnings })).toBe(false)
   })
 
   it('KiCad-official footprints stay confident (no warning)', () => {

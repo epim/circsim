@@ -111,7 +111,6 @@
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "$comment": "The only LED entry in the footprint fallback tier: an LED whose value is not a recognized color (yellow, amber, 'LED 0805', a catalog description) on an LED_* footprint resolves here, with a fallback warning. Its red model is a stand-in for an unknown color.",
       "provenance": "Generic LED (red model, Vf~1.9V) written for circsim — used when value field is simply 'LED' without a color qualifier, MIT."
     },
     {
@@ -120,7 +119,6 @@
         "valueRegex": "(?i)^(led[_ -]?)?red([_ -]?led)?$",
         "refdesPrefix": ["D", "LED"]
       },
-      "$comment": "Identified by VALUE only (no footprintRegex): the five LED entries share refdesPrefix and footprint, so a footprint fallback could never choose between them. Only led-generic joins the footprint fallback tier.",
       "model": { "type": "model-card", "file": "led.lib", "name": "LED_RED" },
       "pinMaps": {
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
