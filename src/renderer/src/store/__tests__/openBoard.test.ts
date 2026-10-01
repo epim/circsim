@@ -8,9 +8,10 @@
  * state, since the two share one pipeline.
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
+import { createHash } from 'crypto'
 import { createAppStore, type BoardHooks } from '../appStore'
 import { createMockSimClient } from '../../ipc/simClient'
 import {
@@ -55,6 +56,11 @@ function manualRunner(): BoardOpenRunner & {
     },
   }
   return runner
+}
+
+/** Reference hash: what the file's bytes hash to, computed synchronously. */
+function sha256Of(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
 function outcomeFor(boardText: string): OpenOutcome {
@@ -285,6 +291,10 @@ describe('openBoard: same result as the synchronous path', () => {
 
     const async_ = createAppStore({ simClient: createMockSimClient(), openRunner: createInlineRunner() })
     await async_.getState().openBoard(f555, 'fixture-555.kicad_pcb', opts)
+    // The synchronous open cannot wait for the hash (Web Crypto is async), so
+    // the board hash is the one field that lands after it returns. Wait for it
+    // explicitly instead of hoping it won the race (issue #144).
+    await sync.getState().awaitBoardHash()
 
     const a = sync.getState()
     const b = async_.getState()
@@ -297,8 +307,65 @@ describe('openBoard: same result as the synchronous path', () => {
     expect(b.criticReport).toEqual(a.criticReport)
     expect(b.viewerOnly).toBe(a.viewerOnly)
     expect(b.project).toEqual(a.project)
+    expect(b.project.boardSha256).toBe(sha256Of(f555))
     expect(b.openProgress).toBeNull()
     expect(a.openProgress).toBeNull()
+  })
+
+  describe('the board hash (issue #144)', () => {
+    /**
+     * Simulate a slow runner: the digest settles a few macrotasks after it is
+     * asked, so it cannot win the race against the rest of the open by luck.
+     */
+    function slowDigest(): void {
+      const subtle = globalThis.crypto.subtle
+      const real = subtle.digest.bind(subtle)
+      vi.spyOn(subtle, 'digest').mockImplementation(
+        (...args: Parameters<typeof subtle.digest>) =>
+          new Promise<ArrayBuffer>((resolve, reject) => {
+            setTimeout(() => real(...args).then(resolve, reject), 25)
+          }),
+      )
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('openBoard resolves with the hash already set, however slow the digest is', async () => {
+      slowDigest()
+      const store = createAppStore({ simClient: createMockSimClient(), openRunner: createInlineRunner() })
+      await store.getState().openBoard(f555, 'fixture-555.kicad_pcb')
+      expect(store.getState().project.boardSha256).toBe(sha256Of(f555))
+    })
+
+    it('the synchronous open leaves the hash pending; awaitBoardHash resolves it', async () => {
+      slowDigest()
+      const store = createAppStore({ simClient: createMockSimClient() })
+      store.getState().openBoardFromText(f555, 'fixture-555.kicad_pcb')
+      expect(store.getState().project.boardSha256).toBeNull()
+      expect(await store.getState().awaitBoardHash()).toBe(sha256Of(f555))
+      expect(store.getState().project.boardSha256).toBe(sha256Of(f555))
+    })
+
+    it('awaitBoardHash is null with no board, and the hash of a board once it landed', async () => {
+      const store = createAppStore({ simClient: createMockSimClient() })
+      expect(await store.getState().awaitBoardHash()).toBeNull()
+      store.getState().openBoardFromText(rc, 'rc.kicad_pcb')
+      const first = await store.getState().awaitBoardHash()
+      expect(first).toBe(sha256Of(rc))
+      expect(await store.getState().awaitBoardHash()).toBe(first)
+    })
+
+    it('a hash that lands for a replaced board is dropped, and awaitBoardHash follows the new board', async () => {
+      slowDigest()
+      const store = createAppStore({ simClient: createMockSimClient() })
+      store.getState().openBoardFromText(rc, 'rc.kicad_pcb')
+      store.getState().openBoardFromText(f555, 'fixture-555.kicad_pcb')
+      expect(await store.getState().awaitBoardHash()).toBe(sha256Of(f555))
+      await new Promise(r => setTimeout(r, 60))
+      expect(store.getState().project.boardSha256).toBe(sha256Of(f555))
+    })
   })
 
   it('the default runner (no Worker in node) opens a board end to end', async () => {
