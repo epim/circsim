@@ -80,7 +80,6 @@ Assign ground to the right net, stub out unresolved parts, and check for floatin
 - Circuits with significant temperature effects
 - Anything where trace parasitics matter
 - Timing margins tighter than ~10× the simulation time-step
-- **Triangle-wave sources**: the function generator renders a triangle as a smoothed sine, so its slope linearity and harmonic content differ from a real triangle (relevant for ramp comparators, PWM, and slew tests)
 :::
 
 ## The fidelity banner

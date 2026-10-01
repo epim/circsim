@@ -450,11 +450,38 @@ export function buildLedSpiceNames(
 // ─── Wave source card builders ────────────────────────────────────────────────
 
 /**
+ * Width of the flat top of the triangle PULSE card. ngspice's PULSE needs a
+ * positive pulse width; 1 ps is far below any step the bench takes and keeps the
+ * waveform within ~1e-9 V of an ideal triangle (verified against ngspice 46).
+ */
+const TRIANGLE_TOP_WIDTH = '1e-12'
+
+/**
+ * PULSE parameter list [lo hi delay rise fall width period] for a triangle
+ * function-gen. rise = fall = T/2 makes the PULSE an exact triangle. Shared by
+ * the deck card and the live alter vector so the two can never drift.
+ */
+function triangleParams(inst: Extract<Instrument, { kind: 'function-gen' }>): string[] {
+  const { freqHz, amplitudeV, offsetV } = inst
+  const half = formatSpiceValue(0.5 / freqHz)
+  return [
+    formatSpiceValue(offsetV - amplitudeV),
+    formatSpiceValue(offsetV + amplitudeV),
+    '0',
+    half,
+    half,
+    TRIANGLE_TOP_WIDTH,
+    formatSpiceValue(1 / freqHz),
+  ]
+}
+
+/**
  * Build the SPICE source value string for a function-gen instrument.
  *
  * Sine:     SIN(<offset> <amplitude> <freq>)
  * Square:   PULSE(0 <vhigh> 0 1n 1n <width> <period>)
- * Triangle: not a native SPICE source — use SIN as approximation (warn)
+ * Triangle: PULSE(<lo> <hi> 0 <T/2> <T/2> <tiny> <T>): an exact linear ramp
+ *           (rise = fall = half a period, negligible top width)
  * Pulse:    PULSE(<lo> <hi> 0 <rise> <fall> <width> <period>)
  */
 function buildWaveSourceValue(inst: Extract<Instrument, { kind: 'function-gen' }>): string {
@@ -468,9 +495,10 @@ function buildWaveSourceValue(inst: Extract<Instrument, { kind: 'function-gen' }
 
   switch (wave) {
     case 'sine':
-    case 'triangle':
-      // Triangle uses SIN as an approximation (first harmonic)
       return `SIN(${off} ${amp} ${freq})`
+
+    case 'triangle':
+      return `PULSE(${triangleParams(inst).join(' ')})`
 
     case 'square': {
       // PULSE: lo hi delay rise fall width period
@@ -2215,11 +2243,19 @@ export function alterPlan(
     const va   = formatSpiceValue(next.amplitudeV)
     const freq = formatSpiceValue(next.freqHz)
 
-    if (next.wave === 'sine' || next.wave === 'triangle') {
+    if (next.wave === 'sine') {
       // SIN vector form: exact spacing required by spec §9
       return {
         kind: 'alter',
         commands: [`alter @${name}[sin] [ ${vo} ${va} ${freq} ]`],
+      }
+    }
+
+    // Triangle: PULSE vector form with rise = fall = T/2 (same params as the deck card)
+    if (next.wave === 'triangle') {
+      return {
+        kind: 'alter',
+        commands: [`alter @${name}[pulse] [ ${triangleParams(next).join(' ')} ]`],
       }
     }
 
