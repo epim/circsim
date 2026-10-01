@@ -29,8 +29,10 @@
  * pads carry current but which could not be solved at all (no copper on the net,
  * no pad on any copper, a solve that did not converge) is named there too.
  *
- * Supply-entry heuristic (the OpResult does not identify which pad the bench
- * supply is attached to; see issue #47):
+ * Supply entry (issue #47): the pad nearest the bench lead's copper position
+ * (OpResult.supplyEntries, from the lead position the store and the sidecar
+ * keep). Only a rail with no attached lead, or a lead with no recorded position,
+ * falls back to a guess, and the finding's assumption then says it guessed:
  *   1. a pad on the rail belonging to a connector-like ref (J1/P1/CN1/CON1/X1);
  *   2. else the pad attached to the rail's widest incident track;
  *   3. else the first pad in (ref, pad-number) order that touches copper.
@@ -183,11 +185,12 @@ export function checkIrDrop(ctx: CriticContext): CheckOutput {
     if (!sol) continue
     if (sol.loadAmps < 1e-9) {
       // Current on the rail, but every pad carrying it feeds the rail the way a
-      // supply does: nothing draws from the inferred entry, so no sag to measure.
+      // supply does: nothing draws from the entry, so no sag to measure.
       if (sol.loads.length > 0) {
         notes.push(
           `${netName(railId)}: ${padList(sol.loads)} ${sol.loadSign > 0 ? 'push current into' : 'pull current out of'} ` +
-            `the rail as a supply would, and no load draws from the supply entry inferred at ` +
+            `the rail as a supply would, and no load draws from the supply entry ` +
+            `${sol.entry.kind === 'lead' ? 'taken from the bench lead' : 'guessed'} at ` +
             `${sol.source.ref} pad ${sol.source.padNumber}, so its sag was not measured`,
         )
       }
@@ -262,10 +265,26 @@ function assumptionFor(ctx: CriticContext, sol: RailSolution, kind: 'supply' | '
     : ''
   return (
     `${ctx.opts.copperOz} oz copper; vias ≈ ${viaMohm.toFixed(1)} mΩ each (20 µm plating)${pour}; ` +
-    `${kind === 'return' ? 'return' : 'supply'} entry inferred at ${sol.source.ref} (connector/widest-copper heuristic); ` +
+    `${entryText(sol, kind)}; ` +
     `currents from the operating-point solve (LEDs, resistors and bench sources measured, other parts by KCL at the nets)` +
     (kind === 'supply' && !withReturn ? '; ground return not included' : '')
   )
+}
+
+/** Where the entry came from: the bench lead, or a guess and why it had to guess. */
+function entryText(sol: RailSolution, kind: 'supply' | 'return'): string {
+  const what = kind === 'return' ? 'return' : 'supply'
+  const at = `${sol.source.ref} pad ${sol.source.padNumber}`
+  const e = sol.entry
+  if (e.kind === 'lead') {
+    const snap = e.snapMm < 0.05 ? 'on' : `snapped ${e.snapMm.toFixed(1)} mm to`
+    return `${what} entry taken from the bench lead clipped at (${e.pos.x.toFixed(1)}, ${e.pos.y.toFixed(1)}) mm, ${snap} ${at}`
+  }
+  const why =
+    e.why === 'no-position'
+      ? `the bench lead on this rail has no recorded position`
+      : `no bench ${what === 'return' ? 'ground clip' : 'supply lead'} is attached to this rail`
+  return `${what} entry is a guess: ${why}, so it was assumed at ${at} (connector/widest-copper heuristic)`
 }
 
 function suggestionFor(sol: RailSolution, head: Headline): string {

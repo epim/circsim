@@ -71,7 +71,8 @@ import {
 import { parseBom, describeBomImport, type BomParseResult } from '../../../core/bom/parseBom'
 import type { BoardModel } from '../../../core/kicad/types'
 import { primeStaticOutputs, runCritic } from '../../../core/critic/run'
-import type { CriticReport, Finding, OpResult } from '../../../core/critic/types'
+import { buildSupplyEntries } from '../../../core/critic/supplyEntries'
+import type { CriticReport, Finding, OpResult, SupplyEntry } from '../../../core/critic/types'
 import {
   buildEffectiveLibrary,
   openBoardPipeline,
@@ -1676,7 +1677,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     // ── Board Critic (Spec §7) ─────────────────────────────────────────────────
     runCriticAudit() {
-      const { board, circuit, opVoltages, currentsByRef, criticCurrents } = get()
+      const { board, circuit, opVoltages, currentsByRef, criticCurrents, instruments, leadPositions, groundNetId } = get()
       if (!board || !circuit) {
         set({ criticReport: null, selectedFindingId: null })
         boardHooks?.clearCriticFindings?.()
@@ -1685,7 +1686,13 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Build the critic OpResult from the live op state ONLY when energized (an
       // op result is present). Without it runCritic SKIPS ampacity/thermal — which
       // is fine: opening re-audits no-sim checks, the post-op re-audit feeds reals.
-      const opResult = buildCriticOpResult(circuit, opVoltages, currentsByRef, criticCurrents)
+      const opResult = buildCriticOpResult(
+        circuit,
+        opVoltages,
+        currentsByRef,
+        criticCurrents,
+        buildSupplyEntries(instruments, leadPositions, groundNetId),
+      )
       auditEpoch++
       applyCriticReport(runCritic(board, circuit, opResult))
     },
@@ -2578,6 +2585,7 @@ export function buildCriticOpResult(
   opVoltages: Map<number, number> | null,
   currentsByRef: Map<string, number>,
   solvedCurrents?: SolvedCurrents | null,
+  supplyEntries?: SupplyEntry[],
 ): OpResult | undefined {
   if (!opVoltages || opVoltages.size === 0) return undefined
 
@@ -2598,6 +2606,7 @@ export function buildCriticOpResult(
       partCurrents: solvedCurrents.partCurrents,
       padCurrents: solvedCurrents.padCurrents,
       unresolvedRefs: solvedCurrents.unresolvedRefs,
+      ...(supplyEntries ? { supplyEntries } : {}),
     }
   }
 
@@ -2607,6 +2616,7 @@ export function buildCriticOpResult(
   return {
     nodeVoltages,
     partCurrents: Object.keys(partCurrents).length > 0 ? partCurrents : undefined,
+    ...(supplyEntries ? { supplyEntries } : {}),
   }
 }
 

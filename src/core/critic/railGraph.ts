@@ -602,6 +602,8 @@ export interface RailSolution {
   graph: RailGraph
   /** Supply-entry pad (0 V reference; its part's pads are the feed, not loads). */
   source: RailPad
+  /** How the entry pad was chosen: from the bench lead, or guessed (and why). */
+  entry: EntryBasis
   /** Node voltage relative to the source (V); NaN outside the source's component. */
   volts: Float64Array
   /** Edge current a to b (A); NaN outside the source's component, 0 for bonds. */
@@ -625,6 +627,11 @@ export interface RailSolution {
   /** Edge indices incident to each node (for path search). */
   adjacency: number[][]
 }
+
+/** How a rail's supply entry pad was chosen. */
+export type EntryBasis =
+  | { kind: 'lead'; pos: Vec2; snapMm: number }
+  | { kind: 'guess'; why: 'no-supply' | 'no-position' }
 
 /** What a rail's solve came to: a solution, or null with the reason when current had nowhere to go. */
 interface RailOutcome {
@@ -693,11 +700,15 @@ export function railGapNotes(ctx: CriticContext, netId: number, isGround: boolea
   return notes
 }
 
-function chooseSource(graph: RailGraph): RailPad | undefined {
-  const pads = [...graph.pads].sort(
-    (a, b) => a.ref.localeCompare(b.ref) || a.padNumber.localeCompare(b.padNumber, undefined, { numeric: true }),
-  )
-  const connected = pads.filter((p) => p.contacts.length > 0)
+/** Pads that touch copper, in (ref, pad-number) order. */
+function connectedPads(graph: RailGraph): RailPad[] {
+  return [...graph.pads]
+    .sort((a, b) => a.ref.localeCompare(b.ref) || a.padNumber.localeCompare(b.padNumber, undefined, { numeric: true }))
+    .filter((p) => p.contacts.length > 0)
+}
+
+/** Fallback when no bench lead names the entry: connector ref, else widest incident track, else first pad. */
+function guessSource(graph: RailGraph, connected: RailPad[]): RailPad | undefined {
   const conn = connected.find((p) => CONNECTOR_REF_RE.test(p.ref))
   if (conn) return conn
   let best: RailPad | undefined
@@ -710,6 +721,32 @@ function chooseSource(graph: RailGraph): RailPad | undefined {
     }
   }
   return best ?? connected[0]
+}
+
+/**
+ * The rail's supply-entry pad: the pad nearest the bench lead's copper position
+ * when one is attached to this net (issue #47), else the guess. `entry` records
+ * which, so the finding can say so.
+ */
+function chooseSource(ctx: CriticContext, graph: RailGraph): { source: RailPad; entry: EntryBasis } | undefined {
+  const connected = connectedPads(graph)
+  const attached = ctx.opResult?.supplyEntries?.find((e) => e.netId === graph.netId)
+  const pos = attached?.pos
+  if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y) && connected.length > 0) {
+    let best = connected[0]
+    let bestD = Infinity
+    for (const p of connected) {
+      const d = Math.hypot(p.pos.x - pos.x, p.pos.y - pos.y)
+      if (d < bestD) {
+        bestD = d
+        best = p
+      }
+    }
+    return { source: best, entry: { kind: 'lead', pos: { x: pos.x, y: pos.y }, snapMm: bestD } }
+  }
+  const source = guessSource(graph, connected)
+  if (!source) return undefined
+  return { source, entry: { kind: 'guess', why: attached ? 'no-position' : 'no-supply' } }
 }
 
 /**
@@ -765,9 +802,10 @@ function computeRail(ctx: CriticContext, netId: number, isGround: boolean): Rail
 
   if (!graph.hasCopper) return unsolved('the board has no copper on this net to solve')
   if (graph.pads.length === 0) return { sol: null }
-  const source = chooseSource(graph)
-  if (!source) return unsolved('no modelled copper touches any pad on the rail')
+  const chosen = chooseSource(ctx, graph)
+  if (!chosen) return unsolved('no modelled copper touches any pad on the rail')
 
+  const { source, entry } = chosen
   const nNodes = graph.nodePos.length
   const adjacency: number[][] = Array.from({ length: nNodes }, () => [])
   graph.edges.forEach((e, k) => {
@@ -869,7 +907,7 @@ function computeRail(ctx: CriticContext, netId: number, isGround: boolean): Rail
   })
 
   return {
-    sol: { netId, isGround, graph, source, volts, edgeAmps, loads, stranded, loadSign: sign, loadAmps, unresolved, adjacency },
+    sol: { netId, isGround, graph, source, entry, volts, edgeAmps, loads, stranded, loadSign: sign, loadAmps, unresolved, adjacency },
   }
 }
 
