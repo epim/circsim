@@ -464,7 +464,7 @@ function triangleParams(inst: Extract<Instrument, { kind: 'function-gen' }>): st
  *
  * Sine:     SIN(<offset> <amplitude> <freq>)
  * Square:   PULSE(0 <vhigh> 0 1n 1n <width> <period>)
- * Triangle: PULSE(<lo> <hi> 0 <T/2> <T/2> <tiny> <T>) — an exact linear ramp
+ * Triangle: PULSE(<lo> <hi> 0 <T/2> <T/2> <tiny> <T>): an exact linear ramp
  *           (rise = fall = half a period, negligible top width)
  * Pulse:    PULSE(<lo> <hi> 0 <rise> <fall> <width> <period>)
  */

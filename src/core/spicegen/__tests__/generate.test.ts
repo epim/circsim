@@ -2369,7 +2369,7 @@ describe('alterPlan — function-gen freq/amp/offset', () => {
   })
 })
 
-describe('alterPlan — triangle uses the PULSE vector form', () => {
+describe('alterPlan: triangle uses the PULSE vector form', () => {
   test('triangle freq change -> alter @vfgen_2[pulse] with rise = fall = T/2', () => {
     const prev: Instrument = {
       kind: 'function-gen', id: '2', netId: 1,
