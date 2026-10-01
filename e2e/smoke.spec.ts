@@ -11,7 +11,8 @@
  *   2. Click "Open sample project" empty-state button.
  *   3. Expect the parts list to show 7 rows, 0 unresolved.
  *   4. Click "Power On" → expect ≥1 op annotation visible on the viewport.
- *   5. Click "Run" → wait 2 s → expect scope canvas non-blank (pixel sample).
+ *   5. Probe the OUT net, click "Run" → expect trace-coloured scope pixels (none
+ *      before Run), a measured mean in the legend, and a trace that keeps changing.
  *   6. Alter the DC supply to 9 V → expect the annotation text to change.
  *
  * CI: run on ubuntu-latest under xvfb (see .github/workflows/ci.yml).
@@ -113,7 +114,7 @@ test.describe('circsim smoke E2E', () => {
     ).toBeVisible({ timeout: 20_000 })
   })
 
-  test('Run → scope canvas non-blank after 2 s', async () => {
+  test('Run → scope draws a live trace from streamed samples (issue #66)', async () => {
     const result = await launchApp()
     app = result.app
     const page = result.page
@@ -123,40 +124,81 @@ test.describe('circsim smoke E2E', () => {
     await page.locator('[data-testid="open-sample-btn"]').click()
     await expect(page.locator('[data-testid="part-row"]').first()).toBeVisible({ timeout: 15_000 })
 
-    // First power on (needed to set up DC operating point)
+    // Power On first: the transient starts from the DC operating point.
     const powerOnBtn = page.locator('[data-testid="power-on-btn"]')
     await expect(powerOnBtn).toBeEnabled({ timeout: 10_000 })
     await powerOnBtn.click()
-    // Wait for op to complete
-    await page.waitForTimeout(3000)
+    await expect(page.locator('[data-testid="op-annotation"]').first()).toBeVisible({ timeout: 20_000 })
+
+    // The scope only has something to draw once a voltage probe is attached;
+    // with no probe it paints the dark background and grid and nothing else.
+    // Probe the 555 output through the Nets tab + "Probe this net".
+    await page.locator('[data-testid="bottom-tab-nets"]').click()
+    await page.locator('[data-testid="net-voltage-row"][data-net-name="OUT"]').click()
+    await page.locator('[data-testid="probe-net-btn"]').click()
+
+    const scopeCanvas = page.locator('[data-testid="scope-canvas"]')
+    await expect(scopeCanvas).toBeVisible({ timeout: 10_000 })
+
+    // Read the probe's trace colour from its legend swatch instead of guessing
+    // it, so the check keys on the trace and never on background or grid pixels
+    // (the scope paints #0d1117 and a grid on every frame, even with no data).
+    const trace = await page.evaluate(() => {
+      const canvas = document.querySelector('[data-testid="scope-canvas"]') as HTMLCanvasElement
+      const root = canvas.parentElement?.parentElement
+      const swatch = [...(root?.querySelectorAll('span') ?? [])].find(
+        s => (s as HTMLElement).style.background !== '',
+      ) as HTMLElement | undefined
+      const m = swatch ? getComputedStyle(swatch).backgroundColor.match(/\d+/g) : null
+      return m ? m.slice(0, 3).map(Number) : null
+    })
+    expect(trace, 'probe legend swatch carries the trace colour').not.toBeNull()
+    const [tr, tg, tb] = trace as [number, number, number]
+
+    /** Count canvas pixels close to the trace colour and fingerprint where they are. */
+    const traceStats = (): Promise<{ count: number; sig: number }> =>
+      page.evaluate(
+        ([r, g, b]) => {
+          const canvas = document.querySelector('[data-testid="scope-canvas"]') as HTMLCanvasElement
+          const ctx = canvas.getContext('2d')!
+          const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+          let count = 0
+          let sig = 0
+          for (let i = 0; i < d.length; i += 4) {
+            if (Math.abs(d[i] - r) < 60 && Math.abs(d[i + 1] - g) < 60 && Math.abs(d[i + 2] - b) < 60) {
+              count++
+              sig = (sig * 31 + (i >> 2)) >>> 0
+            }
+          }
+          return { count, sig }
+        },
+        [tr, tg, tb] as [number, number, number],
+      )
+
+    // Negative control: before Run no sample has streamed, so no trace pixel
+    // exists. This is what the old any-pixel-above-10 check could not tell.
+    expect((await traceStats()).count).toBe(0)
 
     // Now click Run
     const runBtn = page.locator('[data-testid="run-btn"]')
     await expect(runBtn).toBeEnabled({ timeout: 10_000 })
     await runBtn.click()
 
-    // Wait 2 s for the transient to produce samples
-    await page.waitForTimeout(2000)
+    // Samples must reach the ring buffer and be drawn: a one-pixel-wide trace
+    // across a ~500 px canvas is several hundred trace-coloured pixels.
+    await expect.poll(async () => (await traceStats()).count, { timeout: 20_000 }).toBeGreaterThan(200)
 
-    // Sample the scope canvas — it must not be blank.
-    // The scope renders into a <canvas data-testid="scope-canvas">.
-    const scopeCanvas = page.locator('[data-testid="scope-canvas"]')
-    await expect(scopeCanvas).toBeVisible({ timeout: 10_000 })
+    // The legend reads the same ring: "Waiting for data" must be gone and a
+    // measured mean must be shown for the probed net.
+    const legend = scopeCanvas.locator('xpath=../..')
+    await expect(legend).not.toContainText('Waiting for data')
+    await expect(legend).toContainText(/Mean:\s*[\d.]+\s*m?V/)
 
-    // Evaluate the canvas pixels; a non-blank canvas has at least one non-zero pixel.
-    const isNonBlank = await page.evaluate(() => {
-      const canvas = document.querySelector('[data-testid="scope-canvas"]') as HTMLCanvasElement | null
-      if (!canvas) return false
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return false
-      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data
-      for (let i = 0; i < data.length; i += 4) {
-        // Check for any non-background pixel (r,g,b not all < 10 for a dark background)
-        if (data[i] > 10 || data[i + 1] > 10 || data[i + 2] > 10) return true
-      }
-      return false
-    })
-    expect(isNonBlank).toBe(true)
+    // simTime must keep advancing: the rolling window shifts, so the drawn
+    // trace changes over time. A stuck ring buffer or a SimHost that stopped
+    // streaming would leave the fingerprint frozen.
+    const first = await traceStats()
+    await expect.poll(async () => (await traceStats()).sig, { timeout: 15_000 }).not.toBe(first.sig)
   })
 
   test('alter DC supply voltage → op annotation changes', async () => {
