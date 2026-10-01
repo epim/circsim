@@ -15,6 +15,7 @@
 
 import { createAppStore, type AppStore } from './appStore'
 import { createPortSimClient } from '../ipc/simClient'
+import { attachSidecarSync } from './sidecarSync'
 
 export function createRendererStore(): AppStore {
   const client = createPortSimClient()
@@ -49,6 +50,19 @@ export function createRendererStore(): AppStore {
   // only record the crash notice here.
   window.circsim.onSimhostCrashed(({ willRespawn, exitCode, reason }) => {
     store.getState().noteCrash(willRespawn, { exitCode, reason })
+  })
+
+  // Per-board setup file (issue #27): once the user has opted in (or a setup file
+  // exists), every change to ground / bench / overrides / models is saved beside
+  // the board through the main-process bridge. Flush on the way out so a change
+  // made just before closing the window is not lost to the debounce.
+  const sidecarSync = attachSidecarSync(store, {
+    write: async (boardPath, text, opts) => {
+      await window.circsim.writeSidecar(boardPath, text, opts)
+    },
+  })
+  window.addEventListener('pagehide', () => {
+    void sidecarSync.flush()
   })
 
   // Load the bundled model library in the BACKGROUND too (tier-3 resolution +

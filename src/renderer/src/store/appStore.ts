@@ -76,6 +76,21 @@ import { runCritic } from '../../../core/critic/run'
 import type { CriticReport, Finding, OpResult } from '../../../core/critic/types'
 import { deriveSolvedCurrents, type SolvedCurrents } from '../../../core/critic/solvedCurrents'
 
+import {
+  autosaveAllowed,
+  buildSidecar,
+  GROUND_LEAD_KEY,
+  leadKey,
+  loadSidecar,
+  overwriteIsSafe,
+  serializeSidecar,
+  type LeadPosition,
+  type SidecarStatus,
+  type UserModelRecord,
+} from '../../../core/persist/sidecar'
+import { sidecarPathFor, baseName } from '../../../core/persist/paths'
+import { sha256Hex } from '../../../core/persist/hash'
+
 import type { SimClient } from '../ipc/simClient'
 import { splitPath, type ReadFileFn } from '../ipc/fileOpen'
 import { normalizeVectorKey, type OpSolveMethod, type SimCommand, type SimEvent } from '../../../simhost/protocol'
@@ -273,6 +288,29 @@ function benchId(kind: string): string {
   return `${kind.replace(/-/g, '_')}_bench_${++_benchIdCounter}`
 }
 
+/**
+ * Keep the allocator ahead of ids that came from a restored sidecar, so a
+ * shelf-added instrument can never reuse a restored instrument's id.
+ */
+function reserveBenchIds(instruments: Instrument[]): void {
+  for (const inst of instruments) {
+    if (!('id' in inst)) continue
+    const m = /_bench_(\d+)$/.exec(inst.id)
+    if (m) _benchIdCounter = Math.max(_benchIdCounter, Number(m[1]))
+  }
+}
+
+/** A copy of the lead-position map without any lead of instrument `instId`. */
+function dropLeadPositionsOf(map: Map<string, LeadPosition>, instId: string): Map<string, LeadPosition> {
+  const prefix = `${instId}:`
+  let any = false
+  for (const k of map.keys()) if (k.startsWith(prefix)) any = true
+  if (!any) return map
+  const next = new Map<string, LeadPosition>()
+  for (const [k, v] of map) if (!k.startsWith(prefix)) next.set(k, v)
+  return next
+}
+
 // ─── transient analysis defaults (Spec §7.5) ─────────────────────────────────────
 
 /** Default bench window in sim-seconds (Spec §7.5). NEVER unbounded. */
@@ -351,13 +389,65 @@ export interface RailNote {
   kicadName: string
 }
 
+/**
+ * State of the per-board setup file (`<board>.circsim.json`, issue #27).
+ *
+ * Restore is automatic whenever the file exists. Writing is opt-in per board:
+ * with no file on disk nothing is written until the user asks (enableAutosave),
+ * so circsim never drops a file beside a version-controlled KiCad project
+ * unasked. Once the file exists (or the user opted in) every change to the setup
+ * is saved, debounced, by the sync module (store/sidecarSync.ts).
+ */
+export interface SidecarState {
+  /** Where the setup file lives; null when nothing can be persisted (no board path). */
+  path: string | null
+  /** What was on disk when the board opened. null before any board has opened. */
+  diskStatus: SidecarStatus | 'absent' | null
+  /** True once changes are being saved to `path`. */
+  autosave: boolean
+  /** The next write must first copy the existing file to `<file>.bak`. */
+  backupFirst: boolean
+  /** Visible "restored N settings" note (also carries what was skipped). Dismissable. */
+  note: { restored: number; messages: string[]; status: SidecarStatus; fileName: string } | null
+  lastSavedAt: number | null
+  /** Last write failure, plain language. null when the last write succeeded. */
+  error: string | null
+}
+
+export const INITIAL_SIDECAR_STATE: SidecarState = {
+  path: null,
+  diskStatus: null,
+  autosave: false,
+  backupFirst: false,
+  note: null,
+  lastSavedAt: null,
+  error: null,
+}
+
+export type { LeadPosition }
+
 export interface AppState {
   // ── project / source files ─────────────────────────────────────────────────
   project: {
     boardFileName: string | null
     boardText: string | null
     schematicFileName: string | null
+    /** Absolute path of the open board; null for bundled samples and raw-text opens. */
+    boardPath: string | null
+    /** sha256 of boardText, filled in shortly after open (async). */
+    boardSha256: string | null
   }
+
+  // ── per-board setup file (issue #27) ─────────────────────────────────────────
+  sidecar: SidecarState
+  /**
+   * Where each bench lead was clipped on the board, in KiCad board millimetres,
+   * keyed `${instrumentId}:${terminal}` (the JackDef key; the ground lead is
+   * `ground:gnd`). Set when a lead is dropped on the board, cleared when it is
+   * detached. Persisted in the setup file; the Board Critic lane reads it to find
+   * the pad a supply actually enters through.
+   */
+  leadPositions: Map<string, LeadPosition>
 
   // ── domain pipeline outputs ──────────────────────────────────────────────────
   board: BoardModel | null
@@ -507,15 +597,9 @@ export interface AppState {
   /**
    * In-memory user model store: ref → { subcktText, subcktName, pinMap, provenance }.
    * These are applied at tier 4 in resolveAll (via the library seam injected in
-   * reResolve). Persisted externally by the caller via platformPaths.
+   * reResolve). Persisted in the per-board setup file (see SidecarState).
    */
-  userModels: Map<string /* ref */, {
-    mpn: string
-    subcktText: string
-    subcktName: string
-    pinMap: PinMap
-    provenance: 'llm-generated' | 'user-import'
-  }>
+  userModels: Map<string /* ref */, UserModelRecord>
 
   // ── log stream ────────────────────────────────────────────────────────────────
   logLines: { level: 'info' | 'warn' | 'error'; text: string }[]
@@ -687,8 +771,12 @@ export interface AppState {
 
   /** Bench palette: create an UNWIRED instrument on the shelf; returns its id. */
   addBenchInstrument(kind: BenchKind): string
-  /** Wire one terminal to a net/component (lead drop). Ground routes to setGround. */
-  assignTerminal(instId: string, terminal: Terminal, target: AttachTarget): void
+  /**
+   * Wire one terminal to a net/component (lead drop). Ground routes to setGround.
+   * `position` is where the clip landed on the board (KiCad mm); it is recorded in
+   * leadPositions, and a rewire without one clears any stale position.
+   */
+  assignTerminal(instId: string, terminal: Terminal, target: AttachTarget, position?: LeadPosition): void
   /** Unwire one terminal (clip dragged off the board). */
   detachTerminalWire(instId: string, terminal: Terminal): void
 
@@ -747,6 +835,21 @@ export interface AppState {
 
   /** Minimize the fidelity banner to the header badge (Gemini finding 4). */
   minimizeFidelityBanner(): void
+
+  // ── per-board setup file (issue #27) ──────────────────────────────────────────
+  /**
+   * The setup file text for the current bench (ground, instruments with leads and
+   * lead positions, stub / pin-map / rail overrides, user models), or null with
+   * no board open. Pure read; the sync module decides when to write it.
+   */
+  buildSidecarText(): string | null
+  /**
+   * The user chose to save the setup beside this board: turn autosave on. The
+   * sync module writes immediately. No-op when the board has no path.
+   */
+  enableAutosave(): void
+  /** Dismiss the "restored N settings" note. */
+  dismissSidecarNote(): void
 
   /** Mark deck dirty (any deck-affecting change). */
   markDeckDirty(): void
@@ -808,6 +911,16 @@ export interface OpenOpts {
   schematicFileName?: string
   /** Optional BOM CSV text. */
   bomText?: string
+  /**
+   * Absolute path of the board being opened. Enables the per-board setup file
+   * (restore + save). Omit for bundled samples and raw-text opens: with no path
+   * there is no file to save beside.
+   */
+  boardPath?: string
+  /** Text of `<board>.circsim.json` when it exists. Absent or null: no setup file. */
+  sidecarText?: string | null
+  /** The setup file exists but could not be read (I/O error); the open proceeds without it. */
+  sidecarError?: string | null
 }
 
 // ─── store factory (injectable simClient for tests) ─────────────────────────────
@@ -962,9 +1075,24 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     })
   }
 
+  /** Set (or with null, clear) one lead position; no state change when already equal. */
+  function setLeadPosition(key: string, position: LeadPosition | null): void {
+    const cur = store.getState().leadPositions
+    const prev = cur.get(key)
+    if (position === null ? prev === undefined : prev !== undefined && prev.x === position.x && prev.y === position.y) return
+    const next = new Map(cur)
+    if (position === null) next.delete(key)
+    else next.set(key, { x: position.x, y: position.y })
+    store.setState({ leadPositions: next })
+  }
+
   const store = createStore<AppState>((set, get) => ({
     // ── initial state ──────────────────────────────────────────────────────────
-    project: { boardFileName: null, boardText: null, schematicFileName: null },
+    project: {
+      boardFileName: null, boardText: null, schematicFileName: null, boardPath: null, boardSha256: null,
+    },
+    sidecar: INITIAL_SIDECAR_STATE,
+    leadPositions: new Map(),
     board: null,
     circuit: null,
     schematicSimData: null,
@@ -1038,6 +1166,9 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         stubOverrides: new Map(),
         pinMapOverrides: new Map(),
         railOverrides: new Map(),
+        leadPositions: new Map(),
+        // Stop saving the previous board's setup before anything else changes.
+        sidecar: INITIAL_SIDECAR_STATE,
         simState: 'idle',
         deckDirty: false,
         selectedRef: null,
@@ -1069,7 +1200,9 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           board: null,
           circuit: null,
           resolutions: [],
-          project: { boardFileName: fileName, boardText, schematicFileName: null },
+          project: {
+            boardFileName: fileName, boardText, schematicFileName: null, boardPath: null, boardSha256: null,
+          },
         })
         return
       }
@@ -1101,7 +1234,49 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       const probe = extract(board)
       const gnd = suggestGround(probe.nets)
       const supplies = suggestSupplies(probe.nets)
-      const groundNetId = gnd?.id ?? null
+
+      // Per-board setup file (issue #27): restore ground, bench, overrides and
+      // user models saved beside the board. loadSidecar never throws and never
+      // blocks the open: a v0, truncated, damaged or newer file yields whatever
+      // could be restored plus notes on the rest.
+      const sidecarPath = opts?.boardPath ? sidecarPathFor(opts.boardPath) : null
+      const sidecarFileName = sidecarPath ? baseName(sidecarPath) : ''
+      let restore: ReturnType<typeof loadSidecar> | null = null
+      if (sidecarPath) {
+        if (opts?.sidecarError) {
+          restore = {
+            status: 'unreadable',
+            plan: null,
+            restored: 0,
+            notes: [`Could not read ${sidecarFileName} (${opts.sidecarError}); the board opened without its saved setup.`],
+          }
+        } else if (typeof opts?.sidecarText === 'string') {
+          restore = loadSidecar(opts.sidecarText, {
+            nets: probe.nets,
+            partRefs: new Set(probe.parts.map(p => p.ref)),
+          })
+        }
+      }
+      const plan = restore?.plan ?? null
+      let sidecarState: SidecarState = {
+        ...INITIAL_SIDECAR_STATE,
+        path: sidecarPath,
+        diskStatus: sidecarPath ? (restore ? restore.status : 'absent') : null,
+      }
+      if (sidecarPath && restore) {
+        const autosave = autosaveAllowed(restore.status)
+        sidecarState = {
+          ...sidecarState,
+          autosave,
+          backupFirst: autosave && !overwriteIsSafe(restore.status),
+          note:
+            restore.restored > 0 || restore.notes.length > 0
+              ? { restored: restore.restored, messages: restore.notes, status: restore.status, fileName: sidecarFileName }
+              : null,
+        }
+      }
+
+      const groundNetId = plan?.ground ? plan.ground.netId : (gnd?.id ?? null)
       const circuit = groundNetId !== null ? extract(board, { groundNetId }) : probe
       const suggestedSupplyNetIds = supplies.map(s => s.id)
 
@@ -1110,8 +1285,12 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // user lands with a designated ground AND a source, so Power On / Run are
       // live without manual rigging. The supply is editable/removable. We only
       // do this when a supply net was suggested AND it isn't the ground net.
-      const instruments: Instrument[] = []
-      const topSupplyNetId = suggestedSupplyNetIds.find(id => id !== groundNetId)
+      // A restored bench replaces the auto supply: the sidecar's instrument list
+      // (even an empty one: the user removed the supply) is the user's own rigging.
+      const restoredBench = plan?.instruments
+      const instruments: Instrument[] = restoredBench ? [...restoredBench] : []
+      if (restoredBench) reserveBenchIds(restoredBench)
+      const topSupplyNetId = restoredBench ? undefined : suggestedSupplyNetIds.find(id => id !== groundNetId)
       if (topSupplyNetId !== undefined) {
         instruments.push({
           kind: 'dc-supply',
@@ -1123,7 +1302,13 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       }
 
       set({
-        project: { boardFileName: fileName, boardText, schematicFileName },
+        project: {
+          boardFileName: fileName,
+          boardText,
+          schematicFileName,
+          boardPath: opts?.boardPath ?? null,
+          boardSha256: null,
+        },
         board,
         circuit,
         schematicSimData,
@@ -1131,6 +1316,17 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         groundNetId,
         suggestedSupplyNetIds,
         instruments,
+        // Restored overrides, set together with the board so the resolve below
+        // sees them. User models merge over any imported earlier this session.
+        ...(plan
+          ? {
+              stubOverrides: new Map(plan.stubOverrides),
+              pinMapOverrides: new Map(plan.pinMapOverrides),
+              railOverrides: new Map(plan.railOverrides),
+              leadPositions: new Map(plan.leadPositions),
+              userModels: new Map([...get().userModels, ...plan.userModels]),
+            }
+          : {}),
         // Reveal the auto supply's properties right away (the rack mirrors this).
         selectedInstrumentId: topSupplyNetId !== undefined ? AUTO_SUPPLY_ID : null,
         // Announce the silent auto-attach on the supply's card (M7 F7).
@@ -1140,7 +1336,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Keep ring buffers in sync with the (possibly auto-attached) instruments.
       syncRingBuffers(instruments)
 
-      // Resolve with current (empty) overrides.
+      // Resolve with the current overrides (restored from the setup file, if any).
       get().reResolve()
 
       // A BOM that failed to parse, or whose rows match no board ref, says so in
@@ -1150,7 +1346,16 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
       // Viewer-only iff the netlist is unusable for simulation (no parts / no nets).
       const usable = circuit.parts.length > 0 && circuit.nets.length > 0
-      set({ viewerOnly: !usable })
+      // The setup-file state goes in last: the sync module saves only once the
+      // open has finished building a consistent state.
+      set({ viewerOnly: !usable, sidecar: sidecarState })
+
+      // Tie results to the exact file: hash the board text in the background.
+      void sha256Hex(boardText).then(hash => {
+        if (hash && get().project.boardText === boardText) {
+          set(st => ({ project: { ...st.project, boardSha256: hash } }))
+        }
+      })
 
       // Auto-run the read-only critic audit (Spec §7 trigger): the no-sim checks
       // (floating / clearance / decoupling) run immediately on open; the
@@ -1375,6 +1580,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       } else {
         set({ groundNetId: netId })
       }
+      // A new ground net invalidates where the old ground lead was clipped.
+      setLeadPosition(GROUND_LEAD_KEY, null)
       get().markDeckDirty()
     },
 
@@ -1388,6 +1595,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     removeInstrument(id) {
       set(s => ({
         instruments: s.instruments.filter(i => !('id' in i) || i.id !== id),
+        // Its leads are gone, so are their board positions.
+        leadPositions: dropLeadPositionsOf(s.leadPositions, id),
         // A removed instrument can't stay selected.
         selectedInstrumentId: s.selectedInstrumentId === id ? null : s.selectedInstrumentId,
         // A removed auto supply needs no announcement any more (M7 F7).
@@ -1454,10 +1663,13 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       return id
     },
 
-    assignTerminal(instId, terminal, target) {
+    assignTerminal(instId, terminal, target, position) {
       // Ground is the setGround flow (spec §7) — the ground panel's black lead.
       if (instId === GROUND_INST_ID && terminal === 'gnd') {
-        if (target.kind === 'net') get().setGround(target.netId)
+        if (target.kind === 'net') {
+          get().setGround(target.netId) // clears any stale ground lead position
+          if (position) setLeadPosition(GROUND_LEAD_KEY, position)
+        }
         return
       }
       const inst = get().instruments.find(i => 'id' in i && i.id === instId)
@@ -1465,14 +1677,21 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       const next = applyTerminal(inst, terminal, target)
       // applyTerminal returns the SAME object for invalid combos — no-op then;
       // otherwise route through updateInstrument so alter/re-op semantics fire.
-      if (next !== inst) get().updateInstrument(instId, next)
+      if (next !== inst) {
+        get().updateInstrument(instId, next)
+        // Record where the clip landed; a rewire with no position drops the old one.
+        setLeadPosition(leadKey(instId, terminal), position ?? null)
+      }
     },
 
     detachTerminalWire(instId, terminal) {
       const inst = get().instruments.find(i => 'id' in i && i.id === instId)
       if (!inst) return
       const next = clearTerminal(inst, terminal)
-      if (next !== inst) get().updateInstrument(instId, next)
+      if (next !== inst) {
+        get().updateInstrument(instId, next)
+        setLeadPosition(leadKey(instId, terminal), null)
+      }
     },
 
     updateInstrument(id, next) {
@@ -1799,6 +2018,43 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
     minimizeFidelityBanner() {
       set({ fidelityMinimizedSig: fidelitySignature(fidelityBannerItems(get().resolutions)) })
+    },
+
+    // ── per-board setup file (issue #27) ─────────────────────────────────────────
+    buildSidecarText() {
+      const s = get()
+      if (!s.circuit) return null
+      const sidecar = buildSidecar({
+        appVersion: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : undefined,
+        board: { fileName: s.project.boardFileName, sha256: s.project.boardSha256 },
+        nets: s.circuit.nets,
+        groundNetId: s.groundNetId,
+        instruments: s.instruments,
+        leadPositions: s.leadPositions,
+        stubOverrides: s.stubOverrides,
+        pinMapOverrides: s.pinMapOverrides,
+        railOverrides: s.railOverrides,
+        userModels: s.userModels,
+      })
+      return serializeSidecar(sidecar)
+    },
+
+    enableAutosave() {
+      const { sidecar } = get()
+      if (!sidecar.path) return
+      set({
+        sidecar: {
+          ...sidecar,
+          autosave: true,
+          // Replacing an unreadable, truncated or old-format file: keep the original.
+          backupFirst: !overwriteIsSafe(sidecar.diskStatus ?? 'absent'),
+          error: null,
+        },
+      })
+    },
+
+    dismissSidecarNote() {
+      set(s => ({ sidecar: { ...s.sidecar, note: null } }))
     },
 
     markDeckDirty() {

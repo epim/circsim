@@ -19,7 +19,7 @@ If you have a SPICE model file for the part (from the manufacturer, or anywhere)
 3. **Verify the pin map**: map each board pad to the correct model terminal. *Check this against the datasheet; a wrong pin map produces confidently-wrong results.*
 4. **Bind** it to the part.
 
-Imported models are prepended to circsim's library, so your model for a given part number wins over any bundled one, and it's remembered for next time.
+Imported models are prepended to circsim's library, so your model for a given part number wins over any bundled one. They are remembered for the rest of the session, and across restarts once you [save the board's setup](./save-and-report), which stores your models and every Model Doctor override beside the board.
 
 ### Ask your LLM
 

@@ -4,7 +4,7 @@ layout: home
 hero:
   name: circsim
   text: The validation bench for routed boards
-  tagline: Load the PCB you already routed, power it up, and probe it in 3D. An interactive SPICE bench that catches mistakes before you pay for fabrication.
+  tagline: Open any routed KiCad board, power it up, and probe it in 3D. An interactive SPICE bench and a read-only layout audit that catch mistakes before you pay for fabrication.
   actions:
     - theme: brand
       text: Get started
@@ -17,21 +17,25 @@ hero:
       link: /concepts/fidelity
 
 features:
-  - title: Starts from your board, not a schematic
-    details: Every other hobbyist simulator wants a schematic. circsim opens the routed .kicad_pcb you got back from Quilter or KiCad, rebuilds the circuit from the copper, and renders it in 3D.
+  - title: Any routed KiCad board, no setup
+    details: Open a .kicad_pcb from KiCad 6 to 10 and press Energize. circsim rebuilds the circuit from the copper and matches parts to its bundled models, so there are no Sim.* fields to assign first.
+  - title: Your schematic, when you have it
+    details: Keep the .kicad_sch next to the board and circsim attaches it on open. Its Sim.* fields become the first model source and its pin names settle diode polarity.
   - title: A real bench, on your desk
     details: Clip a supply, a function generator, a potentiometer, and probes onto the board. Turn a knob and watch the LED respond live. It's the breadboard feeling, on a board you can't breadboard.
   - title: Honest about what it knows
     details: circsim tells you exactly which parts are modeled, which are stubbed, and where the physics stops. A validator you can't trust is worse than none, so it never hides the gaps.
-  - title: A read-only board critic
-    details: Before you send it off, circsim audits the board it did NOT design (floating nets, thin power paths, decoupling too far from the pin) and never touches your files.
+  - title: A read-only audit of the layout
+    details: Before you send it off, circsim checks the board it did NOT design for floating nets, thin power paths, and decoupling too far from the pin, and never touches your files.
 ---
 
 ## Why circsim exists
 
-You described a circuit to an LLM, let [Quilter](https://quilter.ai) route the board, and got back a finished `.kicad_pcb`. Now what? Every simulator on the market (LTspice, Falstad, EveryCircuit, Wokwi, KiCad's own ngspice) wants you to *draw a schematic first*. None of them accept a routed board.
+A routed board is the thing you are about to pay to have made. It might be your own KiCad layout, a contractor's delivery, or the output of an autorouter such as [Quilter](https://quilter.ai). Before you order it, you want to know two things: does the circuit work, and will the layout hold up?
 
-circsim does. It reads the net connectivity straight out of the board file, matches each part to a **SPICE model**, and gives you a bench to poke at it: apply power, read every net's voltage on the copper, drag a scope probe onto an output, and dial a knob while the waveform moves. When something is wrong, like a rail (a power-supply net) sagging to 0.3 V or an op-amp stuck at the rail, you see it *on the physical board you're about to fabricate*.
+Schematic simulators such as LTspice and KiCad's own ngspice integration run on the drawing, and each symbol needs a model assigned before you press go. circsim runs on the board file. It reads the net connectivity out of the `.kicad_pcb`, matches each part to a **SPICE model**, and gives you a bench to poke at it: apply power, read every net's voltage on the copper, drag a scope probe onto an output, and dial a knob while the waveform moves. When something is wrong, like a rail (a power-supply net) sagging to 0.3 V or an op-amp stuck at the rail, you see it *on the physical board you're about to fabricate*.
+
+The second question belongs to the read-only [Board Critic](/concepts/board-critic), which reads the layout for floating nets, clearance, decoupling distance, IR-drop, and ampacity. Know one limit up front: the simulation treats every net as a single ideal node, so copper resistance shows up in the Critic's estimates and not in the simulated voltages. A schematic is optional. If the `.kicad_sch` sits next to the board with the same name, circsim attaches it and uses its `Sim.*` fields and pin names.
 
 > **SPICE** is the decades-old, industry-standard way to simulate an electronic circuit by solving its equations numerically. circsim runs [ngspice](https://ngspice.sourceforge.io/), a well-established open-source SPICE engine (the same one inside KiCad), fully bundled. There's nothing to install.
 

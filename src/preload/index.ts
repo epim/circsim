@@ -12,6 +12,9 @@
  *     openFileDialog(opts)            → open-dialog result (paths + cancelled flag)
  *     readFile(path)                  → UTF-8 file contents as string
  *     fileExists(path)                → true when the path is an existing regular file
+ *     readSidecar / writeSidecar      → the per-board setup file beside a board
+ *     get/add/remove/clearRecentBoards → recent-boards list (userData)
+ *     exportReport(req)               → save dialog + write a markdown or PDF report
  *     getSimPort()                    → Promise<MessagePort>  (the SimHost port2)
  *     onSimhostCrashed(cb)            → register crash callback ({ willRespawn, exitCode, reason })
  *     saveDiagnosticsBundle(req)      → save dialog + zip of decks, log, board hash, versions
@@ -40,6 +43,12 @@ export interface OpenDialogOptions {
 export interface OpenDialogResult {
   cancelled: boolean
   filePaths: string[]
+}
+
+export interface SidecarReadResult {
+  exists: boolean
+  text?: string
+  error?: string
 }
 
 export interface PlatformPaths {
@@ -167,6 +176,59 @@ contextBridge.exposeInMainWorld('circsim', {
    */
   fileExists: async (filePath: string): Promise<boolean> => {
     return ipcRenderer.invoke('circsim:fileExists', filePath) as Promise<boolean>
+  },
+
+  /**
+   * Read the per-board setup file (`<board>.circsim.json`) beside a board.
+   * Never rejects: `{ exists: false }`, `{ exists: true, text }`, or
+   * `{ exists: true, error }` when the file is there but unreadable.
+   */
+  readSidecar: async (boardPath: string): Promise<SidecarReadResult> => {
+    return ipcRenderer.invoke('circsim:readSidecar', boardPath) as Promise<SidecarReadResult>
+  },
+
+  /**
+   * Write the per-board setup file beside a board (atomic). The destination is
+   * derived in the main process from the board path; only `.kicad_pcb` paths are
+   * accepted. `backupExisting` copies the current file to `<file>.bak` first.
+   */
+  writeSidecar: async (
+    boardPath: string,
+    text: string,
+    opts?: { backupExisting?: boolean },
+  ): Promise<{ path: string }> => {
+    return ipcRenderer.invoke('circsim:writeSidecar', boardPath, text, opts) as Promise<{ path: string }>
+  },
+
+  /** Recently opened boards, most recent first (stored under the app's userData). */
+  getRecentBoards: (): Promise<string[]> => {
+    return ipcRenderer.invoke('circsim:getRecentBoards') as Promise<string[]>
+  },
+  /** Record a board as just opened; resolves to the updated list. */
+  addRecentBoard: (boardPath: string): Promise<string[]> => {
+    return ipcRenderer.invoke('circsim:addRecentBoard', boardPath) as Promise<string[]>
+  },
+  /** Drop one board from the recent list; resolves to the updated list. */
+  removeRecentBoard: (boardPath: string): Promise<string[]> => {
+    return ipcRenderer.invoke('circsim:removeRecentBoard', boardPath) as Promise<string[]>
+  },
+  /** Empty the recent-boards list. */
+  clearRecentBoards: (): Promise<string[]> => {
+    return ipcRenderer.invoke('circsim:clearRecentBoards') as Promise<string[]>
+  },
+
+  /**
+   * Export a report: shows the native save dialog and writes the file. For
+   * `format: 'md'` `content` is markdown; for `'pdf'` it is the standalone report
+   * HTML, printed to PDF in a hidden window. Resolves `{ cancelled: true }` when
+   * the dialog is dismissed.
+   */
+  exportReport: (req: {
+    format: 'md' | 'pdf'
+    content: string
+    suggestedName: string
+  }): Promise<{ cancelled: boolean; filePath?: string }> => {
+    return ipcRenderer.invoke('circsim:exportReport', req) as Promise<{ cancelled: boolean; filePath?: string }>
   },
 
   /**
