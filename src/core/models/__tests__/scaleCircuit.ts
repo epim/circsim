@@ -23,6 +23,35 @@ export function bundledLibrary(): LibraryEntry[] {
   return (JSON.parse(text) as { entries: LibraryEntry[] }).entries
 }
 
+/**
+ * `base` followed by filler entries, `factor` times as many entries in all.
+ * Each filler entry carries every match field (MPNs, a value regex, refdes
+ * prefixes and a footprint regex) so a matcher that scans the library per part
+ * does real work on it, yet none of them matches a part of scaleCircuit: the
+ * grown library resolves a scale circuit exactly as `base` does. The growth
+ * tests grow the library with the board, so a parts x library loop shows up
+ * as SCALE squared where a linear one stays near SCALE.
+ */
+export function grownLibrary(base: readonly LibraryEntry[], factor: number): LibraryEntry[] {
+  const prefixes = [['D'], ['Q', 'M'], ['U', 'IC']]
+  const filler: LibraryEntry[] = []
+  for (let i = 0; i < base.length * (factor - 1); i++) {
+    filler.push({
+      id: `filler-${i}`,
+      match: {
+        mpn: [`ZFILL${i}`, `ZFILL${i}-TR`],
+        valueRegex: `(?i)^zfill${i}$`,
+        refdesPrefix: prefixes[i % prefixes.length],
+        footprintRegex: `^Filler:ZF-${i}$`,
+      },
+      model: { type: 'model-card', file: `filler-${i}.lib`, name: `ZFILL${i}` },
+      pinMaps: {},
+      provenance: 'test filler',
+    })
+  }
+  return [...base, ...filler]
+}
+
 interface Kind {
   prefix: string
   value: string

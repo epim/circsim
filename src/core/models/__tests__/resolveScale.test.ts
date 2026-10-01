@@ -11,12 +11,20 @@
  * up to 5x slower than a dev machine, which scales both times alike). The two
  * sizes are timed in alternation, so a burst of load from other test files
  * lands on both alike, and each is scored by its fastest run. Linear code
- * measures about 11 for resolveAll and 14 to 18 for generateDeck at this
- * scale (a little over SCALE: the large board falls out of cache); the
- * quadratic loops measured 48 or more and 69 or more. Each bound sits between
- * the two with at least a 1.5x margin on both sides. The differential tests pin
- * behavior: the indexed library match must agree with a plain scan of the
- * library for every part.
+ * measures about 10.5 for resolveAll and 11 to 18 for generateDeck at this
+ * scale (a little over SCALE: the large board falls out of cache). Each bound
+ * sits between linear and quadratic with at least a 1.5x margin on both sides.
+ *
+ * A library held at one size makes parts x library look linear in parts, so
+ * the resolveAll tests grow the library with the board (grownLibrary): ten
+ * times the parts against ten times the entries. A linear resolveAll grows
+ * about SCALE; one that scans or re-indexes the library per part grows about
+ * SCALE squared. Besides the timing ratio, an operation count pins the same
+ * property without a clock: how often resolveAll reads a library entry's match
+ * fields.
+ *
+ * The differential tests pin behavior: the indexed library match must agree
+ * with a plain scan of the library for every part.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -25,16 +33,49 @@ import { generateDeck } from '../../spicegen/generate'
 import { matchLibraryEntry, buildLibraryIndex, normalizeMpn, type PartDescriptor } from '../libraryMatch'
 import { resolveAll } from '../resolve'
 import type { LibraryEntry } from '../types'
-import { bundledLibrary, scaleCircuit } from './scaleCircuit'
+import { bundledLibrary, grownLibrary, scaleCircuit } from './scaleCircuit'
 
 const SMALL = 1000
 const SCALE = 10
 const LARGE = SMALL * SCALE
 
-/** Linear code measures about 11; the quadratic loops measured 48 and up. */
+/**
+ * Linear code measures about 10.5. Rebuilding the library index per part
+ * measured 77, the net map per part 322.
+ */
 const MAX_RESOLVE_RATIO = 25
-/** Linear code measures 14 to 18; the quadratic loops measured 69 and up. */
+/** Linear code measures 11 to 18; the quadratic loops measured 69 and up. */
 const MAX_DECK_RATIO = 35
+/**
+ * Library match-field reads, 10x board with 10x library over 1x board with 1x
+ * library. The index reads each entry a fixed number of times per resolveAll:
+ * 177 reads against 2013, a ratio of 11.4 (a little over SCALE because every
+ * filler entry carries all four match fields and not every bundled entry
+ * does). Rebuilding the index per part measured 113.6. Deterministic: no clock.
+ */
+const MAX_LIBRARY_READS_RATIO = 2 * SCALE
+
+/**
+ * Copies of `entries` whose `match` getter counts every read. Matching a part
+ * against an entry has to read its match fields, so the count is the number
+ * of entry examinations, whatever lookup structure sits in between.
+ */
+function countingLibrary(entries: readonly LibraryEntry[]): { entries: LibraryEntry[]; reads: () => number } {
+  let reads = 0
+  const counted = entries.map((e) => {
+    const { match, ...rest } = e
+    const copy = { ...rest } as LibraryEntry
+    Object.defineProperty(copy, 'match', {
+      get() {
+        reads++
+        return match
+      },
+      enumerable: true,
+    })
+    return copy
+  })
+  return { entries: counted, reads: () => reads }
+}
 
 /**
  * Fastest run of each of two functions, alternating small and large so both see
@@ -57,6 +98,7 @@ function bestPairMs(small: () => unknown, large: () => unknown, runs = 15): [num
 
 describe('resolveAll and generateDeck growth (issue #76)', () => {
   const library = bundledLibrary()
+  const largeLibrary = grownLibrary(library, SCALE)
   const small = scaleCircuit(SMALL)
   const large = scaleCircuit(LARGE)
 
@@ -64,19 +106,34 @@ describe('resolveAll and generateDeck growth (issue #76)', () => {
     expect(small.parts.length).toBe(SMALL)
     expect(large.parts.length).toBe(LARGE)
     expect(large.nets.length).toBeGreaterThan(LARGE)
+    expect(largeLibrary.length).toBe(library.length * SCALE)
     const res = resolveAll(small, undefined, undefined, library)
     const byTier = new Set(res.map((r) => `${r.status}:${r.tier}`))
     // tier 2 passives, tier 3 library parts, and unresolved leftovers
     expect(byTier.has('ok:2')).toBe(true)
     expect(byTier.has('ok:3')).toBe(true)
     expect(byTier.has('unresolved:6')).toBe(true)
+    // The filler entries match nothing: the grown library resolves alike.
+    expect(resolveAll(small, undefined, undefined, largeLibrary)).toEqual(res)
   })
 
-  it('resolveAll time grows linearly with parts', { timeout: 180_000 }, () => {
-    const run = (c: typeof small) => resolveAll(c, undefined, undefined, library)
-    run(small) // warm the JIT before timing
-    const [tSmall, tLarge] = bestPairMs(() => run(small), () => run(large))
+  it('resolveAll time grows linearly with parts and library together', { timeout: 180_000 }, () => {
+    const runSmall = () => resolveAll(small, undefined, undefined, library)
+    const runLarge = () => resolveAll(large, undefined, undefined, largeLibrary)
+    runSmall() // warm the JIT before timing
+    const [tSmall, tLarge] = bestPairMs(runSmall, runLarge)
     expect(tLarge / tSmall).toBeLessThan(MAX_RESOLVE_RATIO)
+  })
+
+  it('resolveAll reads the library per call, not per part', () => {
+    const smallLib = countingLibrary(library)
+    const smallRes = resolveAll(small, undefined, undefined, smallLib.entries)
+    const largeLib = countingLibrary(largeLibrary)
+    resolveAll(large, undefined, undefined, largeLib.entries)
+    // The counting copies resolve exactly as the plain entries do.
+    expect(smallRes).toEqual(resolveAll(small, undefined, undefined, library))
+    expect(smallLib.reads()).toBeGreaterThan(0)
+    expect(largeLib.reads() / smallLib.reads()).toBeLessThan(MAX_LIBRARY_READS_RATIO)
   })
 
   it('generateDeck time grows linearly with parts', { timeout: 180_000 }, () => {
