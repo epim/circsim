@@ -27,8 +27,22 @@ import type { BigBoardSize } from '../scripts/gen-big-board.mjs'
 
 const APP_MAIN = join(__dirname, '..', 'out', 'main', 'index.js')
 
-/** Pre-fix freeze: about 2100 ms here. Post-fix: about 400 ms. The budget sits between, with room for a slow CI runner. */
-const MAX_FROZEN_MS = 1200
+/**
+ * What is left on the UI thread after the fix is receiving the board
+ * (structured clone) and building the scene, and that scales with the machine: a CI runner measured about 1300 ms where the
+ * developer box measured 360 ms. A fixed millisecond budget therefore either
+ * fails slow runners or lets the regression through on fast ones.
+ *
+ * So the budget is a multiple of this machine's speed, measured in the same
+ * page just before the open: CALIBRATION_MS is how long a fixed clone-and-build
+ * workload takes here. The budget is BUDGET_PER_CALIBRATION times that, which
+ * sits at about 2.5 times the post-fix gap and about 0.6 of the pre-fix freeze
+ * (measured on the developer box: calibration 91 ms, post-fix gap 330-530 ms,
+ * pre-fix freeze 2100 ms). FLOOR_MS stops a very fast machine from setting a
+ * budget below frame-scheduling noise.
+ */
+const BUDGET_PER_CALIBRATION = 14
+const FLOOR_MS = 1000
 
 test.describe('big board open (issue #55)', () => {
   let app: ElectronApplication | undefined
@@ -82,6 +96,38 @@ test.describe('big board open (issue #55)', () => {
       requestAnimationFrame(tick)
     })
 
+    // This machine's speed: the best of five runs of a fixed workload shaped
+    // like the work that stays on the UI thread (clone a board-sized object
+    // graph, then build many small derived records from it).
+    const calibrationMs = await page.evaluate(() => {
+      const make = (): unknown => {
+        const tracks = []
+        for (let i = 0; i < 80000; i++) {
+          tracks.push({ net: i % 900, layer: i % 2 ? 'F.Cu' : 'B.Cu', w: 0.25, a: { x: i * 0.1, y: i * 0.2 }, b: { x: i * 0.3, y: i * 0.1 } })
+        }
+        return { tracks }
+      }
+      const src = make()
+      let best = Infinity
+      for (let run = 0; run < 5; run++) {
+        const t = performance.now()
+        const copy = structuredClone(src) as { tracks: { net: number; a: { x: number; y: number }; b: { x: number; y: number } }[] }
+        const verts = new Float32Array(copy.tracks.length * 4)
+        let acc = 0
+        copy.tracks.forEach((tr, i) => {
+          verts[i * 4] = tr.a.x
+          verts[i * 4 + 1] = tr.a.y
+          verts[i * 4 + 2] = tr.b.x
+          verts[i * 4 + 3] = tr.b.y
+          acc += tr.net
+        })
+        if (acc < 0) throw new Error('unreachable')
+        best = Math.min(best, performance.now() - t)
+      }
+      return best
+    })
+    const budgetMs = Math.max(FLOOR_MS, calibrationMs * BUDGET_PER_CALIBRATION)
+
     const t0 = Date.now()
     await page.locator('[data-testid="open-board-header-btn"]').click()
     await expect(page.locator('[data-testid="part-row"]').first()).toBeVisible({ timeout: 120_000 })
@@ -99,9 +145,10 @@ test.describe('big board open (issue #55)', () => {
     // eslint-disable-next-line no-console
     console.log(
       `[big-board-open] ${(text.length / 1e6).toFixed(1)} MB: board visible ${boardVisibleMs} ms, ` +
-        `critic shown ${settledMs} ms, longest frame gap ${maxGap.toFixed(0)} ms`,
+        `critic shown ${settledMs} ms, longest frame gap ${maxGap.toFixed(0)} ms, ` +
+        `calibration ${calibrationMs.toFixed(1)} ms, budget ${budgetMs.toFixed(0)} ms`,
     )
 
-    expect(maxGap).toBeLessThan(MAX_FROZEN_MS)
+    expect(maxGap).toBeLessThan(budgetMs)
   })
 })
