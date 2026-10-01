@@ -1491,8 +1491,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":4.32,"abs":0.12},
-      "source": "74HC00 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance",
-      "knownFailing": "#12"
+      "source": "74HC00 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance"
     },
     {
       "id": "logic-74hc04-voh-4ma",
@@ -1503,8 +1502,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":4.32,"abs":0.12},
-      "source": "74HC04 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance",
-      "knownFailing": "#12"
+      "source": "74HC04 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance"
     },
     {
       "id": "logic-74hc08-voh-4ma",
@@ -1515,8 +1513,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":4.32,"abs":0.12},
-      "source": "74HC08 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance",
-      "knownFailing": "#12"
+      "source": "74HC08 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance"
     },
     {
       "id": "logic-74hc14-voh-4ma",
@@ -1527,8 +1524,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":4.32,"abs":0.12},
-      "source": "74HC14 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance",
-      "knownFailing": "#12"
+      "source": "74HC14 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance"
     },
     {
       "id": "logic-74hc32-voh-4ma",
@@ -1539,8 +1535,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":4.32,"abs":0.12},
-      "source": "74HC32 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance",
-      "knownFailing": "#12"
+      "source": "74HC32 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance"
     },
     {
       "id": "logic-74hc86-voh-4ma",
@@ -1551,8 +1546,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":4.32,"abs":0.12},
-      "source": "74HC86 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance",
-      "knownFailing": "#12"
+      "source": "74HC86 datasheet (NXP/TI), Vcc=4.5 V, 25 C: VOH 4.32 V typ (4.18 V min) at IO=4 mA; a real output has tens of ohms of source resistance"
     },
     {
       "id": "logic-74hc74-preset",
@@ -1563,8 +1557,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1q)","at":0.0000018},
       "expect": {"min":4.4,"max":4.5},
-      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: PRE_N low forces Q high asynchronously",
-      "knownFailing": "#85"
+      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: PRE_N low forces Q high asynchronously"
     },
     {
       "id": "logic-74hc74-clear",
@@ -1575,8 +1568,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1q)","at":0.0000018},
       "expect": {"min":0,"max":0.1},
-      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: CLR_N low forces Q low asynchronously",
-      "knownFailing": "#85"
+      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: CLR_N low forces Q low asynchronously"
     },
     {
       "id": "logic-74hc74-clocked-d1",
@@ -1587,8 +1579,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1q)","at":0.0000018},
       "expect": {"min":4.4,"max":4.5},
-      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: Q follows D on the rising clock edge",
-      "knownFailing": "#85"
+      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: Q follows D on the rising clock edge"
     },
     {
       "id": "logic-74hc164-shift-q7",
@@ -1599,8 +1590,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"10u"},
       "measure": {"expr":"v(q7)","at":0.0000098},
       "expect": {"min":4.4,"max":4.5},
-      "source": "74HC164 datasheet (NXP/TI), Vcc=4.5 V, 25 C: data at A and B appears at Q7 after eight rising clocks",
-      "knownFailing": "#85"
+      "source": "74HC164 datasheet (NXP/TI), Vcc=4.5 V, 25 C: data at A and B appears at Q7 after eight rising clocks"
     },
     {
       "id": "logic-74hc164-clear-q0",
@@ -1611,8 +1601,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"10u"},
       "measure": {"expr":"v(q0)","at":0.0000098},
       "expect": {"min":0,"max":0.1},
-      "source": "74HC164 datasheet (NXP/TI), Vcc=4.5 V, 25 C: master reset clears all outputs",
-      "knownFailing": "#85"
+      "source": "74HC164 datasheet (NXP/TI), Vcc=4.5 V, 25 C: master reset clears all outputs"
     },
     {
       "id": "logic-74hc595-latch-q7",
@@ -1623,8 +1612,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"15u"},
       "measure": {"expr":"v(q7)","at":0.000014},
       "expect": {"min":4.4,"max":4.5},
-      "source": "74HC595 datasheet (NXP/TI), Vcc=4.5 V, 25 C: STCP rising edge copies the shift register to the output latch",
-      "knownFailing": "#85"
+      "source": "74HC595 datasheet (NXP/TI), Vcc=4.5 V, 25 C: STCP rising edge copies the shift register to the output latch"
     },
     {
       "id": "logic-74hc595-reset-q0",
@@ -1635,8 +1623,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"15u"},
       "measure": {"expr":"v(q0)","at":0.000014},
       "expect": {"min":0,"max":0.1},
-      "source": "74HC595 datasheet (NXP/TI), Vcc=4.5 V, 25 C: MR_N low clears the shift register",
-      "knownFailing": "#85"
+      "source": "74HC595 datasheet (NXP/TI), Vcc=4.5 V, 25 C: MR_N low clears the shift register"
     },
     {
       "id": "logic-cd4011-voh",
@@ -1723,8 +1710,8 @@
       "setup": {"kind":"logic","vcc":10,"inputs":{"1A":0,"1B":1},"loadsOhms":{"1Y":2200}},
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"-i(vpsu_vcc)","at":0.0000018},
-      "expect": {"typ":0.004545,"rel":0.05},
-      "source": "Current conservation at the supply pin (issue #2): Iload = 10 V / 2.2 kohm"
+      "expect": {"typ":0.00409,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): Iload = Vpad / 2.2 kohm, with the pad sagging to about 9 V through the output stage resistance (issue #12, see logic-cd4011-voh-drive)"
     },
     {
       "id": "logic-cd40106-icc-loaded",
@@ -1734,8 +1721,8 @@
       "setup": {"kind":"logic","vcc":10,"inputs":{"1A":0},"loadsOhms":{"1Y":2200}},
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"-i(vpsu_vcc)","at":0.0000018},
-      "expect": {"typ":0.004545,"rel":0.05},
-      "source": "Current conservation at the supply pin (issue #2): Iload = 10 V / 2.2 kohm"
+      "expect": {"typ":0.00409,"rel":0.05},
+      "source": "Current conservation at the supply pin (issue #2): Iload = Vpad / 2.2 kohm, with the pad sagging to about 9 V through the output stage resistance (issue #12, see logic-cd4011-voh-drive)"
     },
     {
       "id": "logic-cd4011-voh-drive",
@@ -1746,8 +1733,7 @@
       "analysis": {"type":"tran","step":"10n","stop":"2u"},
       "measure": {"expr":"v(1y)","at":0.0000018},
       "expect": {"typ":9,"abs":0.5},
-      "source": "CD4011 datasheet: VOH 9.5 V min at IOH=-1.6 mA, VDD=10 V; output resistance of a few hundred ohms",
-      "knownFailing": "#12"
+      "source": "CD4011 datasheet: VOH 9.5 V min at IOH=-1.6 mA, VDD=10 V; output resistance of a few hundred ohms"
     }
   ]
 }
