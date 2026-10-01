@@ -2,7 +2,7 @@
  * test/corpus/op.corpus.test.ts
  *
  * The generated deck of every corpus board goes through the REAL bundled
- * libngspice for an operating point, inside a per-board time budget. Asserts the
+ * libngspice for an operating point. Asserts the
  * solve completes, every returned value is finite (no NaN), and the bench supply
  * node is present and physically sane (0 < V <= the source voltage). It does not
  * assert that the numbers are right: that is what the characterization suite
@@ -28,8 +28,11 @@ if (!haveNgspice) {
   console.warn('[corpus] resources/ngspice/<platform> missing: the corpus operating-point suite is SKIPPED (run npm run fetch:ngspice)')
 }
 
-/** Wall-clock ceiling for load + op on any one corpus board. */
-const OP_BUDGET_MS = 60_000
+/**
+ * Hang guard only (the it() timeout). Elapsed time is recorded as a metric, never
+ * asserted: CI runners are far slower than a dev machine and an absolute bound flakes.
+ */
+const OP_TIMEOUT_MS = 90_000
 const SUPPLY_VOLTS = 5
 
 const boards = corpusBoards().filter((b) => !b.knownFailing && b.op !== false)
@@ -37,7 +40,7 @@ const boards = corpusBoards().filter((b) => !b.knownFailing && b.op !== false)
 describe.skipIf(!haveNgspice)('corpus operating point (real ngspice)', () => {
   const opMetrics: Record<string, { opMs: number; supplyNode: string | null; supplyVolts: number | null; values: number }> = {}
 
-  it.each(boards)('$id: deck solves an op inside the time budget with finite values', async (entry: CorpusEntry) => {
+  it.each(boards)('$id: deck solves an op with finite values', async (entry: CorpusEntry) => {
     const result = runPipeline(readCorpusBoard(entry), { title: `${entry.id}.kicad_pcb`, supplyVolts: SUPPLY_VOLTS })
     if (!result.deck) {
       // No ground-like net: nothing a bench could reference. Recorded, not failed.
@@ -58,7 +61,6 @@ describe.skipIf(!haveNgspice)('corpus operating point (real ngspice)', () => {
       expect(entries.length, 'op returned node values').toBeGreaterThan(0)
       const nonFinite = entries.filter(([, v]) => !Number.isFinite(v)).map(([k]) => k)
       expect(nonFinite, 'non-finite node values').toEqual([])
-      expect(opMs, 'load + op wall time').toBeLessThan(OP_BUDGET_MS)
 
       let supplyNode: string | null = null
       let supplyVolts: number | null = null
@@ -74,7 +76,7 @@ describe.skipIf(!haveNgspice)('corpus operating point (real ngspice)', () => {
     } finally {
       await host.dispose()
     }
-  }, OP_BUDGET_MS + 30_000)
+  }, OP_TIMEOUT_MS)
 
   afterAll(() => {
     mkdirSync(join(METRICS_DIR, 'metrics'), { recursive: true })
