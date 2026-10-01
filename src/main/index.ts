@@ -63,6 +63,17 @@ function docPath(...parts: string[]): string {
   return app.isPackaged ? join(process.resourcesPath, 'docs', ...parts) : join(repoRoot, 'docs', ...parts)
 }
 
+// ─── GPU fallback ─────────────────────────────────────────────────────────────
+
+// The Chromium in Electron 44 no longer falls back to SwiftShader for WebGL
+// on machines without a usable GPU (headless Linux CI under xvfb, VMs, remote
+// desktops): WebGL2 is blocklisted, `new WebGLRenderer` in the viewport throws,
+// and no board ever renders. Opting in to the software rasterizer restores the
+// older fallback behaviour. It only takes effect when no hardware GPU path is
+// available, and the app loads only local content, so the "unsafe" caveat on
+// the flag (untrusted web content) does not apply. Must run before app ready.
+app.commandLine.appendSwitch('enable-unsafe-swiftshader')
+
 // ─── Window creation ──────────────────────────────────────────────────────────
 
 function createWindow(): BrowserWindow {

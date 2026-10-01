@@ -33,7 +33,7 @@ import { AppStoreProvider, useApp, useAppStoreApi } from './store/storeContext'
 import OpenProgressBar from './boardOpen/OpenProgressBar'
 import type { AppStore } from './store/appStore'
 import { resolutionSummary } from './store/appStore'
-import { openProjectFromPath, classifyFile } from './ipc/fileOpen'
+import { openProjectFromPath, classifyFile, droppedFilePath } from './ipc/fileOpen'
 import type { PickEvent } from './viewport/picking'
 import type { SceneManager } from './viewport/scene'
 import type { OverlayMode } from './viewport/overlay'
@@ -270,8 +270,9 @@ function Shell(): React.ReactElement {
       // A board file always takes priority (opens/replaces the project).
       const boardFile = files.find(f => f.name.endsWith('.kicad_pcb'))
       if (boardFile) {
-        // Electron File objects expose a real path; fall back to text() otherwise.
-        const path = (boardFile as File & { path?: string }).path
+        // Electron 32 removed File.path; the preload resolves the real path via
+        // webUtils.getPathForFile. Fall back to text() when there is none.
+        const path = droppedFilePath(boardFile, window.circsim.getPathForFile)
         if (path) {
           await openBoardPath(path)
         } else {
@@ -284,7 +285,7 @@ function Shell(): React.ReactElement {
       // No board file: a dropped .kicad_sch attaches to the already-loaded board.
       const schFile = files.find(f => classifyFile(f.name) === 'schematic')
       if (schFile && store.getState().board) {
-        const path = (schFile as File & { path?: string }).path
+        const path = droppedFilePath(schFile, window.circsim.getPathForFile)
         if (path) {
           await store.getState().attachSchematicFromPath(path)
         } else {

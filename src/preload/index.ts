@@ -12,6 +12,7 @@
  *     openFileDialog(opts)            → open-dialog result (paths + cancelled flag)
  *     readFile(path)                  → UTF-8 file contents as string
  *     fileExists(path)                → true when the path is an existing regular file
+ *     getPathForFile(file)            → absolute path of a dropped File ('' when none)
  *     readSidecar / writeSidecar      → the per-board setup file beside a board
  *     get/add/remove/clearRecentBoards → recent-boards list (userData)
  *     exportReport(req)               → save dialog + write a markdown or PDF report
@@ -30,7 +31,7 @@
  *    from Main (Spec §6.1).
  */
 
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -181,6 +182,20 @@ contextBridge.exposeInMainWorld('circsim', {
    */
   fileExists: async (filePath: string): Promise<boolean> => {
     return ipcRenderer.invoke('circsim:fileExists', filePath) as Promise<boolean>
+  },
+
+  /**
+   * Absolute on-disk path of a File from a drop or file input, or '' when the
+   * File has no path (built in JS). Electron 32 removed the nonstandard
+   * File.path; webUtils.getPathForFile is the replacement and is only callable
+   * from the preload. Never throws.
+   */
+  getPathForFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
   },
 
   /**

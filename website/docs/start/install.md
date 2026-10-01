@@ -65,5 +65,6 @@ Don't have a board handy? That's fine: circsim ships with two sample projects yo
 ## System requirements
 
 - A GPU that supports WebGL2 (any integrated graphics from the last decade). The 3D board renders at 60 fps on integrated graphics.
+  Without a usable GPU (some virtual machines, remote desktops), circsim falls back to a software renderer. If WebGL cannot start at all, the 3D view shows a notice and the parts list, bench, and simulation results keep working.
 - ~250 MB of disk for the installed app.
 - No internet connection required, ever.
