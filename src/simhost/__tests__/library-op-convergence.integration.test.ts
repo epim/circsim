@@ -291,6 +291,21 @@ async function runTran(
   }
 }
 
+/**
+ * The deck with every `.save` line replaced by one `.save` of the given
+ * vectors, so a long transient keeps only what the caller reads in ngspice's
+ * memory (the scale vector is always kept). Numerics are unaffected.
+ */
+function saveOnly(deck: string[], vectors: string[]): string[] {
+  const at = deck.findIndex((l) => /^\.save\s/i.test(l))
+  if (at < 0) throw new Error('deck has no .save line to replace')
+  const rest = deck.filter((l) => !/^\.save\s/i.test(l))
+  // Keep the .save where the first one was (before .end), now one line.
+  const insertAt = deck.slice(0, at).filter((l) => !/^\.save\s/i.test(l)).length
+  rest.splice(insertAt, 0, `.save ${vectors.join(' ')}`)
+  return rest
+}
+
 describe.skipIf(!haveNgspice)('the shipped blinker-555 sample runs at fine solver steps (review of PR #118)', () => {
   // A function generator above 500 Hz sets the step below 10 us. With a smooth
   // regenerative latch memory the sample aborted with "Timestep too small ...
@@ -298,8 +313,23 @@ describe.skipIf(!haveNgspice)('the shipped blinker-555 sample runs at fine solve
   // or its second (1.347 s, 5 us steps): THRES creeps through the comparator
   // band at about 3 V/s, the latch branch folded, and Newton could not step past
   // the fold. Each run covers the crossing that failed.
+  //
+  // The test reads only the scale and `out`, so the deck saves only `out`. The
+  // generated deck says `.save all` plus a branch current per device, which at
+  // 280k points (5 us over 1.4 s) is 25 vectors of doubles that ngspice grows
+  // point by point. On the macOS CI runners that run aborted with ngspice's
+  // "Error: memory required (Id Bytes)" / "cannot recover and awaits to be reset
+  // or detached" (the %Id is an unexpanded MSVC size_t format, so the byte count
+  // is not printed), and the same file's 2 us run before it had already left
+  // about 290 MB resident in the worker (measured on Windows: RSS 87 MB before
+  // the first run, 289 MB after its dispose, 466 MB at the end of the second).
+  // Windows and Linux ride that out; macOS does not. One saved vector is about
+  // 1/25 of that, and the step, the stop time and the edge assertions are unchanged.
   const deck = haveNgspice
-    ? sampleDeck({ board: 'blinker-555.kicad_pcb', schematic: 'blinker-555.kicad_sch', supplyNet: 'VCC', volts: 5 })
+    ? saveOnly(
+        sampleDeck({ board: 'blinker-555.kicad_pcb', schematic: 'blinker-555.kicad_sch', supplyNet: 'VCC', volts: 5 }),
+        ['out'],
+      )
     : []
   // From a discharged 10 uF: high for ln(3)*(10k+47k)*10u = 0.626 s, then low for
   // ln(2)*47k*10u = 0.326 s and high for ln(2)*57k*10u = 0.395 s.
