@@ -5,12 +5,24 @@
  * and writes PNGs into website/docs/public/img/ for the VitePress docs.
  * Run with: npx playwright test e2e/screenshots.spec.ts
  *
+ * Two tests live here:
+ *   1. "capture docs screenshots": the nine docs-site images (1280x800 window).
+ *   2. "capture README hero and demo gif": the README hero still and a short
+ *      GIF of a board going from open to energized to a Critic finding, taken
+ *      in a larger window so the 3D board is legible. The GIF is cut from a
+ *      Playwright video with ffmpeg; set CIRCSIM_FFMPEG to its path if it is
+ *      not on PATH. Without ffmpeg the still is written and the GIF is skipped.
+ *
  * The app must be built first (npm run build), same as the other E2E specs.
+ * Only the project's own boards (the bundled First Light and 555 samples) are
+ * ever captured: third-party corpus boards are never rendered into the repo.
  */
 
 import { test, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { join } from 'path'
-import { mkdirSync } from 'fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'fs'
+import { tmpdir } from 'os'
+import { spawnSync } from 'child_process'
 
 const APP_MAIN = join(__dirname, '..', 'out', 'main', 'index.js')
 const IMG_DIR = join(__dirname, '..', 'website', 'docs', 'public', 'img')
@@ -136,5 +148,122 @@ test('capture docs screenshots', async () => {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.log('[shot] sample sequence error:', (e as Error).message)
+  }
+})
+
+const HERO_W = 1600
+const HERO_H = 1000
+const GIF_NAME = 'demo-open-energize-critic.gif'
+
+/** Resize the first window to the hero size. Call after firstWindow() so the window exists. */
+async function resizeWindow(app: ElectronApplication): Promise<void> {
+  await app.evaluate(
+    ({ BrowserWindow }, size) => {
+      const win = BrowserWindow.getAllWindows()[0]
+      win.setContentSize(size.w, size.h)
+      win.center()
+    },
+    { w: HERO_W, h: HERO_H },
+  )
+}
+
+/** Cut a trimmed, palette-optimised GIF out of a recorded video. Returns false if ffmpeg is unavailable. */
+function videoToGif(video: string, gif: string, startSeconds: number): boolean {
+  const ffmpeg = process.env['CIRCSIM_FFMPEG'] || 'ffmpeg'
+  const filter =
+    'fps=10,scale=960:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96[p];[b][p]paletteuse=dither=bayer:bayer_scale=4'
+  const r = spawnSync(
+    ffmpeg,
+    ['-y', '-ss', startSeconds.toFixed(2), '-i', video, '-vf', filter, '-loop', '0', gif],
+    { encoding: 'utf8' },
+  )
+  return r.status === 0
+}
+
+test('capture README hero and demo gif', async () => {
+  test.skip(!!process.env['CI'], 'screenshot capture is a local docs tool')
+  mkdirSync(IMG_DIR, { recursive: true })
+  test.setTimeout(180_000)
+
+  const videoDir = mkdtempSync(join(tmpdir(), 'circsim-demo-'))
+  const app = await electron.launch({
+    args: [APP_MAIN],
+    env: { ...process.env, CIRCSIM_E2E: '1' },
+    recordVideo: { dir: videoDir, size: { width: HERO_W, height: HERO_H } },
+  })
+  const page = await app.firstWindow()
+  // Playwright's video clock starts when the page is created, which is just
+  // before firstWindow() resolves. Measure from here, not from process spawn:
+  // spawn-to-window time (seconds of Electron startup) is not in the video, and
+  // using it cuts the start screen and the Open-sample click out of the GIF.
+  const videoT0 = Date.now()
+  await resizeWindow(app)
+  await page.waitForLoadState('load')
+
+  let startOffset = 0
+  try {
+    // Start screen, then open the bundled 555 sample.
+    await page.locator('[data-testid="open-sample-btn"]').waitFor({ timeout: 15_000 })
+    // Begin the GIF just before the start screen is ready (the video opens on a blank frame),
+    // then hold on it so the viewer sees the open step before the click.
+    startOffset = Math.max(0, (Date.now() - videoT0) / 1000 - 0.1)
+    await page.waitForTimeout(1500)
+    await page.locator('[data-testid="open-sample-btn"]').click()
+    await page.locator('[data-testid="energize-btn"]').waitFor({ timeout: 15_000 })
+    await page.locator('[data-testid="part-row"]').first().waitFor({ timeout: 15_000 })
+    await page.waitForTimeout(1500)
+
+    // Energize: voltage overlay, then the read-only Board Critic findings.
+    await page.locator('[data-testid="energize-btn"]').click()
+    await page.waitForTimeout(6000)
+    await page.waitForTimeout(2500)
+    await page.screenshot({ path: join(IMG_DIR, 'hero-sample-critic.png') })
+    // eslint-disable-next-line no-console
+    console.log('[shot] hero-sample-critic.png')
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.log('[shot] sample hero sequence error:', (e as Error).message)
+  }
+  await app.close()
+
+  // The video is finalised on close.
+  const webm = readdirSync(videoDir).find((f) => f.endsWith('.webm'))
+  if (webm && statSync(join(videoDir, webm)).size > 0) {
+    const ok = videoToGif(join(videoDir, webm), join(IMG_DIR, GIF_NAME), startOffset)
+    // eslint-disable-next-line no-console
+    console.log(ok ? `[shot] ${GIF_NAME}` : '[shot] gif skipped: ffmpeg failed or not found')
+  } else {
+    // eslint-disable-next-line no-console
+    console.log('[shot] gif skipped: no video was recorded')
+  }
+  rmSync(videoDir, { recursive: true, force: true })
+
+  // First Light still at the same size: the LED glow payoff.
+  try {
+    const r2 = await electron.launch({ args: [APP_MAIN], env: { ...process.env, CIRCSIM_E2E: '1' } })
+    const p2 = await r2.firstWindow()
+    await resizeWindow(r2)
+    await p2.waitForLoadState('load')
+    await p2.locator('[data-testid="open-first-light-btn"]').waitFor({ timeout: 15_000 })
+    await p2.locator('[data-testid="open-first-light-btn"]').click()
+    await p2.locator('[data-testid="energize-btn"]').waitFor({ timeout: 15_000 })
+    await p2.locator('[data-testid="part-row"]').first().waitFor({ timeout: 15_000 })
+    await p2.locator('[data-testid="energize-btn"]').click()
+    await p2.waitForFunction(
+      () => {
+        const w = window as unknown as { __circsimLedGlow?: { max: number } }
+        return w.__circsimLedGlow !== undefined && w.__circsimLedGlow.max > 0.05
+      },
+      undefined,
+      { timeout: 30_000, polling: 250 },
+    )
+    await p2.waitForTimeout(1500)
+    await p2.screenshot({ path: join(IMG_DIR, 'hero-first-light.png') })
+    // eslint-disable-next-line no-console
+    console.log('[shot] hero-first-light.png')
+    await r2.close()
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.log('[shot] first-light hero error:', (e as Error).message)
   }
 })

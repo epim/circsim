@@ -45,6 +45,13 @@ interface CircsimModelLibrary {
   texts: Record<string, string>
 }
 
+interface CircsimSidecarReadResult {
+  exists: boolean
+  text?: string
+  /** The file exists but could not be read. */
+  error?: string
+}
+
 declare global {
   /**
    * Compile-time constant injected by electron.vite.config.ts (renderer
@@ -93,6 +100,30 @@ declare global {
        * `texts` for the deck generator to inline .subckt/.model definitions.
        */
       getModelLibrary(): Promise<CircsimModelLibrary>
+      /**
+       * Read the per-board setup file (`<board>.circsim.json`) beside a board.
+       * Never rejects. Issue #27.
+       */
+      readSidecar(boardPath: string): Promise<CircsimSidecarReadResult>
+      /**
+       * Write the setup file beside a board (atomic). `backupExisting` keeps the
+       * previous file as `<file>.bak`. Rejects on failure.
+       */
+      writeSidecar(boardPath: string, text: string, opts?: { backupExisting?: boolean }): Promise<{ path: string }>
+      /** Recently opened boards, most recent first. */
+      getRecentBoards(): Promise<string[]>
+      addRecentBoard(boardPath: string): Promise<string[]>
+      removeRecentBoard(boardPath: string): Promise<string[]>
+      clearRecentBoards(): Promise<string[]>
+      /**
+       * Save a report through the native save dialog. `pdf` content is the
+       * standalone report HTML, printed to PDF by the main process.
+       */
+      exportReport(req: {
+        format: 'md' | 'pdf'
+        content: string
+        suggestedName: string
+      }): Promise<{ cancelled: boolean; filePath?: string }>
     }
   }
 }

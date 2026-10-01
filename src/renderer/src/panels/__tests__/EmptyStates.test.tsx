@@ -55,3 +55,40 @@ describe('NoBoardState — first-run button hierarchy (Gemini finding 2)', () =>
     expect(html.indexOf('open-first-light-btn')).toBeLessThan(html.indexOf('open-board-btn'))
   })
 })
+
+describe('NoBoardState: recent boards (issue #27)', () => {
+  it('is hidden when there are no recent boards or no open handler', () => {
+    expect(render()).not.toContain('recent-boards')
+    expect(
+      renderToStaticMarkup(
+        <NoBoardState onOpen={noop} onOpenSample={noop} onOpenFirstLight={noop} recent={[]} onOpenRecent={noop} />,
+      ),
+    ).not.toContain('recent-boards')
+  })
+
+  it('lists recent boards newest first with file name and folder', () => {
+    const html = renderToStaticMarkup(
+      <NoBoardState
+        onOpen={noop}
+        onOpenSample={noop}
+        onOpenFirstLight={noop}
+        recent={['C:/work/blinker.kicad_pcb', '/home/u/amp.kicad_pcb']}
+        onOpenRecent={noop}
+        onClearRecent={noop}
+      />,
+    )
+    expect(html).toContain('data-testid="recent-boards"')
+    expect(html.match(/data-testid="recent-board"/g)).toHaveLength(2)
+    expect(html.indexOf('blinker.kicad_pcb')).toBeLessThan(html.indexOf('amp.kicad_pcb'))
+    expect(html).toContain('/home/u')
+    expect(html).toContain('data-testid="recent-clear-btn"')
+  })
+
+  it('shows a notice when a recent board could not be opened', () => {
+    const html = renderToStaticMarkup(
+      <NoBoardState onOpen={noop} onOpenSample={noop} onOpenFirstLight={noop} notice="Could not open x" />,
+    )
+    expect(html).toContain('data-testid="recent-notice"')
+    expect(html).toContain('Could not open x')
+  })
+})

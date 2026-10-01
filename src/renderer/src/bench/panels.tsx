@@ -246,8 +246,11 @@ export function GroundPanel({
 
 // ── styles ───────────────────────────────────────────────────────────────────
 
+// Compact single-row face (issue #33): jacks then controls left to right, so a
+// panel is about 100 px tall instead of 250 and the shelf stays short. The shelf
+// scrolls horizontally when the panels do not fit.
 export const faceStyle: React.CSSProperties = {
-  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+  display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12,
   padding: '8px 10px', minWidth: 96,
 }
 const jackRowStyle: React.CSSProperties = { display: 'flex', gap: 10 }

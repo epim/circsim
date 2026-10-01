@@ -18,8 +18,13 @@
  *   applyNetVoltages for 500 nets ≤ 16 ms (pure color-write, no GL).
  *
  * Design:
- *   - Each net has one MeshStandardMaterial cloned from the copper base.
- *   - In voltage mode we directly write .color on each net's material.
+ *   - Tint targets are abstracted as a NetTintSink. The viewport passes the
+ *     NetTintTable (one float texture holding every net's color, #57), so a
+ *     tint update is a handful of float writes plus one texture upload.
+ *   - A Map of per-net materials is still accepted and adapted; it writes
+ *     .color only. Color is a uniform three.js refreshes on every draw, so no
+ *     code here sets material.needsUpdate (#77).
+ *   - In voltage mode we write each net's color.
  *   - In realistic mode we restore the copper base color.
  *   - Viridis ramp, violet at min voltage to yellow at max (spec §10.2, issue #70).
  *
@@ -61,6 +66,26 @@ export interface LegendData {
   maxVolts: number
   /** Ordered array of stops from min (violet) to max (yellow). */
   stops: LegendStop[]
+}
+
+/** Where the overlay writes per-net colors. NetTintTable implements this. */
+export interface NetTintSink {
+  /** Set one net's color. Unknown nets are ignored. */
+  setColor(netId: number, color: THREE.Color): void
+  /** Restore every net to the given color. */
+  resetColors(color: THREE.Color): void
+}
+
+/** Adapt a Map of per-net materials to a NetTintSink (writes .color only). */
+function materialMapSink(netMaterials: Map<number, THREE.MeshStandardMaterial>): NetTintSink {
+  return {
+    setColor(netId, color) {
+      netMaterials.get(netId)?.color.copy(color)
+    },
+    resetColors(color) {
+      for (const mat of netMaterials.values()) mat.color.copy(color)
+    },
+  }
 }
 
 export interface OverlayController {
@@ -110,12 +135,13 @@ function buildLegend(minVolts: number, maxVolts: number): LegendData {
 /**
  * Create an OverlayController.
  *
- * @param netMaterials  Map from netId to the MeshStandardMaterial for that net's copper.
- *                      scene.ts provides this after buildCopper().
+ * @param target  The net tint table (scene.ts), or a Map from netId to that net's
+ *                MeshStandardMaterial.
  */
 export function createOverlayController(
-  netMaterials: Map<number, THREE.MeshStandardMaterial>
+  target: NetTintSink | Map<number, THREE.MeshStandardMaterial>
 ): OverlayController {
+  const sink: NetTintSink = target instanceof Map ? materialMapSink(target) : target
   let mode: OverlayMode = 'realistic'
   let legend: LegendData | null = null
 
@@ -123,10 +149,7 @@ export function createOverlayController(
 
   /** Restore all net materials to the copper base color. */
   function restoreCopper(): void {
-    for (const mat of netMaterials.values()) {
-      mat.color.copy(COPPER_COLOR)
-      mat.needsUpdate = true
-    }
+    sink.resetColors(COPPER_COLOR)
   }
 
   // ── public API ──────────────────────────────────────────────────────────────
@@ -159,16 +182,12 @@ export function createOverlayController(
       const col = new THREE.Color()
 
       for (const [netId, volts] of voltages) {
-        const mat = netMaterials.get(netId)
-        if (!mat) continue
-
         // Clamp t to [0, 1]
         const t = Math.max(0, Math.min(1, (volts - minVolts) / safeRange))
 
         // Viridis ramp, violet (min) to yellow (max)
         setRampColor(col, t)
-        mat.color.copy(col)
-        mat.needsUpdate = true
+        sink.setColor(netId, col)
       }
     },
 

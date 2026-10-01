@@ -4,7 +4,7 @@ Before circsim can solve a circuit it needs to know two things: which net is **g
 
 ## Designate ground
 
-Ground becomes SPICE node `0`: the reference for the whole simulation. A circuit with no ground can't be solved, so **Power On stays disabled until ground is set** (Energize sets it for you). Until then the panel reads *"Not set: Power On and Run stay disabled until you pick one"*.
+Ground becomes SPICE node `0`: the reference for the whole simulation. A circuit with no ground can't be solved, so **Power On and Run show a "Designate a ground net first" card until ground is set** (Energize sets it for you when it can recognise a ground name; on a board with only auto-generated net names such as `Net-(R1-Pad1)` it shows the same card and waits for you to pick the net).
 
 circsim suggests a ground net from the net names (`GND`, `AGND`, `VSS`, `0V`, …). To confirm or change it:
 
