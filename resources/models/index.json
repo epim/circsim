@@ -1,5 +1,5 @@
 {
-  "$comment": "Provenance: bundled SPICE model library index for circsim, MIT. Every model file referenced here carries its own 'Provenance:' header and was written in-house from datasheet parameters (no vendor model text). PinMap node positions are 1-based and refer to the device's terminal order: diode/LED = 'anode cathode' (1=anode, 2=cathode); BJT = 'collector base emitter' (1=C, 2=B, 3=E); VDMOS = 'drain gate source' (1=D, 2=G, 3=S). Pad numbers come from the KiCad footprint. KiCad-official diode footprints (D_*) put pad-1 = cathode; JLC/EasyEDA-origin diode footprints (JLC lib prefix or bare dimension-pattern names like SMC_L7.1-W6.2) put pad-1 = ANODE, hence the anode-first '^JLC|_L…-W…' key ordered first on every two-terminal diode entry (first pinMaps key match wins; verified on the led_lantern rev B design files, D7).",
+  "$comment": "Provenance: bundled SPICE model library index for circsim, MIT. Every model file referenced here carries its own 'Provenance:' header and was written in-house from datasheet parameters (no vendor model text); the discrete BJT, diode, TVS and LED cards are derived from datasheet operating points by scripts/fit-model-cards.mjs and checked against known third-party library cards by library-fingerprint.test.ts. PinMap node positions are 1-based and refer to the device's terminal order: diode/LED = 'anode cathode' (1=anode, 2=cathode); BJT = 'collector base emitter' (1=C, 2=B, 3=E); VDMOS = 'drain gate source' (1=D, 2=G, 3=S). Pad numbers come from the KiCad footprint. KiCad-official diode footprints (D_*) put pad-1 = cathode; JLC/EasyEDA-origin diode footprints (JLC lib prefix or bare dimension-pattern names like SMC_L7.1-W6.2) put pad-1 = ANODE, hence the anode-first '^JLC|_L…-W…' key ordered first on every two-terminal diode entry (first pinMaps key match wins; verified on the led_lantern rev B design files, D7).",
   "entries": [
     {
       "id": "diode-1n4148",
@@ -14,7 +14,7 @@
         "D_(SOD|SMA|SMB|0805|MELF|DO-35|DO-204|DO-41).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim from 1N4148 datasheet parameters (Vf, Cj, trr, Vbr), MIT."
+      "provenance": "Derived for circsim from 1N4148 datasheet operating points (Vf at 5 mA and 100 mA, Cj, trr, Vbr) by scripts/fit-model-cards.mjs, MIT."
     },
     {
       "id": "diode-1n4001",
@@ -29,7 +29,7 @@
         "D_(DO-41|SMA|SMB|DO-214|DO-201).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim from 1N400x rectifier datasheet parameters (Vf@1A, Vbr=50V), MIT."
+      "provenance": "Derived for circsim from 1N400x rectifier datasheet operating points (Vf at 1 A, Cj, trr, VRRM=50V) by scripts/fit-model-cards.mjs, MIT."
     },
     {
       "id": "diode-1n5819",
@@ -44,7 +44,7 @@
         "D_(DO-41|SMA|SMB|DO-214|SOD).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim from 1N5819 Schottky datasheet parameters (Vf~0.6V@1A, Vbr=40V, eg=0.69), MIT."
+      "provenance": "Derived for circsim from 1N5819 Schottky datasheet operating points (Vf at 1 A and 3 A, Cj, VRRM=40V) by scripts/fit-model-cards.mjs, MIT."
     },
     {
       "id": "schottky-ss54",
@@ -104,7 +104,7 @@
         "(D_)?(SMA|SMB|SMC|DO-214).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim from SMAJ24A TVS datasheet parameters (Vbr=26.7V@1mA, Vc=38.9V@10.3A via rs, Cj~280pF), MIT."
+      "provenance": "Derived for circsim from SMAJ24A TVS datasheet operating points (forward Vf at 1 A and 25 A, VBR at 1 mA, VC=38.9V at 10.3A, Cj~280pF) by scripts/fit-model-cards.mjs. Two-branch subcircuit: separate forward diode and reverse clamp. MIT."
     },
     {
       "id": "led-generic",
@@ -118,7 +118,7 @@
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Generic LED (red model, Vf~1.9V) written for circsim — used when value field is simply 'LED' without a color qualifier, MIT."
+      "provenance": "Generic LED (red model, Vf 1.9V at 20 mA) derived for circsim, used when value field is simply 'LED' without a color qualifier, MIT."
     },
     {
       "id": "led-red",
@@ -132,7 +132,7 @@
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim: red LED (AlGaInP, Vf~1.8-2.0V@20mA) via tuned n/eg, MIT."
+      "provenance": "Derived for circsim by scripts/fit-model-cards.mjs: red LED (AlGaInP, Vf 1.9V at 20 mA, band 1.8-2.0V) by fitting is, MIT."
     },
     {
       "id": "led-green",
@@ -146,7 +146,7 @@
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim: green LED (InGaN, Vf~2.0-2.2V@20mA) via tuned n/eg, MIT."
+      "provenance": "Derived for circsim by scripts/fit-model-cards.mjs: green LED (InGaN, Vf 2.15V at 20 mA, band 2.1-2.2V) by fitting is, MIT."
     },
     {
       "id": "led-blue",
@@ -160,7 +160,7 @@
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim: blue LED (InGaN, Vf~3.0-3.2V@20mA) via tuned n/eg, MIT."
+      "provenance": "Derived for circsim by scripts/fit-model-cards.mjs: blue LED (InGaN, Vf 3.1V at 20 mA, band 3.0-3.2V) by fitting is, MIT."
     },
     {
       "id": "led-white",
@@ -174,7 +174,7 @@
         "LED_(0603|0805|1206|3mm|5mm).*": { "1": "2", "2": "1" }
       },
       "defaultPinMap": { "1": "2", "2": "1" },
-      "provenance": "Written for circsim: white LED (InGaN+phosphor, Vf~3.0-3.4V@20mA) via tuned n/eg, MIT."
+      "provenance": "Derived for circsim by scripts/fit-model-cards.mjs: white LED (InGaN+phosphor, Vf 3.2V at 20 mA, band 3.0-3.4V) by fitting is, MIT."
     },
     {
       "id": "bjt-2n2222",
@@ -192,7 +192,7 @@
         "TO-92.*": { "1": "3", "2": "2", "3": "1" }
       },
       "defaultPinMap": { "1": "3", "2": "2", "3": "1" },
-      "provenance": "Written for circsim from 2N2222A datasheet parameters (hFE, fT=300MHz), Gummel-Poon NPN, MIT."
+      "provenance": "Derived for circsim from 2N2222A datasheet operating points (hFE, Vbe, hoe, fT=300MHz, Cobo, Cibo, ts) by scripts/fit-model-cards.mjs, Gummel-Poon NPN, MIT."
     },
     {
       "id": "bjt-2n3904",
@@ -209,7 +209,7 @@
         "TO-92.*": { "1": "3", "2": "2", "3": "1" }
       },
       "defaultPinMap": { "1": "3", "2": "2", "3": "1" },
-      "provenance": "Written for circsim from 2N3904 datasheet parameters (hFE, fT=300MHz), Gummel-Poon NPN, MIT."
+      "provenance": "Derived for circsim from 2N3904 datasheet operating points (hFE, Vbe, hoe, fT=300MHz, Cobo, Cibo, ts) by scripts/fit-model-cards.mjs, Gummel-Poon NPN, MIT."
     },
     {
       "id": "bjt-2n3906",
@@ -226,7 +226,7 @@
         "TO-92.*": { "1": "3", "2": "2", "3": "1" }
       },
       "defaultPinMap": { "1": "3", "2": "2", "3": "1" },
-      "provenance": "Written for circsim from 2N3906 datasheet parameters (hFE, fT=250MHz), Gummel-Poon PNP, MIT."
+      "provenance": "Derived for circsim from 2N3906 datasheet operating points (hFE, Vbe, hoe, fT=250MHz, Cobo, Cibo, ts) by scripts/fit-model-cards.mjs, Gummel-Poon PNP, MIT."
     },
     {
       "id": "bjt-bc547",
@@ -243,7 +243,7 @@
         "TO-92.*": { "1": "1", "2": "2", "3": "3" }
       },
       "defaultPinMap": { "1": "1", "2": "2", "3": "3" },
-      "provenance": "Written for circsim from BC547B datasheet parameters (hFE~200-450, fT=300MHz), Gummel-Poon NPN. Note TO-92 BC547 pinout is C-B-E (pin1=C), MIT."
+      "provenance": "Derived for circsim from BC547B datasheet operating points (hFE typ 290 at 2 mA, Vbe, hoe, fT=300MHz, Cc, Ce, ts) by scripts/fit-model-cards.mjs, Gummel-Poon NPN. Note TO-92 BC547 pinout is C-B-E (pin1=C), MIT."
     },
     {
       "id": "bjt-bc557",
@@ -260,7 +260,7 @@
         "TO-92.*": { "1": "1", "2": "2", "3": "3" }
       },
       "defaultPinMap": { "1": "1", "2": "2", "3": "3" },
-      "provenance": "Written for circsim from BC557B datasheet parameters (hFE~200-450, fT=150MHz), Gummel-Poon PNP. TO-92 pinout C-B-E (pin1=C), MIT."
+      "provenance": "Derived for circsim from BC557B datasheet operating points (hFE typ 290 at 2 mA, Vbe, hoe, fT=150MHz, Cc, Ce, ts) by scripts/fit-model-cards.mjs, Gummel-Poon PNP. TO-92 pinout C-B-E (pin1=C), MIT."
     },
     {
       "id": "mosfet-2n7002",

@@ -30,6 +30,8 @@ The SPICE deck is loaded into ngspice **from memory**: every model definition is
 
 Pressing **Run** instead starts a **transient** simulation streaming to the scope. It runs from the circuit's initial state (so you watch it "come alive"), streams samples to the oscilloscope, paces itself toward real time, and (to bound memory on a long continuous run) restarts in ~30-second windows, keeping your scope history.
 
+ngspice sets aside room for a whole window's samples when the window starts: every saved node voltage and device current, at every time step. circsim does that sum first and keeps each window within a 1.5 GB budget, the same limit at which it restarts a window that has outgrown memory. When a fine time step (a fast function generator) or a board with many nets would need more, the window is shortened to fit and the bench restarts at that shorter boundary; the log names the window length. ngspice's own memory check is turned off, because it compares against the free memory the OS reports at each step. On macOS that figure leaves out memory the system frees on demand and is often tens of MB, so the check stopped ordinary runs and left the simulator needing a restart.
+
 ::: info AC analysis
 An AC (frequency-sweep) analysis is scaffolded in the protocol but not implemented in this version. Today circsim does DC operating point and transient.
 :::

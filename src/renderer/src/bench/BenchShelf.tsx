@@ -4,7 +4,7 @@
  * probe-this-net affordance carried over from the retired rack (M7 F6).
  */
 
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
 import {
   SupplyPanel, FunctionGenPanel, LogicInputPanel, PotPanel, ProbePanel, GroundPanel,
@@ -12,6 +12,7 @@ import {
 import type { JackHandlers } from './JackView'
 import type { BenchKind } from './leads'
 import type { Instrument } from '../../../core/spicegen/instruments'
+import { SHELF_HEADER_H, useCollapsed } from '../ui/layoutPrefs'
 
 const PALETTE: Array<{ kind: BenchKind; label: string }> = [
   { kind: 'dc-supply', label: 'DC Supply' },
@@ -29,6 +30,20 @@ export default function BenchShelf({ jackHandlers }: { jackHandlers?: JackHandle
   const circuit = useApp(s => s.circuit)
   const selectedNetId = useApp(s => s.selectedNetId)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  // Collapse to the header strip to give the board the whole column (issue #33).
+  const [collapsed, setCollapsed] = useCollapsed('shelf')
+
+  // The single-row panels can overflow the shelf sideways. A newly added
+  // instrument lands at the end of the row, so scroll it into view; otherwise
+  // its jack would be off-screen and un-draggable.
+  const rowRef = useRef<HTMLDivElement>(null)
+  const prevCount = useRef(instruments.length)
+  useEffect(() => {
+    if (instruments.length > prevCount.current && rowRef.current) {
+      rowRef.current.scrollLeft = rowRef.current.scrollWidth
+    }
+    prevCount.current = instruments.length
+  }, [instruments.length])
 
   const selectedNet =
     selectedNetId !== null ? circuit?.nets.find(n => n.id === selectedNetId) : undefined
@@ -59,6 +74,15 @@ export default function BenchShelf({ jackHandlers }: { jackHandlers?: JackHandle
           </span>
         )}
         <span style={{ flex: 1 }} />
+        <button
+          data-testid="shelf-toggle"
+          style={addBtnStyle}
+          aria-expanded={!collapsed}
+          title={collapsed ? 'Show the instrument panels' : 'Hide the instrument panels'}
+          onClick={() => setCollapsed(!collapsed)}
+        >
+          {collapsed ? 'Show panels' : 'Hide panels'}
+        </button>
         <span style={{ position: 'relative' }}>
           <button
             data-testid="add-instrument-btn"
@@ -81,14 +105,16 @@ export default function BenchShelf({ jackHandlers }: { jackHandlers?: JackHandle
           </div>
         </span>
       </div>
-      <div style={panelsRowStyle}>
-        {groundNetId !== null && (
-          <ShelfSlot title="GND" instId={null}>
-            <GroundPanel groundNetId={groundNetId} handlers={jackHandlers} />
-          </ShelfSlot>
-        )}
-        {instruments.map(panelFor)}
-      </div>
+      {!collapsed && (
+        <div ref={rowRef} style={panelsRowStyle} data-testid="bench-panels">
+          {groundNetId !== null && (
+            <ShelfSlot title="GND" instId={null}>
+              <GroundPanel groundNetId={groundNetId} handlers={jackHandlers} />
+            </ShelfSlot>
+          )}
+          {instruments.map(panelFor)}
+        </div>
+      )}
     </div>
   )
 }
@@ -153,10 +179,15 @@ function ProbeNetButton({ netId, netName }: { netId: number; netName: string }):
 const shelfStyle: React.CSSProperties = {
   borderTop: '1px solid #2a2a3a', background: '#12121c', color: '#ddd',
   display: 'flex', flexDirection: 'column', fontSize: 12,
+  // The shelf yields height to the viewport: it shrinks down to its header
+  // strip and the panel row scrolls (issue #33).
+  // (No overflow clip here: the add-instrument palette hangs below the header.)
+  flex: '0 1 auto', minHeight: SHELF_HEADER_H,
 }
 const shelfHeaderStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 10, padding: '4px 10px',
   borderBottom: '1px solid #22222f',
+  flexShrink: 0, boxSizing: 'border-box', minHeight: SHELF_HEADER_H,
 }
 const probeRowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }
 const addBtnStyle: React.CSSProperties = {
@@ -178,7 +209,7 @@ const paletteItemStyle: React.CSSProperties = {
   cursor: 'pointer', textAlign: 'left', fontSize: 12, whiteSpace: 'nowrap',
 }
 const panelsRowStyle: React.CSSProperties = {
-  display: 'flex', gap: 8, padding: '6px 10px', overflowX: 'auto', minHeight: 120,
+  display: 'flex', gap: 8, padding: '6px 10px', overflow: 'auto', minHeight: 0, flex: '1 1 auto',
 }
 const probeNetBtnStyle: React.CSSProperties = {
   background: '#2a6b3a',
