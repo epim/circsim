@@ -38,14 +38,14 @@ The checks split into two groups by what they need.
 
 **Simulation-informed checks** need an operating point first, because they depend on the currents circsim just measured:
 
-- **Trace ampacity**: is a power trace wide enough for the current it's actually carrying?
-- **IR-drop / rail sag**: how much voltage does the copper's own resistance drop between the supply entry and the load?
+- **Trace ampacity**: is each trace wide enough for the current the solve puts through it?
+- **IR-drop / rail sag**: how much voltage does the copper's own resistance drop between the supply entry and the load, counting copper pours and the ground return?
 - **Thermal proximity**: a first-order relative look at where heat concentrates.
 
-Before you energize, these appear in the panel as *"needs simulation"* so you know what an operating-point solve would add. Press [Energize](../guides/energize) and they run against real currents.
+Before you energize, these appear in the panel as *"needs simulation"* so you know what an operating-point solve would add. Press [Energize](../guides/energize) and they run against the branch currents of the solve: LEDs, resistors and bench sources are measured, and every other part gets the current Kirchhoff's current law leaves on its pads. If the solve cannot work out a part's current, or the copper model cannot reach a pad that carries current, the panel says so (*"not assessed"* or *"partly assessed"*) instead of reporting a clean pass.
 
 ::: info A note on the thermal check
-The thermal check is a *relative* heat-spread proxy in arbitrary units. It tells you which parts sit at the hot end and which hot parts crowd each other, **never an absolute temperature in °C**. It doesn't model copper pour, layer stack, airflow, or thermal vias. In this version it also needs per-part power data that isn't fully wired up yet, so it's the quietest of the checks. Treat the other six as the working set today. When it does fire, read it strictly as "these are relatively hotter," not "this reaches N degrees."
+The thermal check is a *relative* heat-spread proxy in arbitrary units. It tells you which parts sit at the hot end and which hot parts crowd each other, **never an absolute temperature in °C**. It doesn't model copper pour, layer stack, airflow, or thermal vias. In this version it also needs per-part power data that circsim doesn't compute yet, so **it does not run**: the Critic panel lists it as "thermal: not assessed" rather than counting it as checked. Treat the other six as the working set today. Once power data is available and it does fire, read it strictly as "these are relatively hotter," not "this reaches N degrees."
 :::
 
 Two limits are worth knowing before you lean on the copper-carrying checks:

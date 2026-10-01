@@ -16,7 +16,7 @@
  * Spec §10.2, §10.3
  */
 
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createSceneManager, type SceneManager } from './scene'
 import { formatVolts } from './markers'
 import type { PickEvent } from './picking'
@@ -70,6 +70,7 @@ export default function Viewport({
   onSceneReadyRef.current = onSceneReady
   const onRenderRef = useRef<typeof onRender>(onRender)
   onRenderRef.current = onRender
+  const [sceneError, setSceneError] = useState<string | null>(null)
 
   // Mount / unmount the scene manager
   useEffect(() => {
@@ -77,11 +78,26 @@ export default function Viewport({
     if (!canvas) return
 
     const manager = createSceneManager()
+    try {
+      manager.mount(canvas, {
+        onPickEvent: event => onPickRef.current?.(event),
+        onRender: () => onRenderRef.current?.(),
+      })
+    } catch (err) {
+      // No WebGL context (a machine with no usable GPU path, a VM, a CI
+      // runner). Throwing out of an effect unmounts the whole React tree and
+      // leaves a blank window, so degrade instead: the parts list, bench and
+      // op annotations are DOM and keep working without the 3D view.
+      console.error('Viewport: 3D scene unavailable', err)
+      try {
+        manager.dispose()
+      } catch {
+        // partial mount; nothing further to release
+      }
+      setSceneError(err instanceof Error ? err.message : String(err))
+      return
+    }
     sceneRef.current = manager
-    manager.mount(canvas, {
-      onPickEvent: event => onPickRef.current?.(event),
-      onRender: () => onRenderRef.current?.(),
-    })
     onSceneReadyRef.current?.(manager)
 
     // ResizeObserver keeps the canvas filling its parent
@@ -140,6 +156,26 @@ export default function Viewport({
         ref={canvasRef}
         style={{ display: 'block', width: '100%', height: '100%' }}
       />
+      {sceneError !== null && (
+        <div
+          role="alert"
+          data-testid="viewport-unavailable"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            textAlign: 'center',
+            color: '#c8c8d8',
+            background: '#1a1a2e',
+          }}
+        >
+          3D view unavailable: WebGL could not start on this machine. Parts,
+          the bench and simulation results still work.
+        </div>
+      )}
       {/* DOM-accessible op-annotation data for E2E tests (Task 26).
           The actual visual annotations are rendered by Three.js (troika-three-text);
           this hidden div mirrors the same data for Playwright to query.

@@ -1,6 +1,6 @@
 # Attach a schematic
 
-The board file gives circsim the full circuit connectivity, but the matching **`.kicad_sch`** schematic adds fidelity the board can't: KiCad `Sim.*` model fields, symbol pin names, and no-connect markers. Attaching it is optional but recommended, especially if your board has diodes, LEDs, or parts you've annotated with simulation fields.
+The board file gives circsim the full circuit connectivity, but the matching **`.kicad_sch`** schematic adds fidelity the board can't: KiCad `Sim.*` model fields, symbol pin names, and the pins you marked no-connect. Attaching it is optional but recommended, especially if your board has diodes, LEDs, or parts you've annotated with simulation fields.
 
 ## Why bother
 
@@ -11,12 +11,14 @@ Two concrete payoffs:
 
 ## How to attach
 
-Two ways, with a board already open:
+The easiest way is to do nothing. When you open a board, circsim looks in the same folder for a `.kicad_sch` with the same name (`my-board.kicad_sch` next to `my-board.kicad_pcb`) and attaches it if it finds one.
+
+If the schematic lives elsewhere or has a different name, attach it by hand with a board already open:
 
 - **Drag and drop** the `.kicad_sch` onto the circsim window.
 - Click **Attach schematic…** (or **Replace schematic…**) in the **Ground & Power** panel and pick the file.
 
-The Ground & Power panel's schematic row shows the attached filename in green once it's loaded, or *"No schematic: no Sim.\* fields"* in red when none is attached.
+The Ground & Power panel's schematic row shows the attached filename in green once it's loaded, or *"No schematic attached: no simulation settings from the schematic (Sim.\* fields)"* in red when none is attached. Hover the dotted term in the app for a definition, or see the [glossary](./glossary#sim-fields).
 
 ## What you'll notice
 

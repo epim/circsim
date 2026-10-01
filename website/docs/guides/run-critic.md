@@ -7,7 +7,7 @@ The [Board Critic](../concepts/board-critic) is circsim's read-only, pre-fabrica
 You don't press a "run critic" button. The Critic audits automatically:
 
 - **When you open a board**: the static checks run immediately: floating/dangling nets, copper clearance, decoupling proximity, and loop area.
-- **After each [operating-point solve](./energize)**: the simulation-informed checks run against the real currents: ampacity and IR-drop (and thermal, which is quiet in this version).
+- **After each [operating-point solve](./energize)**: the simulation-informed checks run against the real currents: ampacity and IR-drop (thermal is not active in this version: the panel lists it as "not assessed" because circsim doesn't compute per-part power yet).
 
 So the full flow is: open the board, glance at the static findings, then **Energize** to unlock the current-dependent ones.
 
@@ -40,7 +40,7 @@ The Critic reports; you decide; your PCB editor fixes. For each finding worth ac
 Common actions the suggestions point to: widen or reroute a track, move a decoupling cap closer to its pin, increase clearance, add a ground pour, connect an exposed thermal pad to ground.
 
 ::: tip Sharing findings
-The panel has a **Copy** button (top-right) that copies the whole audit (summary, every finding with its detail, assumption, and suggestion, and any not-assessed checks) as plain text, ready to paste into a design review or a note to your fab.
+The panel has a **Copy** button (top-right) that copies the whole audit (summary, every finding with its detail, assumption, and suggestion, and any not-assessed checks) as plain text, ready to paste into a design review or a note to your fab. For a fuller record, **Export report** in the top bar saves the findings together with the board's SHA-256, the bench, the part models and the operating point as markdown or PDF: see [Save your setup & export a report](./save-and-report).
 :::
 
 ## What "no findings" means

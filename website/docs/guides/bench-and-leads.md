@@ -58,7 +58,7 @@ Every control drives the running simulation immediately.
 
 ### DC Supply (`PSU`)
 - **Volts** knob (0 V to 30 V) and a matching **Voltage** field: drag the knob or type a value.
-- **Series R**: the supply's internal resistance (default 0.1 Ω). Raise it to model a current-limited or weak source.
+- **Source R** (series resistance): the supply's internal resistance (default 0.1 Ω). Raise it to model a current-limited or weak source.
 - Jack: red **+**. (Return is through your designated ground.)
 - A supply that Energize attached for you carries an amber *"Auto-attached"* note until you touch it.
 
@@ -72,15 +72,15 @@ Every control drives the running simulation immediately.
 
 ### Logic Input (`LOGIC`)
 - **LO / HI** toggle: drives the net to 0 or to your high level.
-- **V High**: the logic-high voltage (default 3.3 V; set it to match your rail).
+- **High level** (V High): the logic-high voltage (default 3.3 V; set it to match your rail).
 - Jack: purple **out**.
 
 ### Potentiometer (`POT`)
-- **Rheostat / Divider** mode toggle.
-  - **Rheostat** (2 terminals A, W): a variable resistor, the classic dimmer wiring.
-  - **Divider** (3 terminals A, W, Lo): a true three-terminal voltage divider; W is the wiper tap.
+- **Variable resistor / Voltage divider** mode toggle.
+  - **Variable resistor** (a rheostat; 2 terminals A, W): a variable resistor, the classic dimmer wiring.
+  - **Voltage divider** (3 terminals A, W, Lo): a true three-terminal voltage divider; W is the wiper tap.
 - **Wiper** knob: 0% to 100%.
-- **Total R**: the full end-to-end resistance (default 10 kΩ).
+- **Total resistance** (Total R): the full end-to-end resistance (default 10 kΩ).
 - Switching modes keeps the A and W wires and only adds or drops the Lo terminal.
 
 ### V Probe / I Probe
@@ -93,8 +93,8 @@ Once the board is energized (an operating point is showing), editing any instrum
 
 Under the hood, a value change becomes a SPICE `alter` (an in-place tweak to a value, no rebuild); a *wiring* change (moving a lead to a different net) reloads the circuit, because the topology actually changed. circsim picks the right one for you.
 
-::: info The bench is per-session
-Instruments and the leads you draw live for the current session. They're never written into your board file (circsim doesn't touch your design files) and don't yet persist across restarts: reopen a board and you'll rebuild the bench. It's quick, and it keeps your `.kicad_pcb` untouched.
+::: info Saving the bench
+The bench is never written into your board file (circsim doesn't touch your design files). Instead, circsim can save it, with the ground, your Model Doctor overrides and your models, in a small `my-board.circsim.json` beside the board. Click **Save setup** in the bar under the toolbar once, and a reopen or restart restores the instruments and leads (each lead remembers where on the board you clipped it). Until you do, the bench lives for the current session only. See [Save your setup & export a report](./save-and-report).
 :::
 
 ## Next

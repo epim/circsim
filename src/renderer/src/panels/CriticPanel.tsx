@@ -20,6 +20,7 @@ import { useApp, useAppStoreApi } from '../store/storeContext'
 // useApp/useAppStoreApi power the connected wrapper; CriticPanelView is store-free.
 import type { Finding, Severity, CriticReport } from '../../../core/critic/types'
 import { severityCssColor } from '../viewport/criticOverlay'
+import { TEXT_HINT } from '../ui/palette'
 
 const ORDER: Severity[] = ['error', 'warn', 'info']
 
@@ -62,6 +63,13 @@ export function CriticPanelView({
   onSelect: (id: string) => void
 }): React.ReactElement | null {
   const [copied, setCopied] = React.useState(false)
+  // Issue #72: a group longer than CRITIC_GROUP_CAP shows its first rows and a
+  // "Show N more" button, so a few hundred info findings do not bury the errors.
+  const [expanded, setExpanded] = React.useState<Record<Severity, boolean>>({
+    error: false,
+    warn: false,
+    info: false,
+  })
 
   // Nothing to show until the first audit (no board / not yet run).
   if (!report) return null
@@ -121,7 +129,7 @@ export function CriticPanelView({
             <div style={{ ...groupHeaderStyle, color: severityCssColor(sev) }}>
               {sev} <span style={countBadgeStyle}>{group.length}</span>
             </div>
-            {group.map(f => (
+            {visibleFindings(group, expanded[sev], selectedFindingId).map(f => (
               <FindingRow
                 key={f.id}
                 finding={f}
@@ -129,6 +137,15 @@ export function CriticPanelView({
                 onSelect={() => onSelect(f.id)}
               />
             ))}
+            {!expanded[sev] && group.length > CRITIC_GROUP_CAP && (
+              <button
+                style={copyBtnStyle}
+                data-testid={`critic-show-more-${sev}`}
+                onClick={() => setExpanded(e => ({ ...e, [sev]: true }))}
+              >
+                Show {group.length - CRITIC_GROUP_CAP} more
+              </button>
+            )}
           </div>
         )
       })}
@@ -228,6 +245,25 @@ function FindingRow({
 }
 
 // ─── grouping ──────────────────────────────────────────────────────────────────
+
+/** Findings shown per severity group before "Show N more". */
+export const CRITIC_GROUP_CAP = 25
+
+/**
+ * The rows to render for one severity group: all of them once expanded,
+ * otherwise the first CRITIC_GROUP_CAP, plus the selected finding when it sits
+ * beyond the cap (a selection must never be hidden).
+ */
+function visibleFindings(
+  group: Finding[],
+  expanded: boolean,
+  selectedId: string | null,
+): Finding[] {
+  if (expanded || group.length <= CRITIC_GROUP_CAP) return group
+  const head = group.slice(0, CRITIC_GROUP_CAP)
+  const selected = selectedId === null ? undefined : group.slice(CRITIC_GROUP_CAP).find(f => f.id === selectedId)
+  return selected ? [...head, selected] : head
+}
 
 function groupBySeverity(findings: Finding[]): Record<Severity, Finding[]> {
   const out: Record<Severity, Finding[]> = { error: [], warn: [], info: [] }
@@ -343,7 +379,7 @@ const skippedWrapStyle: React.CSSProperties = {
   gap: 2,
 }
 const skippedItemStyle: React.CSSProperties = {
-  color: '#6c7689',
+  color: TEXT_HINT,
   fontSize: 11,
 }
 const copyBtnStyle: React.CSSProperties = {

@@ -12,11 +12,19 @@
  * (App.tsx). The pure row model (buildNetVoltageRows) is exported for tests.
  */
 
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
 import { opCaveatMessage, type AppStore } from '../store/appStore'
 import { formatVolts } from '../viewport/markers'
 import type { CircuitNet } from '../../../core/netlist/extract'
+import { TEXT_HINT } from '../ui/palette'
+import WindowedList from './WindowedList'
+
+/** Fixed row heights (px) so the list can be windowed without measuring. */
+const ROW_H = 20
+const OVERRIDE_H = 34
+
+type NetItem = { kind: 'row'; row: NetVoltageRow } | { kind: 'override'; name: string }
 
 export interface NetVoltageRow {
   netId: number
@@ -146,10 +154,39 @@ export default function NetVoltages(): React.ReactElement {
   const selectedNetId = useApp(s => s.selectedNetId)
   const [filter, setFilter] = useState('')
 
-  const rows = buildNetVoltageRows(circuit?.nets ?? [], opVoltages, filter)
+  const rows = useMemo(
+    () => buildNetVoltageRows(circuit?.nets ?? [], opVoltages, filter),
+    [circuit, opVoltages, filter],
+  )
   // An op RAN if opVoltages is non-null — even a degenerate one that mapped
   // zero nets (that case gets its own message, not "no operating point yet").
   const hasOp = opVoltages !== null
+  const emptyMessage: string | null = !hasOp
+    ? 'No operating point yet — press Power On to read the net voltages.'
+    : opVoltages.size === 0
+      ? 'Operating point returned no net voltages.'
+      : rows.length === 0
+        ? 'No nets match the filter.'
+        : null
+
+  // Flat item list: every row, plus the rail-override editor right under the
+  // selected row. Heights are fixed so the list can be windowed (issue #72).
+  const items = useMemo<NetItem[]>(() => {
+    const out: NetItem[] = []
+    for (const row of rows) {
+      out.push({ kind: 'row', row })
+      if (row.netId === selectedNetId) out.push({ kind: 'override', name: row.name })
+    }
+    return out
+  }, [rows, selectedNetId])
+  const heights = useMemo(
+    () => items.map(it => (it.kind === 'row' ? ROW_H : OVERRIDE_H)),
+    [items],
+  )
+  const selectedIndex = useMemo(
+    () => (selectedNetId === null ? null : items.findIndex(it => it.kind === 'row' && it.row.netId === selectedNetId)),
+    [items, selectedNetId],
+  )
 
   return (
     <div style={containerStyle} data-testid="net-voltages">
@@ -175,46 +212,49 @@ export default function NetVoltages(): React.ReactElement {
           From a previous run — a new solve is in progress.
         </div>
       )}
-      <div style={listStyle}>
-        {!hasOp ? (
-          <div style={emptyStyle}>
-            No operating point yet — press Power On to read the net voltages.
-          </div>
-        ) : opVoltages.size === 0 ? (
-          <div style={emptyStyle}>Operating point returned no net voltages.</div>
-        ) : rows.length === 0 ? (
-          <div style={emptyStyle}>No nets match the filter.</div>
-        ) : (
-          rows.map(r => {
+      {emptyMessage !== null ? (
+        <div style={listStyle}>
+          <div style={emptyStyle}>{emptyMessage}</div>
+        </div>
+      ) : (
+        <WindowedList
+          items={items}
+          heights={heights}
+          itemKey={it => (it.kind === 'row' ? it.row.netId : `override:${it.name}`)}
+          revealIndex={selectedIndex}
+          revealNonce={selectedNetId}
+          style={listStyle}
+          renderItem={it => {
+            if (it.kind === 'override') {
+              return <NetRailOverride netName={it.name} store={store} />
+            }
+            const r = it.row
             const isSelected = r.netId === selectedNetId
             return (
-              <React.Fragment key={r.netId}>
-                <div
-                  role="button"
-                  tabIndex={0}
-                  data-testid="net-voltage-row"
-                  data-net-id={r.netId}
-                  data-net-name={r.name}
-                  style={{
-                    ...(isSelected ? { ...rowStyle, ...rowSelectedStyle } : rowStyle),
-                    // Dim outdated values while the new solve runs.
-                    ...(stale ? { opacity: 0.55 } : {}),
-                  }}
-                  onClick={() => store.getState().selectNet(r.netId)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' || e.key === ' ') store.getState().selectNet(r.netId)
-                  }}
-                  title={`Select ${r.name} on the board`}
-                >
-                  <span style={nameStyle}>{r.name}</span>
-                  <span style={voltsStyle}>{formatVolts(r.volts)}</span>
-                </div>
-                {isSelected && <NetRailOverride netName={r.name} store={store} />}
-              </React.Fragment>
+              <div
+                role="button"
+                tabIndex={0}
+                data-testid="net-voltage-row"
+                data-net-id={r.netId}
+                data-net-name={r.name}
+                style={{
+                  ...(isSelected ? { ...rowStyle, ...rowSelectedStyle } : rowStyle),
+                  // Dim outdated values while the new solve runs.
+                  ...(stale ? { opacity: 0.55 } : {}),
+                }}
+                onClick={() => store.getState().selectNet(r.netId)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') store.getState().selectNet(r.netId)
+                }}
+                title={`Select ${r.name} on the board`}
+              >
+                <span style={nameStyle}>{r.name}</span>
+                <span style={voltsStyle}>{formatVolts(r.volts)}</span>
+              </div>
             )
-          })
-        )}
-      </div>
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -254,7 +294,7 @@ const filterStyle: React.CSSProperties = {
   padding: '2px 6px',
 }
 const countStyle: React.CSSProperties = {
-  color: '#556',
+  color: TEXT_HINT,
   fontSize: 10,
   flexShrink: 0,
 }
@@ -282,14 +322,17 @@ const listStyle: React.CSSProperties = {
 }
 const emptyStyle: React.CSSProperties = {
   padding: '8px',
-  color: '#555',
+  color: TEXT_HINT,
   fontStyle: 'italic',
 }
 const rowStyle: React.CSSProperties = {
   display: 'flex',
-  alignItems: 'baseline',
+  alignItems: 'center',
   gap: 8,
-  padding: '2px 8px',
+  height: ROW_H,
+  boxSizing: 'border-box',
+  overflow: 'hidden',
+  padding: '0 8px',
   borderBottom: '1px solid #161b22',
   cursor: 'pointer',
 }
@@ -313,9 +356,13 @@ const voltsStyle: React.CSSProperties = {
 const railOverrideStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  flexWrap: 'wrap',
+  flexWrap: 'nowrap',
   gap: 6,
-  padding: '4px 8px',
+  height: OVERRIDE_H,
+  boxSizing: 'border-box',
+  overflowX: 'auto',
+  overflowY: 'hidden',
+  padding: '0 8px',
   background: '#141b2c',
   borderBottom: '1px solid #161b22',
   fontSize: 11,

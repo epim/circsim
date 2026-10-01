@@ -12,6 +12,7 @@ import {
   joinPath,
   classifyFile,
   openProjectFromPath,
+  droppedFilePath,
 } from '../../ipc/fileOpen'
 
 describe('fileOpen — path helpers', () => {
@@ -162,5 +163,61 @@ describe('fileOpen — fileExists probing (F3, no ENOENT stack on board open)', 
     const opened = await openProjectFromPath('/p/proj.kicad_pcb', readFile)
     expect(opened.schematicText).toBeUndefined()
     expect(reads).toContain('/p/proj.kicad_sch')
+  })
+
+  it('returns the board path and reads the setup file when a reader is given', async () => {
+    const { readFile } = trackingReadFile({ '/p/proj.kicad_pcb': '(board)' })
+    const readSidecar = async (p: string) => {
+      expect(p).toBe('/p/proj.kicad_pcb')
+      return { exists: true, text: '{"version":1}' }
+    }
+    const opened = await openProjectFromPath('/p/proj.kicad_pcb', readFile, undefined, async () => false, readSidecar)
+    expect(opened.boardPath).toBe('/p/proj.kicad_pcb')
+    expect(opened.sidecarText).toBe('{"version":1}')
+  })
+
+  it('an absent setup file leaves sidecarText unset', async () => {
+    const { readFile } = trackingReadFile({ '/p/proj.kicad_pcb': '(board)' })
+    const opened = await openProjectFromPath('/p/proj.kicad_pcb', readFile, undefined, async () => false, async () => ({ exists: false }))
+    expect(opened.sidecarText).toBeUndefined()
+    expect(opened.sidecarError).toBeUndefined()
+  })
+
+  it('a setup file that cannot be read, or a reader that throws, never fails the open', async () => {
+    const { readFile } = trackingReadFile({ '/p/proj.kicad_pcb': '(board)' })
+    const unreadable = await openProjectFromPath('/p/proj.kicad_pcb', readFile, undefined, async () => false,
+      async () => ({ exists: true, error: 'EACCES' }))
+    expect(unreadable.boardText).toBe('(board)')
+    expect(unreadable.sidecarError).toBe('EACCES')
+    const thrown = await openProjectFromPath('/p/proj.kicad_pcb', readFile, undefined, async () => false,
+      async () => { throw new Error('ipc down') })
+    expect(thrown.boardText).toBe('(board)')
+    expect(thrown.sidecarError).toBe('ipc down')
+  })
+})
+
+describe('fileOpen - droppedFilePath (#34)', () => {
+  const file = { name: 'board.kicad_pcb' } as File
+
+  it('returns the path the bridge resolves', () => {
+    expect(droppedFilePath(file, () => '/p/board.kicad_pcb')).toBe('/p/board.kicad_pcb')
+  })
+
+  it('returns empty when the file has no path, so callers fall back to text()', () => {
+    expect(droppedFilePath(file, () => '')).toBe('')
+  })
+
+  it('returns empty when the bridge throws or is missing', () => {
+    expect(
+      droppedFilePath(file, () => {
+        throw new Error('no path')
+      }),
+    ).toBe('')
+    expect(droppedFilePath(file, undefined as unknown as (f: File) => string)).toBe('')
+  })
+
+  it('does not read the removed Electron File.path property', () => {
+    const legacy = { name: 'board.kicad_pcb', path: '/legacy/board.kicad_pcb' } as unknown as File
+    expect(droppedFilePath(legacy, () => '')).toBe('')
   })
 })

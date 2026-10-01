@@ -12,6 +12,7 @@ import {
 import type { JackHandlers } from './JackView'
 import type { BenchKind } from './leads'
 import type { Instrument } from '../../../core/spicegen/instruments'
+import { TEXT_HINT } from '../ui/palette'
 import { SHELF_HEADER_H, useCollapsed } from '../ui/layoutPrefs'
 
 const PALETTE: Array<{ kind: BenchKind; label: string }> = [
@@ -52,7 +53,7 @@ export default function BenchShelf({ jackHandlers }: { jackHandlers?: JackHandle
     if (!('id' in inst)) return null // ground-ref renders separately
     const key = inst.id
     switch (inst.kind) {
-      case 'dc-supply':     return <ShelfSlot key={key} title="PSU" instId={inst.id}><SupplyPanel inst={inst} handlers={jackHandlers} /></ShelfSlot>
+      case 'dc-supply':     return <ShelfSlot key={key} title="Power supply (PSU)" instId={inst.id}><SupplyPanel inst={inst} handlers={jackHandlers} /></ShelfSlot>
       case 'function-gen':  return <ShelfSlot key={key} title="FUNC GEN" instId={inst.id}><FunctionGenPanel inst={inst} handlers={jackHandlers} /></ShelfSlot>
       case 'logic-input':   return <ShelfSlot key={key} title="LOGIC" instId={inst.id}><LogicInputPanel inst={inst} handlers={jackHandlers} /></ShelfSlot>
       case 'potentiometer': return <ShelfSlot key={key} title="POT" instId={inst.id}><PotPanel inst={inst} handlers={jackHandlers} /></ShelfSlot>
@@ -234,6 +235,6 @@ const slotTitleBarStyle: React.CSSProperties = {
 }
 const slotTitleStyle: React.CSSProperties = {}
 const slotCloseStyle: React.CSSProperties = {
-  background: 'none', border: 'none', color: '#666', cursor: 'pointer',
+  background: 'none', border: 'none', color: TEXT_HINT, cursor: 'pointer',
   fontSize: 14, lineHeight: 1, padding: '0 2px',
 }

@@ -12,10 +12,23 @@
  *  - CSP: allows worker-src blob: for troika-three-text (Spec §5).
  */
 
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, net } from 'electron'
 import { join } from 'path'
-import { readFile, stat } from 'fs/promises'
+import { copyFile, readFile, rename, stat, unlink, writeFile } from 'fs/promises'
+import { release } from 'os'
+import { deflateRawSync } from 'zlib'
 import { createProductionSupervisor, unwrapPort } from './simhostSupervisor'
+import { buildMenuTemplate, docsPageUrl } from './docsLinks'
+import {
+  MainDiagnostics,
+  assembleBundle,
+  sanitizeBundleName,
+  validateRendererFiles
+} from './diagnosticsBundle'
+import { openFidelityDocs } from './openDocs'
+import { sidecarPathFor } from '../core/persist/paths'
+import { MAX_SIDECAR_BYTES } from '../core/persist/sidecar'
+import { addRecent, normalizeRecent, removeRecent } from '../core/persist/recent'
 
 /** Shape of resources/models/index.json (only the fields we read here). */
 interface ModelIndex {
@@ -29,6 +42,9 @@ interface ModelIndex {
 // ─── Globals ──────────────────────────────────────────────────────────────────
 
 let mainWindow: BrowserWindow | null = null
+
+/** SimHost output and exits this session, for the diagnostics bundle (issue #26). */
+const mainDiagnostics = new MainDiagnostics()
 
 /**
  * Base for bundled resources/docs.
@@ -46,6 +62,17 @@ function resourcePath(...parts: string[]): string {
 function docPath(...parts: string[]): string {
   return app.isPackaged ? join(process.resourcesPath, 'docs', ...parts) : join(repoRoot, 'docs', ...parts)
 }
+
+// ─── GPU fallback ─────────────────────────────────────────────────────────────
+
+// The Chromium in Electron 44 no longer falls back to SwiftShader for WebGL
+// on machines without a usable GPU (headless Linux CI under xvfb, VMs, remote
+// desktops): WebGL2 is blocklisted, `new WebGLRenderer` in the viewport throws,
+// and no board ever renders. Opting in to the software rasterizer restores the
+// older fallback behaviour. It only takes effect when no hardware GPU path is
+// available, and the app loads only local content, so the "unsafe" caveat on
+// the flag (untrusted web content) does not apply. Must run before app ready.
+app.commandLine.appendSwitch('enable-unsafe-swiftshader')
 
 // ─── Window creation ──────────────────────────────────────────────────────────
 
@@ -90,6 +117,29 @@ function createWindow(): BrowserWindow {
   return win
 }
 
+// ─── Report export ────────────────────────────────────────────────────────────
+
+/**
+ * Render a standalone report HTML page to PDF in a hidden, script-disabled,
+ * sandboxed window. The page goes through a temp file (a data: URL would hit
+ * URL length limits on a large board) which is removed afterwards.
+ */
+async function renderPdf(html: string): Promise<Buffer> {
+  const tmp = join(app.getPath('temp'), `circsim-report-${process.pid}-${Date.now()}.html`)
+  await writeFile(tmp, html, 'utf8')
+  const win = new BrowserWindow({
+    show: false,
+    webPreferences: { sandbox: true, javascript: false, contextIsolation: true, nodeIntegration: false },
+  })
+  try {
+    await win.loadFile(tmp)
+    return await win.webContents.printToPDF({ printBackground: true, pageSize: 'A4' })
+  } finally {
+    win.destroy()
+    await unlink(tmp).catch(() => undefined)
+  }
+}
+
 // ─── IPC handlers for the preload bridge ─────────────────────────────────────
 
 function registerIpcHandlers(): void {
@@ -122,6 +172,114 @@ function registerIpcHandlers(): void {
     }
   })
 
+  // ── Per-board setup file (`<board>.circsim.json`, issue #27) ──────────────────
+  // The renderer never supplies a destination path: both handlers take the BOARD
+  // path and derive the sidecar name from it (sidecarPathFor refuses anything that
+  // is not a .kicad_pcb), so this bridge can read and write exactly one kind of
+  // file and can never touch the board itself.
+
+  /** Read the setup file beside a board. Never throws: absent, text, or an error string. */
+  ipcMain.handle('circsim:readSidecar', async (_event, boardPath: string) => {
+    const p = typeof boardPath === 'string' ? sidecarPathFor(boardPath) : null
+    if (!p) return { exists: false }
+    try {
+      const st = await stat(p)
+      if (!st.isFile()) return { exists: false }
+      if (st.size > MAX_SIDECAR_BYTES) return { exists: true, error: 'the file is larger than 8 MB' }
+      return { exists: true, text: (await readFile(p)).toString('utf8') }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { exists: false }
+      return { exists: true, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  /**
+   * Write the setup file beside a board, atomically (temp file + rename). With
+   * `backupExisting` the current file is first copied to `<file>.bak`, used for
+   * the first write over an old-format, truncated or unreadable file.
+   */
+  ipcMain.handle(
+    'circsim:writeSidecar',
+    async (_event, boardPath: string, text: string, opts?: { backupExisting?: boolean }) => {
+      const p = typeof boardPath === 'string' ? sidecarPathFor(boardPath) : null
+      if (!p) throw new Error('Not a .kicad_pcb path; refusing to write a setup file.')
+      if (typeof text !== 'string' || text.length > MAX_SIDECAR_BYTES) throw new Error('Setup text is not valid.')
+      if (opts?.backupExisting) {
+        try {
+          await copyFile(p, p + '.bak')
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+        }
+      }
+      const tmp = `${p}.${process.pid}.tmp`
+      try {
+        await writeFile(tmp, text, 'utf8')
+        await rename(tmp, p)
+      } catch (err) {
+        await unlink(tmp).catch(() => undefined)
+        throw err
+      }
+      return { path: p }
+    },
+  )
+
+  // ── Recent boards (userData/recent-boards.json) ────────────────────────────────
+  const recentFile = (): string => join(app.getPath('userData'), 'recent-boards.json')
+  const readRecent = async (): Promise<string[]> => {
+    try {
+      return normalizeRecent(JSON.parse((await readFile(recentFile())).toString('utf8')))
+    } catch {
+      return []
+    }
+  }
+  const writeRecent = async (list: string[]): Promise<string[]> => {
+    try {
+      await writeFile(recentFile(), JSON.stringify({ boards: list }, null, 2), 'utf8')
+    } catch {
+      // Best effort: a read-only profile just means no recent list.
+    }
+    return list
+  }
+  ipcMain.handle('circsim:getRecentBoards', () => readRecent())
+  ipcMain.handle('circsim:addRecentBoard', async (_event, boardPath: string) =>
+    writeRecent(addRecent(await readRecent(), boardPath)),
+  )
+  ipcMain.handle('circsim:removeRecentBoard', async (_event, boardPath: string) =>
+    writeRecent(removeRecent(await readRecent(), boardPath)),
+  )
+  ipcMain.handle('circsim:clearRecentBoards', () => writeRecent([]))
+
+  // ── Report export (markdown or PDF) ────────────────────────────────────────────
+  // The save location always comes from the native save dialog; the renderer only
+  // supplies the content and a suggested file name.
+  ipcMain.handle(
+    'circsim:exportReport',
+    async (_event, req: { format: 'md' | 'pdf'; content: string; suggestedName: string }) => {
+      if (!mainWindow) return { cancelled: true }
+      if (!req || (req.format !== 'md' && req.format !== 'pdf') || typeof req.content !== 'string') {
+        throw new Error('Invalid report export request.')
+      }
+      if (req.content.length > 16 * 1024 * 1024) throw new Error('The report is too large to export.')
+      const safeName = String(req.suggestedName || 'circsim-report')
+        .replace(/[\\/:*?"<>|]+/g, '_')
+        .slice(0, 120)
+      const ext = req.format
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: ext === 'md' ? 'Export report as markdown' : 'Export report as PDF',
+        defaultPath: `${safeName}.${ext}`,
+        filters: [ext === 'md' ? { name: 'Markdown', extensions: ['md'] } : { name: 'PDF', extensions: ['pdf'] }],
+      })
+      if (result.canceled || !result.filePath) return { cancelled: true }
+      const filePath = result.filePath.toLowerCase().endsWith(`.${ext}`) ? result.filePath : `${result.filePath}.${ext}`
+      if (ext === 'md') {
+        await writeFile(filePath, req.content, 'utf8')
+      } else {
+        await writeFile(filePath, await renderPdf(req.content))
+      }
+      return { cancelled: false, filePath }
+    },
+  )
+
   /** Return platform path information. */
   ipcMain.handle('circsim:platformPaths', () => {
     return {
@@ -131,6 +289,53 @@ function registerIpcHandlers(): void {
       userData: app.getPath('userData')
     }
   })
+
+  /**
+   * Save the diagnostics bundle (issue #26): the renderer sends the files it
+   * gathered (decks, log, board hash, resolutions), main adds the environment,
+   * the SimHost output and the crash history, asks where to save, and writes a
+   * zip. Resolves `{ saved: false }` when the user cancels the dialog.
+   */
+  ipcMain.handle(
+    'circsim:saveDiagnosticsBundle',
+    async (_event, payload: { suggestedName?: unknown; files?: unknown }) => {
+      try {
+        const rendererFiles = validateRendererFiles(payload?.files)
+        const defaultPath = join(app.getPath('documents'), sanitizeBundleName(payload?.suggestedName))
+        const dialogOpts: Electron.SaveDialogOptions = {
+          title: 'Save diagnostic bundle',
+          defaultPath,
+          filters: [{ name: 'Zip archive', extensions: ['zip'] }]
+        }
+        const picked = mainWindow
+          ? await dialog.showSaveDialog(mainWindow, dialogOpts)
+          : await dialog.showSaveDialog(dialogOpts)
+        if (picked.canceled || !picked.filePath) return { saved: false }
+        const environment = {
+          app: app.getVersion(),
+          packaged: app.isPackaged,
+          electron: process.versions.electron,
+          chromium: process.versions.chrome,
+          node: process.versions.node,
+          platform: process.platform,
+          arch: process.arch,
+          osRelease: release()
+        }
+        const zip = assembleBundle(
+          rendererFiles,
+          [
+            { name: 'environment.json', text: JSON.stringify(environment, null, 2) + '\n' },
+            ...mainDiagnostics.files()
+          ],
+          { deflateRaw: (d) => deflateRawSync(d) }
+        )
+        await writeFile(picked.filePath, zip)
+        return { saved: true, path: picked.filePath }
+      } catch (err) {
+        return { saved: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
 
   /**
    * Return the absolute path to the bundled sample project's .kicad_pcb file.
@@ -151,19 +356,31 @@ function registerIpcHandlers(): void {
   })
 
   /**
-   * Open the "what circsim can tell you" fidelity doc.
-   * In packaged builds, open the bundled docs/what-circsim-can-tell-you.md
-   * via shell.openPath (rendered as plain text). In dev, open it from the
-   * project root. If the file is not found, fall back to a no-op (graceful).
-   * Task 28 — Spec §16 risk 7, §12.
+   * Open the "what circsim can tell you" fidelity doc and report the outcome.
+   * Online: the published page via the system browser; offline (or if that
+   * hand-off throws): the bundled docs/what-circsim-can-tell-you.html (rendered
+   * from website/docs/concepts/fidelity.md by scripts/fidelity-doc.mjs) via
+   * shell.openPath. Packaged: <resources>/docs; dev: the project docs/ dir.
+   * shell.openPath never rejects, so its resolved error string is returned to
+   * the renderer as `{ ok: false, error }` (issue #62).
+   * Task 28 — Spec §16 risk 7, §12; issues #61, #62.
    */
-  ipcMain.handle('circsim:openDocs', async () => {
-    try {
-      await shell.openPath(docPath('what-circsim-can-tell-you.md'))
-    } catch {
-      // Non-fatal: if the doc isn't present (CI runner without a display),
-      // the promise still resolves so the UI doesn't stall.
-    }
+  ipcMain.handle('circsim:openDocs', () =>
+    openFidelityDocs({
+      shell,
+      localPath: docPath('what-circsim-can-tell-you.html'),
+      isOnline: () => net.isOnline()
+    })
+  )
+
+  /**
+   * Open one page of the public docs site in the system browser (issue #73).
+   * The renderer sends only a slug; docsPageUrl() validates it and pins the
+   * origin, so the renderer cannot open an arbitrary URL. Resolves false for a
+   * bad slug or when the OS refuses.
+   */
+  ipcMain.handle('circsim:openDocsPage', async (_event, slug: unknown) => {
+    return openDocsSlug(slug)
   })
 
   /**
@@ -264,10 +481,42 @@ function registerIpcHandlers(): void {
   })
 }
 
+/** Open a validated docs slug in the system browser; false when invalid or refused. */
+async function openDocsSlug(slug: unknown): Promise<boolean> {
+  const url = docsPageUrl(slug)
+  if (!url) return false
+  try {
+    await shell.openExternal(url)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Replace Electron's default menu with one whose Help entries open the docs (issue #73). */
+function installAppMenu(): void {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(
+      buildMenuTemplate({
+        isMac: process.platform === 'darwin',
+        appName: app.getName(),
+        isPackaged: app.isPackaged,
+        openDocsPage: slug => {
+          void openDocsSlug(slug)
+        },
+        openExternal: url => {
+          void shell.openExternal(url).catch(() => undefined)
+        },
+      }),
+    ),
+  )
+}
+
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.whenReady().then(async () => {
   registerIpcHandlers()
+  installAppMenu()
 
   mainWindow = createWindow()
 
@@ -286,9 +535,11 @@ app.whenReady().then(async () => {
   // notification via contextBridge (not the dead MessagePort — Spec §6.1).
   const supervisor = await createProductionSupervisor({
     simhostPath,
-    onSimhostCrashed: ({ willRespawn }) => {
+    onChildOutput: (stream, text) => mainDiagnostics.recordOutput(stream, text),
+    onSimhostCrashed: (payload) => {
+      mainDiagnostics.recordCrash(payload)
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('circsim:simhostCrashed', { willRespawn })
+        mainWindow.webContents.send('circsim:simhostCrashed', payload)
       }
     }
   })

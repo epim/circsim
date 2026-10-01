@@ -7,7 +7,7 @@
  *  - the mac block no longer hard-disables signing with `identity: null`;
  *  - the unsigned path still exists and disables identity auto-discovery;
  *  - every secret the signed path reads is gated on being present;
- *  - notarization uses the notarytool object form;
+ *  - notarization is env-driven (electron-builder 26: mac.notarize is a boolean);
  *  - SHA256SUMS is produced and attached by a job that follows the matrix.
  */
 
@@ -67,9 +67,16 @@ describe('release job signing', () => {
     expect(release).toMatch(/Package installers \(unsigned\)\n\s+if: steps\.signing\.outputs\.sign != 'true'/)
   })
 
-  it('notarizes with the notarytool object form, never bare notarize: true', () => {
-    expect(release).toContain('-c.mac.notarize.teamId=')
-    expect(builderYml).not.toMatch(/^\s*notarize:\s*true/m)
+  it('notarizes via env vars; no removed object-form notarize config (electron-builder 26)', () => {
+    for (const name of ['APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID']) {
+      expect(release, name).toContain(`${name}: \${{ runner.os == 'macOS' && secrets.${name}`)
+    }
+    expect(release).not.toContain('-c.mac.notarize.')
+    const code = builderYml
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('#'))
+      .join('\n')
+    expect(code).not.toMatch(/^\s*notarize:/m)
   })
 
   it('verifies signed output', () => {

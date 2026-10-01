@@ -4,7 +4,8 @@
  * Minimal KiCad schematic (.kicad_sch) parser that extracts simulation data.
  *
  * Produces SchematicSimData = Map<ref, SymbolSimInfo>, where each entry
- * contains the six Sim.* property fields, pin list, and no-connect markers.
+ * contains the six Sim.* property fields, pin list, and the pins that carry a
+ * no-connect marker.
  *
  * v1 NOTE: This implementation flat-scans all (symbol ...) instances at the
  * top level. Hierarchical-sheet files contain (sheet ...) elements that
@@ -40,8 +41,14 @@ export interface SymbolSimInfo {
    */
   pins: { number: string; name: string; type: string }[]
   /**
-   * Pin numbers of no-connect markers on this symbol instance.
-   * A no-connect inside a (symbol ...) block carries a (pin "N" ...) child.
+   * Pin numbers of this symbol instance that carry a no-connect marker.
+   *
+   * KiCad writes a no-connect as a sheet-level `(no_connect (at x y) (uuid ...))`
+   * with coordinates only (never nested in a symbol, never naming a pin). A pin
+   * is reported here when a marker sits on the pin's connection point in sheet
+   * coordinates, after the instance's position, rotation, mirror and unit are
+   * applied to the library pin position. Markers that touch no pin of the flat
+   * root sheet (for example a marker on a hierarchical sheet pin) are ignored.
    */
   noConnects: string[]
 }
@@ -60,6 +67,16 @@ function strAtom(node: SExpr, index: number): string {
   return ''
 }
 
+function numAtom(node: SExpr, index: number, fallback = 0): number {
+  const v = atom(node, index)
+  if (typeof v === 'number') return v
+  if (typeof v === 'string') {
+    const n = Number(v)
+    return Number.isNaN(n) ? fallback : n
+  }
+  return fallback
+}
+
 // ─── lib_symbols parsing ──────────────────────────────────────────────────────
 
 interface LibSymbolPin {
@@ -68,8 +85,20 @@ interface LibSymbolPin {
   type: string // electrical type: passive, input, output, power_in, open_collector, etc.
 }
 
+/** A pin's connection point in symbol-library coordinates (mm, Y up). */
+interface LibPlacedPin {
+  number: string
+  x: number
+  y: number
+  /** Unit this pin belongs to; 0 means common to every unit. */
+  unit: number
+  /** Body style (De Morgan) this pin belongs to; 0 means common to all styles. */
+  style: number
+}
+
 interface LibSymbolInfo {
   pins: LibSymbolPin[]
+  placed: LibPlacedPin[]
 }
 
 /**
@@ -98,12 +127,13 @@ function parseLibSymbols(root: SExpr): Map<string, LibSymbolInfo> {
 
     const symbolId = strAtom(symbolDef, 1)
     const pins: LibSymbolPin[] = []
+    const placed: LibPlacedPin[] = []
 
     // Recursively find all (pin ...) nodes inside this symbol definition
     // They may be nested inside sub-symbol blocks like (symbol "NE555_0_0" ...)
-    collectPins(symbolDef, pins)
+    collectPins(symbolDef, pins, placed, 0, 0)
 
-    libMap.set(symbolId, { pins })
+    libMap.set(symbolId, { pins, placed })
   }
 
   return libMap
@@ -113,7 +143,13 @@ function parseLibSymbols(root: SExpr): Map<string, LibSymbolInfo> {
  * Recursively collect all (pin ...) nodes from a symbol definition tree.
  * KiCad symbols can nest sub-unit symbols: (symbol "Name_0_0" (pin ...) ...)
  */
-function collectPins(node: SExpr, pins: LibSymbolPin[]): void {
+function collectPins(
+  node: SExpr,
+  pins: LibSymbolPin[],
+  placed: LibPlacedPin[],
+  unit: number,
+  style: number,
+): void {
   if (!Array.isArray(node)) return
 
   for (const child of node) {
@@ -131,12 +167,93 @@ function collectPins(node: SExpr, pins: LibSymbolPin[]): void {
 
       if (pinNumber !== '') {
         pins.push({ number: pinNumber, name: pinName, type })
+        const atNode = find(child, 'at')
+        if (atNode && Array.isArray(atNode)) {
+          placed.push({
+            number: pinNumber,
+            x: numAtom(atNode, 1),
+            y: numAtom(atNode, 2),
+            unit,
+            style,
+          })
+        }
       }
     } else if (child[0] === 'symbol') {
-      // Recurse into sub-unit symbols
-      collectPins(child, pins)
+      // Recurse into sub-unit symbols. KiCad names them "<Name>_<unit>_<style>".
+      const m = /_(\d+)_(\d+)$/.exec(strAtom(child, 1))
+      collectPins(child, pins, placed, m ? Number(m[1]) : unit, m ? Number(m[2]) : style)
     }
   }
+}
+
+// ─── no-connect markers ───────────────────────────────────────────────────────
+
+interface Vec {
+  x: number
+  y: number
+}
+
+/** Marker-to-pin match tolerance (mm). Pins and markers sit on a 1.27 mm grid or finer. */
+const NC_TOLERANCE_MM = 0.02
+
+/**
+ * Collect the sheet-level no-connect markers: `(no_connect (at x y) (uuid ...))`.
+ * This is the only shape KiCad writes.
+ */
+function parseNcMarkers(root: SExpr): Vec[] {
+  const out: Vec[] = []
+  if (!Array.isArray(root)) return out
+  for (const child of root) {
+    if (!Array.isArray(child) || child[0] !== 'no_connect') continue
+    const at = find(child, 'at')
+    if (at && Array.isArray(at)) out.push({ x: numAtom(at, 1), y: numAtom(at, 2) })
+  }
+  return out
+}
+
+/**
+ * Sheet position of a library pin for a placed instance. Library coordinates
+ * are Y up and the sheet is Y down. The counter-clockwise rotation applies
+ * first, then the instance mirror (`(mirror x)` flips Y, `(mirror y)` flips X)
+ * in the rotated frame, as KiCad does, then the translation to the instance
+ * origin. The order matters for 90 and 270 degree rotations.
+ */
+function pinSheetPos(pin: LibPlacedPin, at: Vec, rotDeg: number, mirror: string): Vec {
+  const rad = (rotDeg * Math.PI) / 180
+  const c = Math.cos(rad)
+  const s = Math.sin(rad)
+  let rx = pin.x * c - pin.y * s
+  let ry = pin.x * s + pin.y * c
+  if (mirror === 'x') ry = -ry
+  else if (mirror === 'y') rx = -rx
+  return { x: at.x + rx, y: at.y - ry }
+}
+
+/** Pin numbers of a placed instance that have a no-connect marker on them. */
+function markedPins(node: SExpr[], lib: LibSymbolInfo, markers: Vec[]): string[] {
+  if (markers.length === 0) return []
+  const atNode = find(node, 'at')
+  if (!atNode || !Array.isArray(atNode)) return []
+  const at = { x: numAtom(atNode, 1), y: numAtom(atNode, 2) }
+  const rotDeg = numAtom(atNode, 3)
+  const mirrorNode = find(node, 'mirror')
+  const mirror = mirrorNode && Array.isArray(mirrorNode) ? strAtom(mirrorNode, 1) : ''
+  const unitNode = find(node, 'unit')
+  const unit = unitNode && Array.isArray(unitNode) ? numAtom(unitNode, 1, 1) : 1
+  const styleNode = find(node, 'body_style') ?? find(node, 'convert')
+  const style = styleNode && Array.isArray(styleNode) ? numAtom(styleNode, 1, 1) : 1
+
+  const found: string[] = []
+  for (const pin of lib.placed) {
+    if (pin.unit !== 0 && pin.unit !== unit) continue
+    if (pin.style !== 0 && pin.style !== style) continue
+    const pos = pinSheetPos(pin, at, rotDeg, mirror)
+    const hit = markers.some(
+      (m) => Math.abs(m.x - pos.x) <= NC_TOLERANCE_MM && Math.abs(m.y - pos.y) <= NC_TOLERANCE_MM,
+    )
+    if (hit && !found.includes(pin.number)) found.push(pin.number)
+  }
+  return found
 }
 
 // ─── symbol instance parsing ──────────────────────────────────────────────────
@@ -150,7 +267,8 @@ function collectPins(node: SExpr, pins: LibSymbolPin[]): void {
  */
 function parseSymbolInstance(
   node: SExpr,
-  libMap: Map<string, LibSymbolInfo>
+  libMap: Map<string, LibSymbolInfo>,
+  ncMarkers: Vec[]
 ): { ref: string; info: SymbolSimInfo } | null {
   if (!Array.isArray(node) || node[0] !== 'symbol') return null
 
@@ -163,8 +281,6 @@ function parseSymbolInstance(
   let value: string | undefined
 
   const sim: SymbolSimInfo['sim'] = {}
-  const noConnects: string[] = []
-
   for (const child of node) {
     if (!Array.isArray(child)) continue
 
@@ -184,18 +300,6 @@ function parseSymbolInstance(
         }
       }
     }
-
-    // No-connect markers: (no_connect (at ...) (pin "5") (uuid ...))
-    if (child[0] === 'no_connect') {
-      const pinNode = find(child, 'pin')
-      if (pinNode && Array.isArray(pinNode)) {
-        // (pin "5" (uuid ...)) — pin number is at index 1
-        const pinNum = strAtom(pinNode, 1)
-        if (pinNum !== '') {
-          noConnects.push(pinNum)
-        }
-      }
-    }
   }
 
   if (ref === '') return null
@@ -204,6 +308,7 @@ function parseSymbolInstance(
   const libId = strAtom(libIdNode, 1)
   const libInfo = libMap.get(libId)
   const pins: LibSymbolPin[] = libInfo ? libInfo.pins : []
+  const noConnects = libInfo ? markedPins(node, libInfo, ncMarkers) : []
 
   return {
     ref,
@@ -224,13 +329,13 @@ function parseSymbolInstance(
  * Returns a Map<ref, SymbolSimInfo> where:
  * - ref is the reference designator (e.g. "U1", "R1")
  * - info contains value, Sim.* properties, pin list (from lib_symbols), and
- *   any no-connect markers
+ *   the pins a sheet-level no-connect marker sits on
  *
  * Tolerant of unknown tokens — never throws on unrecognized atoms.
  * Throws SexprError only if the file is structurally malformed.
  */
 export function parseSchematicSimData(text: string): SchematicSimData {
-  const root = parseSexpr(text)
+  const root = parseSexpr(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)
   if (!Array.isArray(root) || root[0] !== 'kicad_sch') {
     throw new Error('Not a valid .kicad_sch file: root node must be kicad_sch')
   }
@@ -241,11 +346,20 @@ export function parseSchematicSimData(text: string): SchematicSimData {
   // Flat-scan all top-level (symbol ...) instances
   // NOTE: v1 ignores hierarchical sheet references — see module docblock.
   const result: SchematicSimData = new Map()
+  const ncMarkers = parseNcMarkers(root)
 
   for (const child of root) {
     if (!Array.isArray(child) || child[0] !== 'symbol') continue
-    const parsed = parseSymbolInstance(child, libMap)
+    const parsed = parseSymbolInstance(child, libMap, ncMarkers)
     if (parsed) {
+      // A multi-unit part is several placed instances sharing one reference;
+      // keep the last instance's fields but accumulate every unit's no-connects.
+      const prior = result.get(parsed.ref)
+      if (prior) {
+        for (const n of prior.noConnects) {
+          if (!parsed.info.noConnects.includes(n)) parsed.info.noConnects.push(n)
+        }
+      }
       result.set(parsed.ref, parsed.info)
     }
   }

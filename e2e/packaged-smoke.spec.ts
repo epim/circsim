@@ -10,10 +10,11 @@
  * proves libngspice dlopens on the host (a missing shared library such as the
  * libfftw3 of issue #15 leaves the app looking healthy but the sim never ready).
  *
- * Packaged executable per platform (electron-builder --dir):
+ * Packaged executable per platform (electron-builder --dir), resolved by
+ * resolvePackagedExe in ./util (issue #66):
  *   win32  dist/win-unpacked/circsim.exe
  *   linux  dist/linux-unpacked/circsim
- *   darwin dist/mac[-arm64]/circsim.app/Contents/MacOS/circsim
+ *   darwin dist/mac[-arch]/circsim.app/Contents/MacOS/circsim
  * CIRCSIM_PACKAGED_EXE overrides the path.
  *
  * Prerequisite: `npm run package:dir` (produces the unpacked app).
@@ -22,29 +23,18 @@
  * failure so the gate cannot pass by skipping.
  */
 
-import { test, expect, _electron as electron, type Page } from '@playwright/test'
-import { join } from 'path'
+import {
+  test,
+  expect,
+  _electron as electron,
+  type ElectronApplication,
+  type Page,
+} from '@playwright/test'
 import { existsSync } from 'fs'
-import { pipeAppOutput } from './util'
+import { pipeAppOutput, resolvePackagedExe } from './util'
 
-function packagedExePath(): string {
-  const override = process.env['CIRCSIM_PACKAGED_EXE']
-  if (override) return override
-  const dist = join(__dirname, '..', 'dist')
-  switch (process.platform) {
-    case 'win32':
-      return join(dist, 'win-unpacked', 'circsim.exe')
-    case 'darwin': {
-      // electron-builder names the dir after the host arch: mac (x64) or mac-arm64.
-      const dir = process.arch === 'arm64' ? 'mac-arm64' : 'mac'
-      return join(dist, dir, 'circsim.app', 'Contents', 'MacOS', 'circsim')
-    }
-    default:
-      return join(dist, 'linux-unpacked', 'circsim')
-  }
-}
-
-const PACKAGED_EXE = packagedExePath()
+const PACKAGED_EXE: string =
+  process.env['CIRCSIM_PACKAGED_EXE'] ?? resolvePackagedExe() ?? '<packaged binary not built>'
 
 // The first op solve loads libngspice and the code models inside the SimHost
 // utility process; on a loaded CI runner that has taken well over 10 s.
@@ -56,9 +46,16 @@ const OP_TIMEOUT_MS = 25_000
  * this gate is diagnosable from the log alone.
  */
 async function dumpDiagnostics(
+  app: ElectronApplication,
   page: Page,
   rendererLog: string[],
 ): Promise<void> {
+  try {
+    const gpu = await app.evaluate(({ app: a }) => a.getGPUFeatureStatus())
+    console.log(`[diag] gpu feature status: ${JSON.stringify(gpu)}`)
+  } catch (e) {
+    console.log(`[diag] could not read gpu status: ${String(e)}`)
+  }
   try {
     const state = await page.evaluate(() => ({
       text: document.body.innerText.slice(0, 4000),
@@ -100,7 +97,7 @@ async function withPackagedApp(
     try {
       await body(page)
     } catch (err) {
-      await dumpDiagnostics(page, rendererLog)
+      await dumpDiagnostics(app, page, rendererLog)
       throw err
     }
   } finally {

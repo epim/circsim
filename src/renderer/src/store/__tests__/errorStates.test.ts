@@ -221,6 +221,13 @@ describe('Spec §12 — convergence-failure card wording', () => {
     const card = store.getState().convergenceCard
     expect(card).not.toBeNull()
     expect(card!.retryLadderNote).toMatch(/gmin|source.?step/i)
+    // Plain wording first, the solver term second (issue #73).
+    expect(card!.retryLadderNote).toMatch(/gentler solve \(gmin stepping\)/)
+  })
+
+  it('convergence card explains a floating node in plain words', () => {
+    mock.emit({ type: 'convergenceFailure', detail: 'timestep too small' })
+    expect(store.getState().convergenceCard!.plainLanguage).toMatch(/unconnected net \(a floating node/)
   })
 
   it('convergence card preserves the raw ngspice detail (expandable section)', () => {
@@ -313,6 +320,15 @@ describe('F1 — opResult.method drives the op fallback caveat', () => {
       expect(opCaveatMessage(m)).toMatch(/0\.000 V/)
     }
     expect(opCaveatMessage('failed')).toMatch(/not be trusted/)
+  })
+
+  it('opCaveatMessage leads with plain language and keeps the technical name second (issue #73)', () => {
+    expect(opCaveatMessage('gmin')).toMatch(/^The steady-state voltages \(operating point\) were found with a fallback: a gentler solve \(gmin stepping\)/)
+    expect(opCaveatMessage('source')).toMatch(/a ramped solve \(source stepping\)/)
+    // No em-dashes in user-facing text.
+    for (const m of ['gmin', 'source', 'tran-fallback', 'failed'] as const) {
+      expect(opCaveatMessage(m)).not.toContain(String.fromCharCode(0x2014))
+    }
   })
 })
 

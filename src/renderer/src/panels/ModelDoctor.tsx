@@ -5,7 +5,8 @@
  * resolution status ≠ ok. Per part:
  *   - amber/red status pill + warnings (grey "open by design" + informational
  *     why-note for documented opens — M9)
- *   - actions: [Stub open] [Stub short] [Interactive pins] [Import .lib…] [Ask your LLM]
+ *   - actions: [Ignore this part] [Replace with a wire] [Interactive pins] [Import model file]
+ *     [Ask your LLM] (plain-language labels, technical terms in tooltips: issue #73)
  *   - a pin-map editor: a table mapping each pad number ↔ model terminal name
  *
  * Every change re-runs resolveAll via the store and flags `deckDirty`
@@ -26,6 +27,9 @@ import LibImport from './LibImport'
 import type { PadInfo } from '../../../core/models/llmPrompt'
 import type { LlmAssistProps } from './LlmAssist'
 import type { LibImportProps } from './LibImport'
+import { TEXT_HINT } from '../ui/palette'
+import { termTitle } from '../ui/glossary'
+import DocsLink from '../ui/docsLink'
 
 export interface ModelDoctorHandlers {
   /** Open the .lib import flow for a part (Task 25). */
@@ -46,6 +50,13 @@ export function _revealDoctorCard(
   el?.scrollIntoView?.({ block: 'nearest' })
 }
 
+/**
+ * More problem parts than this and the Doctor collapses unselected cards to one
+ * line each (expand on select). At or under it every card stays fully open, so
+ * the small boards the app is mostly used on look exactly as before.
+ */
+export const DOCTOR_COLLAPSE_AFTER = 6
+
 export default function ModelDoctor(props: ModelDoctorHandlers): React.ReactElement | null {
   const resolutions = useApp(s => s.resolutions)
   const parts = useApp(s => s.circuit?.parts ?? EMPTY_PARTS)
@@ -59,18 +70,28 @@ export default function ModelDoctor(props: ModelDoctorHandlers): React.ReactElem
   if (problems.length === 0) return null
 
   const partByRef = new Map(parts.map(p => [p.ref, p]))
+  // Issue #72: past a handful of problem parts, one full card each (pin map,
+  // five actions) buries the two or three that block the sim. Beyond the
+  // threshold the unselected cards collapse to one line; selecting a part (here,
+  // in the Parts list, or on the board) expands its card.
+  const collapsible = problems.length > DOCTOR_COLLAPSE_AFTER
 
   return (
     <div style={drawerStyle} data-testid="model-doctor">
       <div style={headerStyle}>
         Model Doctor
         <span style={countStyle}>{problems.length}</span>
+        <DocsLink to="guides/model-doctor" testId="doctor-docs-link" style={{ marginLeft: 8, fontWeight: 400, fontSize: 11 }}>
+          What is this?
+        </DocsLink>
       </div>
       <div style={bodyStyle}>
         {problems.map(res => {
           const part = partByRef.get(res.ref)
           if (!part) return null
-          return <DoctorRow key={res.ref} res={res} part={part} {...props} />
+          return (
+            <DoctorRow key={res.ref} res={res} part={part} collapsible={collapsible} {...props} />
+          )
         })}
       </div>
     </div>
@@ -79,6 +100,8 @@ export default function ModelDoctor(props: ModelDoctorHandlers): React.ReactElem
 
 export interface DoctorMenuItem {
   label: string
+  /** One-line plain-language description shown as a tooltip: the technical term plus a plain definition (issues #71, #73). */
+  hint?: string
   onSelect: () => void
 }
 
@@ -154,6 +177,7 @@ function MenuItemButton({
   return (
     <button
       role="menuitem"
+      title={item.hint}
       style={hover ? { ...menuItemStyle, background: '#3a2f4a' } : menuItemStyle}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -170,9 +194,10 @@ function MenuItemButton({
 function DoctorRow({
   res,
   part,
+  collapsible,
   onImportLib,
   onAskLlm,
-}: { res: Resolution; part: Part } & ModelDoctorHandlers): React.ReactElement {
+}: { res: Resolution; part: Part; collapsible: boolean } & ModelDoctorHandlers): React.ReactElement {
   const store = useAppStoreApi()
   const schematicSimData = useApp(s => s.schematicSimData)
   const selectedRef = useApp(s => s.selectedRef)
@@ -262,17 +287,12 @@ function DoctorRow({
   }
 
   // LibImport onSave: persist binding.
-  const handleLibSave: LibImportProps['onSave'] = (mpn, filePath, subcktName, pinMap) => {
-    // For user-import, the subckt text comes from the file; we store the filePath reference.
-    // We use the filePath as the "text" stub so spicegen can include it.
-    store.getState().saveUserModel(
-      res.ref,
-      mpn,
-      `* user-import from ${filePath}`,
-      subcktName,
-      pinMap,
-      'user-import',
-    )
+  const handleLibSave: LibImportProps['onSave'] = (mpn, _filePath, subcktName, pinMap, modelText) => {
+    // The bound text is the real model (the chosen .subckt plus the subckts and
+    // cards it needs), never a path or comment stub: the deck generator inlines
+    // definitions from memory and ngspice never reads a model by path. The
+    // board's sidecar persists this text, so it is back after a reopen.
+    store.getState().saveUserModel(res.ref, mpn, modelText, subcktName, pinMap, 'user-import')
     setShowLibImport(false)
     setPinEditorOpen(true)
   }
@@ -295,6 +315,56 @@ function DoctorRow({
     }
   }
 
+  // Collapsed one-liner: only when the drawer is crowded and this card is not the
+  // selection. All hooks above run either way, so a card keeps its local state
+  // (open LLM panel, pin editor) while collapsed.
+  const collapsed = collapsible && !isSelected
+  const pillKind = isOpenByDesign ? 'open-by-design' : isStubbed ? 'stubbed' : 'no-model'
+  const pill = (
+    <span
+      data-testid="doctor-status-pill"
+      data-status={pillKind}
+      style={{
+        ...pillStyle,
+        background: isOpenByDesign ? '#95a5a6' : isStubbed ? '#f1c40f' : '#e74c3c',
+      }}
+      title={
+        isOpenByDesign
+          ? 'Open by design: this part is deliberately not simulated.'
+          : isStubbed
+            ? termTitle('stub')
+            : termTitle('unresolved')
+      }
+    >
+      {isOpenByDesign ? 'open by design' : isStubbed ? 'placeholder' : 'no model'}
+    </span>
+  )
+  if (collapsed) {
+    const expand = (): void => store.getState().revealInDoctor(res.ref)
+    return (
+      <div
+        ref={cardRef}
+        style={{ ...rowStyle, ...rowCollapsedStyle }}
+        data-ref={res.ref}
+        data-collapsed="true"
+        data-testid="doctor-row-collapsed"
+        role="button"
+        tabIndex={0}
+        title={`Show the Model Doctor card for ${res.ref}`}
+        onClick={expand}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') expand()
+        }}
+      >
+        <div style={rowHeaderStyle}>
+          {pill}
+          <strong>{res.ref}</strong>
+          <span style={{ color: '#aaa' }}>{part.value || '—'}</span>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
       ref={cardRef}
@@ -302,18 +372,15 @@ function DoctorRow({
       data-ref={res.ref}
       data-selected={isSelected || undefined}
     >
-      <div style={rowHeaderStyle}>
-        <span
-          style={{
-            ...pillStyle,
-            background: isOpenByDesign ? '#95a5a6' : isStubbed ? '#f1c40f' : '#e74c3c',
-          }}
-        >
-          {isOpenByDesign ? 'open by design' : isStubbed ? 'stubbed' : 'no model'}
-        </span>
+      <div
+        style={collapsible ? { ...rowHeaderStyle, cursor: 'pointer' } : rowHeaderStyle}
+        onClick={collapsible ? () => store.getState().selectComponent(null) : undefined}
+        title={collapsible ? 'Collapse this card' : undefined}
+      >
+        {pill}
         <strong>{res.ref}</strong>
         <span style={{ color: '#aaa' }}>{part.value || '—'}</span>
-        <span style={{ color: '#777', fontSize: 11 }}>{part.libId}</span>
+        <span style={{ color: TEXT_HINT, fontSize: 11 }}>{part.libId}</span>
       </div>
 
       {/* M9: the why-not-modeled note — informational, not an error. */}
@@ -332,30 +399,57 @@ function DoctorRow({
       )}
 
       <div style={actionsStyle}>
-        <button style={btnStyle} onClick={handleImportLib}>
-          Import .lib…
+        <button
+          style={btnStyle}
+          onClick={handleImportLib}
+          title="Import a SPICE model file (.lib) for this part, for example one downloaded from the manufacturer"
+        >
+          Import model file (.lib)…
         </button>
         <button
           style={{ ...btnStyle, background: (pinEditorOpen || forcePinMapOpen) ? '#2c4a2c' : undefined }}
           onClick={() => { setPinEditorOpen(o => !o); setForcePinMapOpen(false) }}
+          title={termTitle('pinMap')}
         >
-          {pinEditorOpen ? 'Hide pin map' : 'Pin map'}
+          {pinEditorOpen ? 'Hide pin matching' : 'Pin matching'}
         </button>
-        <button style={btnStyle} onClick={() => store.getState().stubPart(res.ref, 'open')}>
-          Stub open
+        <button
+          style={btnStyle}
+          onClick={() => store.getState().stubPart(res.ref, 'open')}
+          title={termTitle('stubOpen')}
+          data-testid="doctor-stub-open"
+        >
+          Ignore this part
         </button>
         <DoctorMoreMenu
           open={moreOpen}
           onToggle={() => setMoreOpen(o => !o)}
           onClose={() => setMoreOpen(false)}
           items={[
-            { label: 'Stub short', onSelect: () => store.getState().stubPart(res.ref, 'short') },
-            { label: 'Interactive pins', onSelect: () => store.getState().stubPart(res.ref, 'interactive-pins') },
-            { label: 'Ask your LLM', onSelect: handleAskLlm },
+            {
+              label: 'Replace with a wire',
+              hint: termTitle('stubShort'),
+              onSelect: () => store.getState().stubPart(res.ref, 'short'),
+            },
+            {
+              label: 'Interactive pins',
+              hint: 'Drive or probe each pin yourself, for chips with no model such as microcontrollers',
+              onSelect: () => store.getState().stubPart(res.ref, 'interactive-pins'),
+            },
+            {
+              label: 'Ask your LLM',
+              hint: 'Copy a prompt that asks an LLM to write a model for this part',
+              onSelect: handleAskLlm,
+            },
           ]}
         />
         {(isStubbed || res.tier === 6 || hasOverride) && (
-          <button style={btnGhostStyle} onClick={() => store.getState().clearPartOverride(res.ref)}>
+          <button
+            style={btnGhostStyle}
+            title="Undo your changes to this part and go back to the automatic result"
+            data-testid="doctor-reset"
+            onClick={() => store.getState().clearPartOverride(res.ref)}
+          >
             Reset
           </button>
         )}
@@ -439,7 +533,9 @@ function PinMapEditor({ part, res }: { part: Part; res: Resolution }): React.Rea
 
   return (
     <div style={pinEditorStyle}>
-      <div style={pinEditorHeaderStyle}>Pin map — pad ↔ model terminal</div>
+      <div style={pinEditorHeaderStyle} title={termTitle('pinMap')}>
+        Pin matching: which board pad goes to which model terminal
+      </div>
       <datalist id={listId}>
         {terminalCandidates.map(name => (
           <option key={name} value={name} />
@@ -528,6 +624,12 @@ const rowSelectedStyle: React.CSSProperties = {
   background: '#332345',
   outline: '2px solid #f1c40f',
   outlineOffset: -2,
+}
+/** One-line card used when the drawer is crowded (issue #72). */
+const rowCollapsedStyle: React.CSSProperties = {
+  padding: '4px 8px',
+  marginBottom: 3,
+  cursor: 'pointer',
 }
 const rowHeaderStyle: React.CSSProperties = {
   display: 'flex',

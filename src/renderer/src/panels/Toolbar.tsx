@@ -12,8 +12,10 @@
  *   so App.tsx can drive the imperative SceneManager.
  *
  * Buttons are guided-disabled (Spec §12): Power On / Run require a designated
- * ground AND at least one resolved source — never a silently-dead button; the
- * disabled tooltip explains what's missing.
+ * ground AND at least one wired source. They stay focusable (aria-disabled, not
+ * `disabled`) so a click still reaches the store, which raises the guided
+ * no-ground / no-source card (GuidedStateHost); the reason is also shown as
+ * visible helper text beside the buttons, never only in a tooltip.
  *
  * UI-only; validated by build + Phase 6 E2E. Orchestration logic is unit-tested
  * in the store (orchestration.test.ts).
@@ -21,7 +23,10 @@
 
 import React, { useCallback } from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
+import { wiredInstruments } from '../../../core/spicegen/instruments'
 import type { OverlayMode } from '../viewport/overlay'
+import { TEXT_HINT } from '../ui/palette'
+import { termTitle } from '../ui/glossary'
 
 const PACE_OPTIONS: { label: string; value: number | 'max' }[] = [
   { label: '0.1×', value: 0.1 },
@@ -29,10 +34,14 @@ const PACE_OPTIONS: { label: string; value: number | 'max' }[] = [
   { label: 'max', value: 'max' },
 ]
 
-const OVERLAY_OPTIONS: { label: string; value: OverlayMode }[] = [
-  { label: 'Realistic', value: 'realistic' },
-  { label: 'Voltage', value: 'voltage' },
-  { label: 'Highlight', value: 'highlight' },
+const OVERLAY_OPTIONS: { label: string; value: OverlayMode; hint: string }[] = [
+  { label: 'Realistic', value: 'realistic', hint: 'Show the board as it looks' },
+  {
+    label: 'Voltage',
+    value: 'voltage',
+    hint: 'Tint the copper by voltage; a color scale with the lowest and highest voltage appears on the board',
+  },
+  { label: 'Highlight', value: 'highlight', hint: 'Highlight the net you select' },
 ]
 
 export interface ToolbarProps {
@@ -51,8 +60,9 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
   const paceFactor = useApp(s => s.paceFactor)
   const achievedFactor = useApp(s => s.achievedRealtimeFactor)
 
-  // A "source" is any supply / function-gen / logic-input (something that drives a net).
-  const hasSource = instruments.some(
+  // A "source" is any WIRED supply / function-gen / logic-input (something that
+  // drives a net). An unwired shelf instrument drives nothing, so it doesn't count.
+  const hasSource = wiredInstruments(instruments).some(
     i => i.kind === 'dc-supply' || i.kind === 'function-gen' || i.kind === 'logic-input',
   )
   const hasGround = groundNetId !== null
@@ -107,9 +117,9 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
 
       <button
         style={canPowerOn ? primaryBtn : disabledBtn}
-        disabled={!canPowerOn}
+        aria-disabled={!canPowerOn}
         onClick={handlePowerOn}
-        title={canPowerOn ? 'Run a DC operating-point check' : disabledReason}
+        title={canPowerOn ? termTitle('operatingPoint') : disabledReason}
         data-testid="power-on-btn"
       >
         Power On
@@ -117,13 +127,20 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
 
       <button
         style={canPowerOn ? (running ? pauseBtn : runBtn) : disabledBtn}
-        disabled={!canPowerOn}
+        aria-disabled={!canPowerOn}
         onClick={handleRunPause}
         title={canPowerOn ? (running ? 'Pause the simulation' : 'Run the live simulation') : disabledReason}
         data-testid="run-btn"
       >
         {running ? 'Pause' : simState === 'paused' ? 'Resume' : 'Run'}
       </button>
+
+      {/* Visible reason the Power On / Run buttons are not ready (not title-only). */}
+      {!canPowerOn && (
+        <span style={reasonStyle} data-testid="toolbar-blocked-reason">
+          {disabledReason}
+        </span>
+      )}
 
       {/* Pace selector */}
       <div style={groupStyle} title="Real-time pacing">
@@ -146,6 +163,7 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
           <button
             key={opt.value}
             style={overlay === opt.value ? segActive : segBtn}
+            title={opt.hint}
             onClick={() => onOverlay(opt.value)}
           >
             {opt.label}
@@ -156,7 +174,7 @@ export default function Toolbar({ overlay, onOverlay }: ToolbarProps): React.Rea
       {/* Status readout */}
       <span style={statusStyle}>
         {simState === 'idle' && 'idle'}
-        {simState === 'op' && 'operating point…'}
+        {simState === 'op' && 'measuring voltages…'}
         {(running || simState === 'paused') && (
           <>
             {running ? 'running' : 'paused'}
@@ -199,8 +217,12 @@ const disabledBtn: React.CSSProperties = {
   ...baseBtn,
   background: '#1a1a24',
   borderColor: '#2a2a34',
-  color: '#555',
+  color: TEXT_HINT,
   cursor: 'not-allowed',
+}
+const reasonStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#d8b060',
 }
 const groupStyle: React.CSSProperties = {
   display: 'flex',
@@ -210,7 +232,7 @@ const groupStyle: React.CSSProperties = {
 }
 const groupLabel: React.CSSProperties = {
   fontSize: 10,
-  color: '#777',
+  color: TEXT_HINT,
   textTransform: 'uppercase',
   letterSpacing: '0.05em',
   marginRight: 4,

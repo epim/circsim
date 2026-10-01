@@ -55,7 +55,7 @@ files:
 # Common resources for EVERY platform (copied to <resources>/ outside asar).
 #  - models  → <resources>/models   (bundled SPICE library; .lib + index.json)
 #  - sample  → <resources>/sample   (blinker-555 first-run project)
-#  - docs    → <resources>/docs      (what-circsim-can-tell-you.md, licensing.md
+#  - docs    → <resources>/docs      (what-circsim-can-tell-you.html, licensing.md
 #                                      — opened by openDocs / shown in About)
 extraResources:
   - from: resources/models
@@ -66,8 +66,8 @@ extraResources:
     to: sample
     filter:
       - "**/*"
-  - from: docs/what-circsim-can-tell-you.md
-    to: docs/what-circsim-can-tell-you.md
+  - from: docs/what-circsim-can-tell-you.html
+    to: docs/what-circsim-can-tell-you.html
   - from: docs/licensing.md
     to: docs/licensing.md
   - from: resources/ngspice/COPYING
@@ -130,10 +130,12 @@ mac:
   #  - with CSC_LINK / CSC_KEY_PASSWORD present, electron-builder imports the
   #    Developer ID Application certificate and signs the app (hardened runtime
   #    is on by default, with electron-builder's default entitlements);
-  #  - the release job then adds `-c.mac.notarize.teamId=$APPLE_TEAM_ID` and
-  #    exports APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD so the signed app is
-  #    notarized with notarytool (the object form is required: a bare
-  #    `notarize: true` selects the retired altool path in electron-builder 24);
+  #  - the release job also exports APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD /
+  #    APPLE_TEAM_ID, and electron-builder 26 then notarizes the signed app with
+  #    notarytool on its own. In 26 `mac.notarize` is a plain boolean (default:
+  #    notarize when those variables are set) and the old object form
+  #    (`notarize: { teamId }`) is no longer in the schema, so the key is left
+  #    unset here and no -c.mac.notarize.* flag is passed;
   #  - with no secrets the job sets CSC_IDENTITY_AUTO_DISCOVERY=false and the
   #    build is unsigned, exactly as before. Nothing here breaks that path.
 

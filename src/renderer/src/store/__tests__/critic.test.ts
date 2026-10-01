@@ -4,8 +4,8 @@
  * Verifies the auto-trigger wiring (no live ngspice — injected mock simClient):
  *   - opening a board populates criticReport with the no-sim findings and SKIPS
  *     the sim-dependent checks (ampacity / thermal)
- *   - after an operating-point solve the report includes (no longer skips)
- *     ampacity / thermal — they run with the real op result
+ *   - after an operating-point solve ampacity runs with the real op result;
+ *     thermal stays not-assessed (no per-part power producer yet, #46)
  *   - selectFinding stores the id and forwards focusFinding to the board hooks
  *   - buildCriticOpResult maps netId voltages → spiceNode + ref currents
  */
@@ -83,10 +83,13 @@ describe('appStore — critic re-audits after an operating-point solve', () => {
 
     const report = store.getState().criticReport!
     expect(report.ranBy).toContain('ampacity')
-    expect(report.ranBy).toContain('thermal')
+    // Nothing in the app produces per-part power yet, so thermal stays
+    // not-assessed (issue #46) instead of reading as run-and-clean.
+    expect(report.ranBy).not.toContain('thermal')
     const skippedChecks = report.skipped.map(s => s.check)
     expect(skippedChecks).not.toContain('ampacity')
-    expect(skippedChecks).not.toContain('thermal')
+    expect(skippedChecks).toContain('thermal')
+    expect(report.skipped.find(s => s.check === 'thermal')!.reason).toContain('not assessed')
   })
 })
 
@@ -136,6 +139,37 @@ describe('buildCriticOpResult', () => {
     expect(op).toBeDefined()
     expect(op!.nodeVoltages[vin.spiceNode]).toBeCloseTo(5)
     expect(op!.partCurrents!['D1']).toBeCloseTo(0.012)
+  })
+
+  it('carries the solve-derived branch currents of every part when they are given (issues #9, #45)', () => {
+    const board = parseBoard(readFixture('fixture-rc.kicad_pcb'))
+    const circuit = extract(board, { groundNetId: circuitGnd(board) })
+    const vin = circuit.nets.find(n => n.kicadName === 'VIN')!
+    const op = buildCriticOpResult(
+      circuit,
+      new Map([[vin.id, 5]]),
+      new Map([['D1', 0.012]]), // the LED-only map the store used to pass
+      {
+        partCurrents: { R1: 0.012, D1: 0.012 },
+        padCurrents: { R1: { '1': 0.012, '2': -0.012 } },
+        unresolvedRefs: ['U9'],
+      },
+    )
+    expect(op!.partCurrents!['R1']).toBeCloseTo(0.012) // a resistor, not only the LED
+    expect(op!.padCurrents!['R1']['1']).toBeCloseTo(0.012)
+    expect(op!.unresolvedRefs).toEqual(['U9'])
+  })
+
+  it('carries the supply entries (bench lead positions) in both op shapes (issue #47)', () => {
+    const board = parseBoard(readFixture('fixture-rc.kicad_pcb'))
+    const circuit = extract(board, { groundNetId: circuitGnd(board) })
+    const vin = circuit.nets.find(n => n.kicadName === 'VIN')!
+    const entries = [{ netId: vin.id, pos: { x: 3, y: 4 } }]
+    const bare = buildCriticOpResult(circuit, new Map([[vin.id, 5]]), new Map([['D1', 0.012]]), null, entries)
+    expect(bare!.supplyEntries).toEqual(entries)
+    const solved = buildCriticOpResult(circuit, new Map([[vin.id, 5]]), new Map(), { partCurrents: {}, padCurrents: {}, unresolvedRefs: [] }, entries)
+    expect(solved!.supplyEntries).toEqual(entries)
+    expect(buildCriticOpResult(circuit, new Map([[vin.id, 5]]), new Map())!.supplyEntries).toBeUndefined()
   })
 })
 

@@ -13,6 +13,7 @@
 import React from 'react'
 import { useApp, useAppStoreApi } from '../store/storeContext'
 import { DragKnob, NumericField } from './controls'
+import { termTitle } from '../ui/glossary'
 import { JackView, type JackHandlers } from './JackView'
 import { jacksFor, GROUND_INST_ID, potModeSwitch } from './leads'
 import { UNWIRED } from '../../../core/spicegen/instruments'
@@ -47,7 +48,7 @@ export function SupplyPanel({ inst, handlers }: PanelProps<'dc-supply'>): React.
         onChange={v => update({ ...inst, volts: v })}
       />
       <NumericField
-        label="Series R" value={inst.seriesOhms} unit="Ω" min={0.001}
+        label="Source R" hint={termTitle('seriesR')} value={inst.seriesOhms} unit="Ω" min={0.001}
         onChange={v => update({ ...inst, seriesOhms: v })}
       />
       {autoId === inst.id && (
@@ -133,7 +134,7 @@ export function LogicInputPanel({ inst, handlers }: PanelProps<'logic-input'>): 
         </button>
       </div>
       <NumericField
-        label="V High" value={inst.vHigh} unit="V" min={0} max={30}
+        label="High level" hint={termTitle('vHigh')} value={inst.vHigh} unit="V" min={0} max={30}
         onChange={v => update({ ...inst, vHigh: v })}
       />
     </div>
@@ -163,14 +164,16 @@ export function PotPanel({ inst, handlers }: PanelProps<'potentiometer'>): React
         <button
           style={{ ...waveBtnStyle, ...(inst.mode === 'rheostat' ? waveBtnActiveStyle : {}) }}
           onClick={() => inst.mode !== 'rheostat' && switchMode()}
+          title={termTitle('rheostat')}
         >
-          Rheostat
+          Variable resistor
         </button>
         <button
           style={{ ...waveBtnStyle, ...(inst.mode === 'divider' ? waveBtnActiveStyle : {}) }}
           onClick={() => inst.mode !== 'divider' && switchMode()}
+          title={termTitle('divider')}
         >
-          Divider
+          Voltage divider
         </button>
       </div>
       <DragKnob
@@ -178,7 +181,7 @@ export function PotPanel({ inst, handlers }: PanelProps<'potentiometer'>): React
         onChange={pct => update({ ...inst, wiperPct: Math.max(0, Math.min(1, pct / 100)) })}
       />
       <NumericField
-        label="Total R" value={inst.totalOhms} unit="Ω" min={1}
+        label="Total resistance" hint={termTitle('totalR')} value={inst.totalOhms} unit="Ω" min={1}
         onChange={v => update({ ...inst, totalOhms: v })}
       />
     </div>

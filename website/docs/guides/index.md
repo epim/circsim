@@ -19,7 +19,14 @@ Task-oriented walkthroughs for specific jobs. If you're new, do the [First Light
 
 - **[Fix an unresolved part](./model-doctor)**: the Model Doctor: import, stub, or pin-map a part.
 - **[Run the Board Critic audit](./run-critic)**: the read-only pre-fab check.
+- **[Save your setup & export a report](./save-and-report)**: keep your rigging across reopens and restarts, and hand a report to someone else.
 - **[Read the warnings & fidelity banner](./warnings)**: what every honesty surface is telling you.
+- **[Glossary](./glossary)**: every technical term the app uses, in plain words.
+- **[Save a diagnostic bundle](./diagnostics)**: one zip of decks, log, board hash, and versions to attach to a bug report.
+
+## Automating
+
+- **[Run circsim from the command line](./headless-cli)**: `circsim audit`, `deck`, and `op` with no window, for CI gates and reproducible reports.
 
 ## See also
 

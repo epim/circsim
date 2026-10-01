@@ -16,9 +16,18 @@
  *   - Undriven nets: nets with no path to ground and no driver, which the deck
  *     holds at 0 V through a 1 GOhm bleed. Listed by name so a bled 0 V is never
  *     mistaken for a measurement (issue #43). Cleared by any deck-dirtying edit.
+ *   - Board outline warnings (#50): load-time diagnostics from the Edge.Cuts
+ *     stitcher (no outline found, open chain, unsupported primitive). Persistent
+ *     for the loaded board; without them the 3D view just shows copper floating
+ *     in space or a bounding-box substrate with no explanation.
  *   - Bench-restart toast: brief "bench restarted" notice (window/memory), with
  *     the sequential-logic caveat when digital parts are present. Dismissable.
- *   - Crash toast: SimHost crashed — auto-recovering. Dismissable.
+ *   - Crash toast: SimHost crashed. Auto-recovering, or (fatal, after 5 rapid
+ *     crashes) stopped, with the instruction to quit and reopen circsim.
+ *     Dismissable. Names the cause (watchdog timeout vs engine crash, with the
+ *     exit code) and offers "Save diagnostics" (issue #26).
+ *   - "Save diagnostics" link: shown under any other warning so a board that
+ *     reads wrong can be exported as a zip (decks, log, board hash, versions).
  *
  * UI-only; the derived banner list + toast/card STATE are unit-tested in the
  * store (fidelityBannerItems, ingestEvent → benchRestartToast/convergenceCard).
@@ -31,10 +40,43 @@ import {
   collapsedFidelitySummary,
   opCaveatMessage,
   isFidelityMinimized,
+  type AppState,
   type AppStore,
   type RailNote,
 } from '../store/appStore'
 import { SCHEMATIC_PINMAP_PREFIX } from '../../../core/models/libraryMatch'
+import Term from '../ui/Term'
+import DocsLink from '../ui/docsLink'
+import { termTitle } from '../ui/glossary'
+import type { ConvergenceCulprit } from '../store/convergenceCulprit'
+import { openDocsAndReport } from './docsLink'
+import { saveDiagnostics, type SaveDiagnosticsResult } from '../diagnostics/saveDiagnostics'
+
+/**
+ * The crash toast's sentence: what happened and whether the engine is coming
+ * back. A watchdog exit (code 86) means a solve stopped making progress; any
+ * other exit is a crash. An unknown reason (older main) keeps the old wording.
+ */
+export function crashNoticeMessage(notice: NonNullable<AppState['crashNotice']>): string {
+  const code = notice.exitCode !== undefined && notice.exitCode !== null ? `exit code ${notice.exitCode}` : null
+  const what =
+    notice.reason === 'watchdog'
+      ? `The simulation engine stopped responding (watchdog timeout${code ? `, ${code}` : ''})`
+      : notice.reason === 'crashed'
+        ? `The simulation engine crashed${code ? ` (${code})` : ''}`
+        : 'The simulation engine crashed'
+  return notice.willRespawn
+    ? `${what} and is recovering automatically.`
+    : `${what} and could not be restarted.`
+}
+
+/** One line for the outcome of a save attempt, or null while there is nothing to say. */
+export function diagnosticsStatusMessage(result: SaveDiagnosticsResult | null): string | null {
+  if (!result) return null
+  if (result.error) return `Could not save diagnostics: ${result.error}`
+  if (result.saved) return `Saved diagnostics${result.path ? ` to ${result.path}` : ''}.`
+  return null
+}
 
 /**
  * Apply a manual rail-voltage override (from the gated-off note's inline entry)
@@ -54,6 +96,36 @@ export function _applyRailOverride(
   void store.getState().powerOn()
 }
 
+/** Stable empty list so the no-board case does not allocate per render. */
+const NO_WARNINGS: readonly string[] = []
+
+/**
+ * Select the part or net a convergence failure named, so the card turns the
+ * diagnosis into a click (#71). A part is revealed in the Model Doctor (nonce
+ * based, so it works twice in a row) and selected in the viewport; a net is
+ * selected by its KiCad name. Returns false, changing nothing, when the label
+ * maps to no board net (an unmapped SPICE node name). Exported for unit tests.
+ */
+export function _revealCulprit(store: AppStore, culprit: ConvergenceCulprit): boolean {
+  if (culprit.kind === 'part') {
+    store.getState().revealInDoctor(culprit.label)
+    return true
+  }
+  const net = culpritNet(store.getState().circuit, culprit)
+  if (!net) return false
+  store.getState().selectNet(net.id)
+  return true
+}
+
+/** The board net a net culprit refers to, or undefined (part culprit / unmapped). */
+function culpritNet(
+  circuit: AppState['circuit'],
+  culprit: ConvergenceCulprit,
+): { id: number } | undefined {
+  if (culprit.kind !== 'net') return undefined
+  return circuit?.nets.find(n => n.kicadName === culprit.label)
+}
+
 export default function WarningsBar(): React.ReactElement | null {
   const store = useAppStoreApi()
   const resolutions = useApp(s => s.resolutions)
@@ -64,6 +136,8 @@ export default function WarningsBar(): React.ReactElement | null {
   const railNotes = useApp(s => s.railNotes)
   const undrivenNets = useApp(s => s.undrivenNets)
   const fidelityMinimizedSig = useApp(s => s.fidelityMinimizedSig)
+  const board = useApp(s => s.board)
+  const outlineWarnings = board ? board.outline.warnings : NO_WARNINGS
 
   const fidelity = fidelityBannerItems(resolutions)
   const fidelityMinimized = isFidelityMinimized(fidelity, fidelityMinimizedSig)
@@ -83,6 +157,24 @@ export default function WarningsBar(): React.ReactElement | null {
   )
 
   const [rawOpen, setRawOpen] = useState(false)
+  const [diagResult, setDiagResult] = useState<SaveDiagnosticsResult | null>(null)
+  const [diagBusy, setDiagBusy] = useState(false)
+  const diagMessage = diagnosticsStatusMessage(diagResult)
+  const onSaveDiagnostics = (): void => {
+    if (diagBusy) return
+    setDiagBusy(true)
+    void saveDiagnostics(store).then(result => {
+      setDiagResult(result)
+      setDiagBusy(false)
+    })
+  }
+  // #62: set when the "What can circsim tell you?" link could not open anything.
+  const [docsMessage, setDocsMessage] = useState<string | null>(null)
+  const circuit = useApp(s => s.circuit)
+  const openDocs = (): void => {
+    if (typeof window === 'undefined') return
+    void openDocsAndReport(window.circsim, setDocsMessage)
+  }
 
   // "open Model Doctor": the Doctor drawer (left dock) is already visible
   // whenever problems exist; revealInDoctor selects the first problem part and
@@ -100,7 +192,8 @@ export default function WarningsBar(): React.ReactElement | null {
     opCaveat ||
     railNotes.length > 0 ||
     undrivenNets.length > 0 ||
-    schematicPinNotes.length > 0
+    schematicPinNotes.length > 0 ||
+    outlineWarnings.length > 0
   if (!anything) return null
 
   return (
@@ -108,11 +201,34 @@ export default function WarningsBar(): React.ReactElement | null {
       {/* ── Crash toast ───────────────────────────────────────────────────── */}
       {crashNotice && (
         <div style={crashStyle}>
-          <strong>Simulator restarted.</strong>{' '}
-          {crashNotice.willRespawn
-            ? 'The simulation engine crashed and is recovering automatically.'
-            : 'The simulation engine crashed and could not be restarted.'}
-          {crashNotice.pausedRunLost && ' Your paused run was lost; press Run to start it again.'}
+          {crashNotice.willRespawn ? (
+            <>
+              <strong>Simulator restarted.</strong> {crashNoticeMessage(crashNotice)}
+            </>
+          ) : (
+            <>
+              <strong>Simulator stopped.</strong> {crashNoticeMessage(crashNotice)} It
+              crashed repeatedly.{' '}
+              <strong data-testid="crash-restart-hint">Quit and reopen circsim</strong> to
+              simulate again; your board file is untouched.
+            </>
+          )}
+          {crashNotice.pausedRunLost && ' Your paused run was lost; press Run to start it again.'}{' '}
+          <span
+            style={linkStyle}
+            title="Save a zip with the deck, ngspice log, board hash, crash reason and versions"
+            role="button"
+            tabIndex={0}
+            aria-disabled={diagBusy}
+            data-testid="crash-save-diagnostics"
+            onClick={onSaveDiagnostics}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') onSaveDiagnostics()
+            }}
+          >
+            Save diagnostics
+          </span>
+          {diagMessage && <span data-testid="diagnostics-status"> {diagMessage}</span>}
           <button style={dismissBtn} onClick={() => store.setState({ crashNotice: null })}>
             ×
           </button>
@@ -123,11 +239,11 @@ export default function WarningsBar(): React.ReactElement | null {
       {benchToast && (
         <div style={toastStyle}>
           <strong>Bench restarted</strong>{' '}
-          ({benchToast.reason === 'memory' ? 'memory limit' : 'window elapsed'}). Scope history is kept.
+          ({benchToast.reason === 'memory' ? 'the simulator hit its memory limit' : 'the simulation window ran out'}). Scope history is kept.
           {benchToast.sequentialLogicCaveat && (
             <span style={caveatStyle}>
               {' '}
-              Note: sequential-logic state (flip-flops, counters) resets on a restart.
+              Note: flip-flops and counters start over from their initial state after a restart.
             </span>
           )}
           <button style={dismissBtn} onClick={() => store.getState().dismissBenchRestartToast()}>
@@ -151,21 +267,32 @@ export default function WarningsBar(): React.ReactElement | null {
           <div style={{ marginTop: 4 }}>{convergenceCard.plainLanguage}</div>
           {convergenceCard.culprit && (
             <div style={{ marginTop: 4 }} data-testid="convergence-culprit">
-              The simulator reported trouble converging around{' '}
-              <span style={refStyle}>
-                {convergenceCard.culprit.kind === 'net'
-                  ? `net "${convergenceCard.culprit.label}"`
-                  : convergenceCard.culprit.label}
-              </span>
+              The simulator had trouble finding a stable answer around{' '}
+              <CulpritName
+                culprit={convergenceCard.culprit}
+                actionable={
+                  convergenceCard.culprit.kind === 'part' ||
+                  culpritNet(circuit, convergenceCard.culprit) !== undefined
+                }
+                onReveal={() => _revealCulprit(store, convergenceCard.culprit!)}
+              />
               {convergenceCard.culprit.detail ? ` (${convergenceCard.culprit.detail})` : ''}.
             </div>
           )}
           <div style={{ marginTop: 4, color: '#caa', fontStyle: 'italic' }}>
             {convergenceCard.retryLadderNote}
           </div>
-          <button style={rawToggleBtn} onClick={() => setRawOpen(o => !o)}>
-            {rawOpen ? '▾ Hide raw log' : '▸ Show raw ngspice log'}
-          </button>
+          <button
+            style={rawToggleBtn}
+            onClick={() => setRawOpen(o => !o)}
+            title={termTitle('rawLog')}
+            data-testid="raw-log-toggle"
+          >
+            {rawOpen ? '▾ Hide the full log' : "▸ Show the simulator's full log"}
+          </button>{' '}
+          <DocsLink to="guides/warnings#convergence" testId="convergence-docs-link">
+            What does this mean?
+          </DocsLink>
           {rawOpen && <pre style={rawLogStyle}>{convergenceCard.rawDetail}</pre>}
         </div>
       )}
@@ -185,7 +312,10 @@ export default function WarningsBar(): React.ReactElement | null {
                 {opCaveatMessage(opCaveat.method)}
               </details>
             </>
-          )}
+          )}{' '}
+          <DocsLink to="guides/warnings#op-caveat" testId="op-caveat-docs-link">
+            What does this mean?
+          </DocsLink>
         </div>
       )}
 
@@ -240,21 +370,18 @@ export default function WarningsBar(): React.ReactElement | null {
             title="What this simulation can and can't tell you (docs)"
             role="button"
             tabIndex={0}
-            onClick={() => {
-              if (typeof window !== 'undefined' && window.circsim?.openDocs) {
-                void window.circsim.openDocs()
-              }
-            }}
+            onClick={openDocs}
             onKeyDown={e => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                if (typeof window !== 'undefined' && window.circsim?.openDocs) {
-                  void window.circsim.openDocs()
-                }
-              }
+              if (e.key === 'Enter' || e.key === ' ') openDocs()
             }}
           >
             What can circsim tell you?
           </span>
+          {docsMessage && (
+            <div style={{ marginTop: 4 }} role="alert" data-testid="docs-open-error">
+              {docsMessage}
+            </div>
+          )}
         </div>
       )}
 
@@ -278,9 +405,19 @@ export default function WarningsBar(): React.ReactElement | null {
           the simulation solvable. On the real board{' '}
           {undrivenNets.length === 1 ? 'it floats' : 'they float'}, and anything{' '}
           {undrivenNets.length === 1 ? 'it feeds' : 'they feed'} reads a value the hardware would
-          not guarantee.
+          not guarantee.{' '}
+          <DocsLink to="guides/warnings#undriven-nets" testId="undriven-nets-docs-link">
+            What does this mean?
+          </DocsLink>
         </div>
       )}
+
+      {/* ── Board outline warnings (#50): why the substrate looks wrong ───── */}
+      {outlineWarnings.map((w, i) => (
+        <div key={`${i}:${w}`} style={outlineWarningStyle} data-testid="outline-warning">
+          <strong>Board outline.</strong> {w.replace(/^outline:\s*/, '')}
+        </div>
+      ))}
 
       {/* ── Schematic pin-map corrections (informational, spec 2026-07-15) ── */}
       {schematicPinNotes.map(r => (
@@ -295,7 +432,61 @@ export default function WarningsBar(): React.ReactElement | null {
           schematic is stale.
         </div>
       ))}
+
+      {/* ── Save diagnostics (issue #26): the crash toast carries its own ──── */}
+      {!crashNotice && (
+        <div style={diagRowStyle} data-testid="diagnostics-row">
+          <span
+            style={linkStyle}
+            title="Save a zip with the deck, ngspice log, board hash and versions to attach to a bug report"
+            role="button"
+            tabIndex={0}
+            aria-disabled={diagBusy}
+            data-testid="save-diagnostics"
+            onClick={onSaveDiagnostics}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') onSaveDiagnostics()
+            }}
+          >
+            Save diagnostics
+          </span>
+          {diagMessage && <span data-testid="diagnostics-status"> {diagMessage}</span>}
+        </div>
+      )}
     </div>
+  )
+}
+
+/**
+ * The part or net a convergence failure named. A button (reveal in the Model
+ * Doctor / select on the board) when there is something to select, plain text
+ * otherwise (an unmapped SPICE node name).
+ */
+function CulpritName({
+  culprit,
+  actionable,
+  onReveal,
+}: {
+  culprit: ConvergenceCulprit
+  actionable: boolean
+  onReveal: () => void
+}): React.ReactElement {
+  const text = culprit.kind === 'net' ? `net "${culprit.label}"` : culprit.label
+  if (!actionable) return <span style={refStyle}>{text}</span>
+  return (
+    <button
+      style={culpritBtnStyle}
+      data-testid="convergence-culprit-link"
+      data-kind={culprit.kind}
+      title={
+        culprit.kind === 'part'
+          ? `Select ${culprit.label} and show its Model Doctor card`
+          : `Select net ${culprit.label} on the board`
+      }
+      onClick={onReveal}
+    >
+      {text}
+    </button>
   )
 }
 
@@ -316,10 +507,14 @@ function RailNoteRow({
   return (
     <div style={railNoteStyle} data-testid="rail-note" data-net={note.kicadName}>
       <div>
-        <strong>Check this rail.</strong> VDD (
-        <span style={refStyle}>{note.kicadName}</span>) is ~0 V at the operating
-        point — using the default swing. If this rail is powered during a
-        transient, logic thresholds may be inaccurate.
+        <strong>Check this rail.</strong> The <Term id="vdd" /> on{' '}
+        <span style={refStyle}>{note.kicadName}</span> reads about 0 V in the
+        steady-state measurement, so circsim is using a typical logic voltage
+        instead. If this rail is powered during a <Term id="transient" />, logic
+        thresholds may be inaccurate.{' '}
+        <DocsLink to="guides/warnings#rail-note" testId="rail-note-docs-link">
+          What does this mean?
+        </DocsLink>
       </div>
       <div style={railActionRowStyle}>
         <input
@@ -450,6 +645,13 @@ const railBtnStyle: React.CSSProperties = {
   fontSize: 12,
   cursor: 'pointer',
 }
+// Outline warnings: same amber caveat tone as the op fallback.
+const outlineWarningStyle: React.CSSProperties = {
+  ...baseRow,
+  background: '#3a2a10',
+  color: '#ffd9a0',
+  borderTop: '1px solid #5a4418',
+}
 const schematicPinNoteStyle: React.CSSProperties = {
   ...baseRow,
   background: '#1c2733',
@@ -482,9 +684,28 @@ const refStyle: React.CSSProperties = {
   fontFamily: 'monospace',
   fontWeight: 600,
 }
+const diagRowStyle: React.CSSProperties = {
+  ...baseRow,
+  background: '#20242c',
+  color: '#9aa',
+  fontSize: 11,
+  borderTop: '1px solid #2c323c',
+}
 const linkStyle: React.CSSProperties = {
+  cursor: 'pointer',
   color: '#ffd27a',
   textDecoration: 'underline',
+}
+const culpritBtnStyle: React.CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  borderBottom: '1px dashed currentColor',
+  color: '#ffd27a',
+  cursor: 'pointer',
+  font: 'inherit',
+  fontFamily: 'monospace',
+  fontWeight: 600,
+  padding: 0,
 }
 const dismissBtn: React.CSSProperties = {
   marginLeft: 'auto',

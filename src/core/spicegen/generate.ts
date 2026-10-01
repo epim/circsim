@@ -21,7 +21,7 @@
  * No imports from electron, react, or three. Pure TS, Vitest-safe.
  */
 
-import type { Circuit, CircuitNet } from '../netlist/extract'
+import type { Circuit, CircuitNet, Part } from '../netlist/extract'
 import type { Resolution } from '../models/types'
 import type { Instrument, AlterPlanResult } from './instruments'
 import { clampPotOhms, potResistorNames } from './instruments'
@@ -675,6 +675,30 @@ function primitiveCardNodeGroups(card: string): string[][] {
       return [take(2)]
     default:
       return []
+  }
+}
+
+/**
+ * Why a pre-built primitive card cannot be handed to ngspice, or undefined when
+ * it is complete. Covers the shapes ngspice 46 turns into a parse failure or a
+ * silently wrong circuit: an empty quoted value, an R/C/L/V/I card with no value
+ * after its two nodes, and a diode card with no model name after its two nodes.
+ */
+function incompleteCardReason(card: string): string | undefined {
+  const toks = card.trim().split(/\s+/)
+  if (toks.some(t => t === '""' || t === "''")) return 'empty value'
+  const letter = toks[0].charAt(0).toLowerCase()
+  switch (letter) {
+    case 'r':
+    case 'c':
+    case 'l':
+    case 'v':
+    case 'i':
+      return toks.length < 4 ? 'no value' : undefined
+    case 'd':
+      return toks.length < 4 ? 'no model name' : undefined
+    default:
+      return undefined
   }
 }
 
@@ -1812,8 +1836,12 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
   }
 
   // ── Part elements ──────────────────────────────────────────────────────────
+  // ref to Part, first part wins on a duplicate ref exactly as the linear
+  // `find` this replaced did (issue #76: that scan was parts x resolutions).
+  const partsByRef = new Map<string, Part>()
+  for (const p of circuit.parts) if (!partsByRef.has(p.ref)) partsByRef.set(p.ref, p)
   for (const res of resolutions) {
-    const part = circuit.parts.find(p => p.ref === res.ref)
+    const part = partsByRef.get(res.ref)
     if (!part) continue
 
     if (!res.model) {
@@ -1850,6 +1878,15 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
     }
 
     if (model.kind === 'primitive') {
+      // Last line of defence (issues #6, #7): resolution no longer builds these,
+      // but a card ngspice cannot use must never reach it. A model-less diode
+      // fails the whole parse ("could not find a valid modelname"); a valueless
+      // source is "DC 0 assumed" (a short); an empty value is "ignored!".
+      const incomplete = incompleteCardReason(model.card)
+      if (incomplete) {
+        lines.push(`* ${res.ref}: skipped incomplete primitive card (${incomplete})`)
+        continue
+      }
       // The card was pre-built during resolution (core/models/resolve.ts)
       // Check if there's an ammeter splice for a current probe on this primitive
       const cp = currentProbeByRef.get(res.ref)

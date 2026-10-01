@@ -95,21 +95,21 @@ function isSilkscreen(layer: string): boolean {
 /**
  * Resolves `(net ...)` nodes to numeric net ids across BOTH KiCad formats:
  *
- *  - KiCad 6–8 (legacy): a top-level net table of `(net <id> "<name>")`, with
+ *  - KiCad 6–9 (format 20211014 to 20241229): a top-level net table of `(net <id> "<name>")`, with
  *    references `(net <id> "<name>")` on pads and `(net <id>)` on tracks/vias.
  *    The numeric id is authoritative.
  *
- *  - KiCad 9 / 2026 (version 20260206): the numeric id AND the top-level net
+ *  - KiCad 10 (format 20260206): the numeric id AND the top-level net
  *    table were both removed. EVERY reference is name-only — `(net "<name>")` —
  *    on pads, tracks, vias and zones.
  *
  * To keep the downstream pipeline (which keys connectivity on numeric net ids)
  * working unchanged, this index synthesizes a stable id for each distinct net
- * name encountered in the v9 format, in first-seen order. The same name always
+ * name encountered in the name-only format, in first-seen order. The same name always
  * resolves to the same id within one parse, which is all connectivity needs.
  *
  * `byId` is the BoardModel.netById map: it accumulates every net actually
- * referenced (legacy ids from the table, or synthesized v9 ids).
+ * referenced (legacy ids from the table, or synthesized name-only ids).
  */
 class NetIndex {
   readonly byId = new Map<number, { id: number; name: string }>()
@@ -124,7 +124,7 @@ class NetIndex {
     if (id >= this.nextSyntheticId) this.nextSyntheticId = id + 1
   }
 
-  /** Resolve (or synthesize) the id for a name-only (v9) net reference. */
+  /** Resolve (or synthesize) the id for a name-only (KiCad 10) net reference. */
   private registerByName(name: string): number {
     const existing = this.byName.get(name)
     if (existing !== undefined) return existing
@@ -135,7 +135,7 @@ class NetIndex {
   }
 
   /**
-   * Register a top-level net-table entry (legacy files only — v9 has no table).
+   * Register a top-level net-table entry (legacy files only; KiCad 10 files have no table).
    * `(net 0 "")` and empty names are skipped.
    */
   registerTableEntry(node: SExpr): void {
@@ -167,7 +167,7 @@ class NetIndex {
       return first
     }
     if (typeof first === 'string') {
-      // KiCad 9 / 2026 reference: (net "<name>").
+      // KiCad 10 reference: (net "<name>").
       if (first === '') return undefined
       return this.registerByName(first)
     }
@@ -215,7 +215,7 @@ function parsePad(padNode: SExpr, nets: NetIndex): Pad | null {
     }
   }
 
-  // (net N "NAME") legacy, or (net "NAME") v9 — resolved via the NetIndex.
+  // (net N "NAME") legacy, or (net "NAME") name-only — resolved via the NetIndex.
   let netId: number | undefined
   const netNode = find(padNode, 'net')
   if (netNode) netId = nets.resolve(netNode)
@@ -227,7 +227,28 @@ function parsePad(padNode: SExpr, nets: NetIndex): Pad | null {
     drill = numAtom(drillNode, 1)
   }
 
-  return { number, type, shape, at, size, drill, layers, netId }
+  // (pinfunction "NAME") (pintype "unspecified+no_connect"): written by KiCad 8+
+  // when the board was updated from a schematic. A `+no_connect` suffix on the
+  // pin type is the schematic's no-connect flag (issue #49).
+  const pinFunctionNode = find(padNode, 'pinfunction')
+  const pinTypeNode = find(padNode, 'pintype')
+  const pinFunction =
+    pinFunctionNode && Array.isArray(pinFunctionNode) ? strAtom(pinFunctionNode, 1) : undefined
+  const pinType = pinTypeNode && Array.isArray(pinTypeNode) ? strAtom(pinTypeNode, 1) : undefined
+
+  const pad: Pad = { number, type, shape, at, size, drill, layers, netId }
+  if (pinFunction !== undefined) pad.pinFunction = pinFunction
+  if (pinType !== undefined) pad.pinType = pinType
+  return pad
+}
+
+/**
+ * True when the pad's schematic pin is flagged no-connect, i.e. the pin is
+ * deliberately left open. KiCad writes this as a `+no_connect` suffix on the
+ * pad's `(pintype ...)`, for example "unspecified+no_connect".
+ */
+export function isNoConnectPad(pad: Pad): boolean {
+  return pad.pinType !== undefined && pad.pinType.split('+').includes('no_connect')
 }
 
 // ─── footprint parsing ────────────────────────────────────────────────────────
@@ -440,21 +461,78 @@ function parseVia(node: SExpr, nets: NetIndex): Via | null {
 
 // ─── Edge.Cuts primitive parsing ──────────────────────────────────────────────
 
-function parseEdgePrimitive(node: SExpr, _layer: string): EdgePrimitive | null {
+/** Maps a point from a primitive's own frame into board coordinates. */
+type Place = (v: Vec2) => Vec2
+
+const IDENTITY: Place = (v) => v
+
+/**
+ * KiCad footprint-local to board placement: rotate by the footprint angle
+ * (KiCad sign convention, y down) then translate to the footprint origin. This
+ * is the same transform `critic/geom.ts` applies to pad centers.
+ */
+function footprintPlace(at: { x: number; y: number; rotDeg: number }): Place {
+  const rad = (at.rotDeg * Math.PI) / 180
+  const c = Math.cos(rad)
+  const s = Math.sin(rad)
+  return (v) => ({ x: at.x + v.x * c + v.y * s, y: at.y - v.x * s + v.y * c })
+}
+
+/** Graphic items that can live on Edge.Cuts but carry no outline geometry. */
+const EDGE_NON_GEOMETRY = new Set([
+  'gr_text', 'gr_text_box', 'fp_text', 'fp_text_box', 'property', 'dimension',
+  'group', 'image', 'gr_bbox', 'fp_bbox',
+])
+
+/** Line primitives joining consecutive points of a polygon, closing the loop. */
+function polyLines(pts: Vec2[]): EdgePrimitive[] {
+  const out: EdgePrimitive[] = []
+  for (let i = 0; i < pts.length; i++) {
+    const start = pts[i]
+    const end = pts[(i + 1) % pts.length]
+    if (start.x === end.x && start.y === end.y) continue
+    out.push({ kind: 'line', start, end })
+  }
+  return out
+}
+
+/** Read an `(xy x y)` point list from a `(pts ...)` child. */
+function parsePts(node: SExpr): Vec2[] {
+  const ptsNode = find(node, 'pts')
+  const pts: Vec2[] = []
+  if (!ptsNode || !Array.isArray(ptsNode)) return pts
+  for (const pt of ptsNode) {
+    if (!Array.isArray(pt) || pt[0] !== 'xy') continue
+    pts.push({ x: numAtom(pt, 1), y: numAtom(pt, 2) })
+  }
+  return pts
+}
+
+/**
+ * Turn one Edge.Cuts graphic into outline primitives, or null when the item is
+ * not something the stitcher understands. Handles the board-level `gr_*` forms
+ * and the footprint-level `fp_*` forms identically; `place` carries a
+ * footprint's placement (identity for board-level items).
+ *
+ * gr_poly and fp_poly become closed loops of line primitives. A footprint
+ * rectangle becomes four lines, because a rotated rectangle is no longer the
+ * axis-aligned `rect` primitive.
+ */
+function parseEdgePrimitive(node: SExpr, place: Place = IDENTITY): EdgePrimitive[] | null {
   if (!Array.isArray(node)) return null
-  const head = strAtom(node, 0)
+  const head = strAtom(node, 0).replace(/^fp_/, 'gr_')
 
   if (head === 'gr_line') {
-    const start = parseVec2Child(node, 'start')
-    const end = parseVec2Child(node, 'end')
-    return { kind: 'line', start, end }
+    const start = place(parseVec2Child(node, 'start'))
+    const end = place(parseVec2Child(node, 'end'))
+    return [{ kind: 'line', start, end }]
   }
 
   if (head === 'gr_arc') {
-    const start = parseVec2Child(node, 'start')
-    const mid = parseVec2Child(node, 'mid')
-    const end = parseVec2Child(node, 'end')
-    return { kind: 'arc', start, mid, end }
+    const start = place(parseVec2Child(node, 'start'))
+    const mid = place(parseVec2Child(node, 'mid'))
+    const end = place(parseVec2Child(node, 'end'))
+    return [{ kind: 'arc', start, mid, end }]
   }
 
   if (head === 'gr_circle') {
@@ -466,13 +544,24 @@ function parseEdgePrimitive(node: SExpr, _layer: string): EdgePrimitive | null {
     const radiusPoint: Vec2 = endNode && Array.isArray(endNode)
       ? { x: numAtom(endNode, 1), y: numAtom(endNode, 2) }
       : { x: 0, y: 0 }
-    return { kind: 'circle', center, radiusPoint }
+    return [{ kind: 'circle', center: place(center), radiusPoint: place(radiusPoint) }]
   }
 
   if (head === 'gr_rect') {
     const start = parseVec2Child(node, 'start')
     const end = parseVec2Child(node, 'end')
-    return { kind: 'rect', start, end }
+    if (place === IDENTITY) return [{ kind: 'rect', start, end }]
+    return polyLines([
+      place(start),
+      place({ x: end.x, y: start.y }),
+      place(end),
+      place({ x: start.x, y: end.y }),
+    ])
+  }
+
+  if (head === 'gr_poly') {
+    const lines = polyLines(parsePts(node).map(place))
+    return lines.length > 0 ? lines : null
   }
 
   return null
@@ -499,6 +588,15 @@ function parseZone(node: SExpr, nets: NetIndex): Zone | null {
   const netId = netNode ? nets.resolve(netNode) : undefined
 
   const layer = parseLayer(node)
+  // A multi-layer zone has `(layers "F.Cu" "B.Cu" ...)` and no `(layer ...)`.
+  const layersNode = find(node, 'layers')
+  const layers: string[] = []
+  if (layersNode && Array.isArray(layersNode)) {
+    for (let i = 1; i < layersNode.length; i++) {
+      const l = strAtom(layersNode, i)
+      if (l) layers.push(l)
+    }
+  }
 
   // polygon pts
   const polygon: Vec2[][] = []
@@ -514,8 +612,11 @@ function parseZone(node: SExpr, nets: NetIndex): Zone | null {
     if (pts.length > 0) polygon.push(pts)
   }
 
-  return { netId, layer, polygon }
+  return layers.length > 0 ? { netId, layer, layers, polygon } : { netId, layer, polygon }
 }
+
+/** `(version ...)` of KiCad 6.0, the oldest board format circsim reads. */
+const KICAD6_BOARD_VERSION = 20211014
 
 // ─── main parse function ──────────────────────────────────────────────────────
 
@@ -526,15 +627,32 @@ function parseZone(node: SExpr, nets: NetIndex): Zone | null {
  * Throws SexprError only if the file is structurally malformed.
  */
 export function parseBoard(text: string): BoardModel {
-  const root = parseSexpr(text)
+  // A UTF-8 BOM (written by some Windows editors) would otherwise become part of
+  // the root token and fail the root check with a misleading message.
+  const root = parseSexpr(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)
   if (!Array.isArray(root) || root[0] !== 'kicad_pcb') {
     throw new Error('Not a valid .kicad_pcb file: root node must be kicad_pcb')
   }
 
+  // KiCad 5 and older wrote footprints as (module ...) and used a different
+  // graphics dialect. Parsing one yields a board with no footprints and no
+  // error, so refuse it explicitly. Version 20211014 is KiCad 6.0.
+  const versionNode = find(root, 'version')
+  const fileVersion = versionNode && Array.isArray(versionNode) ? numAtom(versionNode, 1, 0) : 0
+  const hasModules = root.some((c) => Array.isArray(c) && c[0] === 'module')
+  const hasFootprints = root.some((c) => Array.isArray(c) && c[0] === 'footprint')
+  if ((fileVersion > 0 && fileVersion < KICAD6_BOARD_VERSION) || (hasModules && !hasFootprints)) {
+    throw new Error(
+      'Unsupported board format: this file was written by KiCad 5 or older' +
+        (fileVersion > 0 ? ` (file version ${fileVersion})` : '') +
+        '. circsim reads KiCad 6 or newer: open the board in KiCad 6 or newer, save it, then open the saved file.',
+    )
+  }
+
   // --- nets ---
-  // Register the legacy top-level net table FIRST (KiCad 6–8) so that tracks/
+  // Register the legacy top-level net table FIRST (KiCad 6–9) so that tracks/
   // vias, which carry only `(net <id>)` with no name, resolve to their proper
-  // names. KiCad 9/2026 files have no table — the index synthesizes ids lazily
+  // names. KiCad 10 files have no table — the index synthesizes ids lazily
   // from the name-only references parsed below.
   const nets = new NetIndex()
   for (const child of root) {
@@ -584,13 +702,26 @@ export function parseBoard(text: string): BoardModel {
   }
 
   // --- Edge.Cuts primitives ---
+  // Board-level graphics (gr_*) and footprint graphics (fp_*) on Edge.Cuts both
+  // contribute: a slot or cutout is often drawn inside a mechanical footprint,
+  // and a board outline may be drawn with the polygon tool (gr_poly).
   const edgeCuts: EdgePrimitive[] = []
+  const unsupportedEdge = new Map<string, number>()
+  const collectEdge = (item: SExpr, place: Place): void => {
+    if (!Array.isArray(item) || parseLayer(item) !== 'Edge.Cuts') return
+    const head = strAtom(item, 0)
+    if (EDGE_NON_GEOMETRY.has(head) || !/^(gr|fp)_/.test(head)) return
+    const prims = parseEdgePrimitive(item, place)
+    if (prims) edgeCuts.push(...prims)
+    else unsupportedEdge.set(head, (unsupportedEdge.get(head) ?? 0) + 1)
+  }
   for (const child of root) {
     if (!Array.isArray(child)) continue
-    const childLayer = parseLayer(child)
-    if (childLayer === 'Edge.Cuts') {
-      const prim = parseEdgePrimitive(child, childLayer)
-      if (prim) edgeCuts.push(prim)
+    if (child[0] === 'footprint') {
+      const place = footprintPlace(parseAt(child))
+      for (const item of child) collectEdge(item, place)
+    } else {
+      collectEdge(child, IDENTITY)
     }
   }
 
@@ -623,6 +754,12 @@ export function parseBoard(text: string): BoardModel {
 
   // --- outline (Task 4 — real stitching via stitchOutline) ---
   const outline = stitchOutline(edgeCuts)
+  for (const [head, count] of unsupportedEdge) {
+    outline.warnings.push(
+      `outline: ${count} unsupported Edge.Cuts item(s) of type ${head} ignored. ` +
+        'Redraw them with lines, arcs, circles, rectangles or polygons.',
+    )
+  }
 
   return {
     netById: nets.byId,

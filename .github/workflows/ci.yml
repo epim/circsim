@@ -34,7 +34,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -221,6 +221,37 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
+  # Docs build: the same install and build the Docs workflow (docs.yml) runs on
+  # master, minus Pages configure and deploy. The site installs only website/'s
+  # own dependencies (no repo-root npm ci), so a site change that reaches for
+  # root devDependencies (for example a TS data loader that makes esbuild
+  # resolve the root tsconfig) fails here before merge, not after.
+  # ===========================================================================
+  docs-build:
+    name: Docs build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # lastUpdated needs full history
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run docs:build
+
+  # ===========================================================================
   # KiCad load job: every fixture and bundled sample must load in a real KiCad
   # (issue #24). The fixtures use board format version 20260206, which KiCad 9
   # cannot read, so this installs KiCad 10 from the KiCad PPA (Ubuntu 24.04).
@@ -239,7 +270,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -266,11 +297,21 @@ jobs:
   #                    --dir provides dist/win-unpacked so the packaged spec
   #                    exercises the installer-critical resource paths:
   #                    asar-external ngspice.dll + .cm, bundled sample/models)
-  #   ubuntu-latest  → smoke + first-light under xvfb (packaged spec self-skips;
-  #                    it is Windows-only by path). The Chromium SUID sandbox is
-  #                    unavailable on GitHub's ubuntu-24.04 runners (AppArmor
-  #                    restricts unprivileged user namespaces), so the run sets
-  #                    ELECTRON_DISABLE_SANDBOX=1.
+  #   ubuntu-latest  → smoke + first-light + packaged-smoke under xvfb
+  #                    (dist/linux-unpacked is built here). The Chromium SUID
+  #                    sandbox is unavailable on GitHub's ubuntu-24.04 runners
+  #                    (AppArmor restricts unprivileged user namespaces), so the
+  #                    run sets ELECTRON_DISABLE_SANDBOX=1.
+  #   macos-14       → smoke + first-light + packaged-smoke on Apple silicon
+  #                    (issue #66). The release job ships two unsigned dmgs gated
+  #                    on this job, and the mac runtime (Electron utilityProcess
+  #                    + koffi + libngspice.dylib + the .cm code-model dir) was
+  #                    never launched anywhere before a tag. electron-builder
+  #                    --dir provides dist/mac*/circsim.app so the packaged spec
+  #                    launches the asar-external dylib and .cm paths. The
+  #                    macos-15-intel dmg is still only verified statically in
+  #                    the release job. The smoke Run test is also the macOS
+  #                    regression test for #128 (ngspice free-memory pre-check).
   #
   # Runs in parallel with `test`; the release job gates on BOTH.
   # ===========================================================================
@@ -284,6 +325,7 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
+          - macos-14
 
     steps:
       - name: Checkout
@@ -292,7 +334,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -331,14 +373,31 @@ jobs:
         if: runner.os == 'Windows' && steps.cache-ngspice-win.outputs.cache-hit != 'true'
         run: npm run fetch:ngspice
 
+      - name: Cache ngspice binaries (macOS arm64)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        id: cache-ngspice-darwin-arm64
+        with:
+          path: resources/ngspice/darwin-arm64
+          key: ngspice-darwin-arm64-v${{ steps.ngspice-version.outputs.version }}-r2-${{ steps.ngspice-version.outputs.pin-src }}
+
       - name: Install Linux build tools (Linux, cache miss only)
         if: runner.os == 'Linux' && steps.cache-ngspice-linux.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update -q
           sudo apt-get install -y autoconf automake libtool bison flex
 
+      - name: Install macOS build tools (macOS, cache miss only)
+        if: runner.os == 'macOS' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true'
+        run: brew install autoconf automake libtool
+
       - name: Build ngspice from source (Linux, cache miss only)
         if: runner.os == 'Linux' && steps.cache-ngspice-linux.outputs.cache-hit != 'true'
+        shell: bash
+        run: bash scripts/build-ngspice.sh
+
+      - name: Build ngspice from source (macOS, cache miss only)
+        if: runner.os == 'macOS' && steps.cache-ngspice-darwin-arm64.outputs.cache-hit != 'true'
         shell: bash
         run: bash scripts/build-ngspice.sh
 
@@ -356,6 +415,13 @@ jobs:
       - name: Package unpacked app (Windows and Linux, for packaged-smoke spec)
         run: npx electron-builder --dir
 
+      # Unsigned by design (same as the release job); no identity discovery.
+      - name: Package unpacked app (macOS, for packaged-smoke spec)
+        if: runner.os == 'macOS'
+        run: npx electron-builder --dir
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
       # OMP_*: the Windows ngspice DLL links OpenMP (libomp140); on shared
       # 4-vCPU runners its default spin-waiting worker threads starve the
       # solver thread and stretch op solves past every timeout. One passive
@@ -367,6 +433,13 @@ jobs:
           CIRCSIM_REQUIRE_PACKAGED: '1'
           OMP_NUM_THREADS: '1'
           OMP_WAIT_POLICY: 'PASSIVE'
+
+      # macOS runners have a window server, so no xvfb is needed.
+      - name: Run Playwright E2E (macOS)
+        if: runner.os == 'macOS'
+        run: npm run test:e2e
+        env:
+          CIRCSIM_REQUIRE_PACKAGED: '1'
 
       - name: Run Playwright E2E (Linux, xvfb)
         if: runner.os == 'Linux'
@@ -435,7 +508,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -556,10 +629,12 @@ jobs:
       - name: Package installers (signed)
         if: steps.signing.outputs.sign == 'true'
         shell: bash
-        # notarize.teamId selects notarytool; see the mac block in
-        # electron-builder.yml. Notarization only runs when the app was signed.
-        # On Windows legs the option is inert (no mac target is built).
-        run: npx electron-builder --publish never -c.mac.notarize.teamId="${APPLE_TEAM_ID:-unused}"
+        # electron-builder 26 notarizes with notarytool on its own when the
+        # signed app finds APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and
+        # APPLE_TEAM_ID in the environment (set below on macOS legs only); see
+        # the mac block in electron-builder.yml. mac.notarize is a boolean in
+        # 26, so no object-form flag is passed.
+        run: npx electron-builder --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ runner.os == 'macOS' && secrets.CSC_LINK || '' }}

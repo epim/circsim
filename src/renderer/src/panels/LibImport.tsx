@@ -6,11 +6,15 @@
  *
  * Flow:
  *   1. File picker (via injected `openFilePicker`) → returns file path + text.
- *   2. Scan the file for .subckt definitions (userLibrary.extractSubcktNames).
+ *   2. Scan the file for .subckt definitions (libText.subcktNamesInText).
  *   3. User picks which subckt to bind to this part.
  *   4. Pin-map editor: user maps each pad number → model terminal name.
- *   5. Confirm → `onSave(mpn, filePath, subcktName, pinMap)` → caller persists
- *      to userLibrary with provenance 'user-import'.
+ *   5. Confirm → `onSave(mpn, filePath, subcktName, pinMap, modelText)`. modelText
+ *      is the chosen .subckt plus the subckts and top-level cards it needs
+ *      (libText.bundleSubckt), checked against the deck gate and the sidecar
+ *      rules; the caller stores it with provenance 'user-import' and the board's
+ *      sidecar persists it. The file path is display-only: circsim never reads
+ *      a model by path at solve time (issue #17).
  *
  * The component is pure React; all file I/O is injected so it's testable.
  * Validated by build + Phase 6 E2E.
@@ -18,9 +22,10 @@
  * Spec §8.5 Tier 4, §8.7, Task 25.
  */
 
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useMemo } from 'react'
 import type { Part } from '../../../core/netlist/extract'
 import type { PinMap } from '../../../core/models/types'
+import { bundleSubckt, subcktNamesInText, subcktTerminals } from '../../../core/models/libText'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -40,11 +45,13 @@ export interface LibImportProps {
   /**
    * Called when the user confirms the binding.
    * @param mpn        The part identifier (from properties or value).
-   * @param filePath   The .lib/.sub file path.
+   * @param filePath   The .lib/.sub file path (provenance and display only).
    * @param subcktName The .subckt name the user selected.
    * @param pinMap     The user-confirmed pad → terminal mapping.
+   * @param modelText  The model text to bind: the .subckt block and what it needs,
+   *                   never a stub. Always defines `subcktName`.
    */
-  onSave(mpn: string, filePath: string, subcktName: string, pinMap: PinMap): void
+  onSave(mpn: string, filePath: string, subcktName: string, pinMap: PinMap, modelText: string): void
   /** Close this panel. */
   onClose(): void
 }
@@ -58,6 +65,7 @@ export default function LibImport({
   onClose,
 }: LibImportProps): React.ReactElement {
   const [filePath, setFilePath] = useState<string | null>(null)
+  const [fileText, setFileText] = useState<string>('')
   const [subcktNames, setSubcktNames] = useState<string[]>([])
   const [selectedSubckt, setSelectedSubckt] = useState<string>('')
   const [pinMap, setPinMap] = useState<PinMap>({})
@@ -78,6 +86,7 @@ export default function LibImport({
     setSubcktNames([])
     setSelectedSubckt('')
     setPinMap({})
+    setFileText('')
     try {
       const picked = await openFilePicker()
       if (!picked) {
@@ -85,8 +94,9 @@ export default function LibImport({
         return
       }
       setFilePath(picked.path)
+      setFileText(picked.text)
       // Parse the file for .subckt names
-      const names = extractSubcktNamesFromText(picked.text)
+      const names = subcktNamesInText(picked.text)
       if (names.length === 0) {
         setError('No .subckt definitions found in this file.')
         setLoading(false)
@@ -108,31 +118,34 @@ export default function LibImport({
   }, [openFilePicker, padNumbers])
 
   const handleSubcktSelect = useCallback(
-    (name: string, fileText?: string) => {
+    (name: string) => {
       setSelectedSubckt(name)
-      if (fileText) {
-        const suggested = suggestPinMapFromText(fileText, name, padNumbers)
-        setPinMap(suggested)
-      }
+      setPinMap(name ? suggestPinMapFromText(fileText, name, padNumbers) : {})
     },
-    [padNumbers],
+    [fileText, padNumbers],
   )
 
   const handlePinMapChange = useCallback((pad: string, terminal: string) => {
     setPinMap(prev => ({ ...prev, [pad]: terminal }))
   }, [])
 
-  const handleSave = useCallback(() => {
-    if (!filePath || !selectedSubckt) return
-    onSave(mpn, filePath, selectedSubckt, pinMap)
-  }, [mpn, filePath, selectedSubckt, pinMap, onSave])
+  // What would be bound: the chosen subckt plus what it needs, or why it cannot be.
+  const bundle = useMemo(
+    () => (fileText && selectedSubckt ? bundleSubckt(fileText, selectedSubckt) : null),
+    [fileText, selectedSubckt],
+  )
 
-  const canSave = !!filePath && !!selectedSubckt
+  const handleSave = useCallback(() => {
+    if (!filePath || !selectedSubckt || !bundle || !bundle.ok) return
+    onSave(mpn, filePath, selectedSubckt, pinMap, bundle.text)
+  }, [mpn, filePath, selectedSubckt, pinMap, bundle, onSave])
+
+  const canSave = !!filePath && !!selectedSubckt && !!bundle && bundle.ok
 
   return (
     <div style={panelStyle} data-testid="lib-import-panel">
       <div style={headerStyle}>
-        <span style={titleStyle}>Import .lib — {mpn}</span>
+        <span style={titleStyle}>Import model file (.lib): {mpn}</span>
         <button style={closeBtnStyle} onClick={onClose} aria-label="Close">
           ✕
         </button>
@@ -180,6 +193,22 @@ export default function LibImport({
               </option>
             ))}
           </select>
+          {bundle && !bundle.ok && (
+            <div style={errorStyle} data-testid="lib-import-bundle-error">
+              {bundle.error}
+            </div>
+          )}
+          {bundle && bundle.ok && bundle.subckts.length > 1 && (
+            <div style={noteStyle} data-testid="lib-import-bundle-note">
+              Also binds the helper subckts it uses: {bundle.subckts.slice(1).join(', ')}.
+            </div>
+          )}
+          {bundle && bundle.ok &&
+            bundle.warnings.map(w => (
+              <div key={w} style={noteStyle} data-testid="lib-import-bundle-warning">
+                {w}
+              </div>
+            ))}
         </section>
       )}
 
@@ -239,27 +268,10 @@ export default function LibImport({
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Extract .subckt names from raw file text (avoids filesystem access in the
- * renderer — the file text is already provided by the picker).
- */
-function extractSubcktNamesFromText(text: string): string[] {
-  // extractSubcktNames in userLibrary takes a file path; here we have the text.
-  // Re-implement the simple regex inline to avoid Node's fs in the renderer.
-  const names: string[] = []
-  const SUBCKT_REGEX = /^\s*\.subckt\s+(\S+)/gim
-  for (const match of text.matchAll(SUBCKT_REGEX)) {
-    names.push(match[1])
-  }
-  return names
-}
-
-/**
- * Suggest a PinMap by parsing the .subckt header node order and matching
- * it positionally to the board pad numbers.
+ * Suggest a PinMap by matching the .subckt header's terminal order positionally
+ * to the board pad numbers.
  *
- * Format: `.subckt <name> <node1> <node2> ...`
- *
- * If the node count matches the pad count, maps pad[i] → node[i].
+ * If the terminal count matches the pad count, maps pad[i] → terminal[i].
  * Otherwise, returns an empty map (user must fill manually).
  */
 function suggestPinMapFromText(
@@ -267,16 +279,8 @@ function suggestPinMapFromText(
   subcktName: string,
   padNumbers: string[],
 ): PinMap {
-  const escapedName = subcktName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const headerRegex = new RegExp(
-    `^\\s*\\.subckt\\s+${escapedName}\\s+(.+)`,
-    'im',
-  )
-  const m = text.match(headerRegex)
-  if (!m) return {}
-
-  const nodes = m[1].trim().split(/\s+/).filter(Boolean)
-  if (nodes.length !== padNumbers.length) return {}
+  const nodes = subcktTerminals(text, subcktName)
+  if (!nodes || nodes.length !== padNumbers.length) return {}
 
   const map: PinMap = {}
   padNumbers.forEach((pad, i) => {
@@ -380,6 +384,15 @@ const errorStyle: React.CSSProperties = {
   borderRadius: 4,
 }
 
+const noteStyle: React.CSSProperties = {
+  marginTop: 8,
+  color: '#d9c27a',
+  fontSize: 12,
+  background: '#241f10',
+  padding: '6px 10px',
+  borderRadius: 4,
+}
+
 const selectStyle: React.CSSProperties = {
   width: '100%',
   background: '#1a1520',
@@ -420,5 +433,5 @@ const pinInputStyle: React.CSSProperties = {
   boxSizing: 'border-box',
 }
 
-// Re-export extractSubcktNames for external consumers (tests, store integration).
-export { extractSubcktNamesFromText }
+// Re-exported for external consumers (tests, store integration).
+export { subcktNamesInText as extractSubcktNamesFromText, suggestPinMapFromText }
