@@ -2,13 +2,17 @@
  * src/cli/criticOp.ts
  *
  * Builds the Board Critic's OpResult from a solve, for the headless CLI (issue
- * #28). This is the renderer store's buildCriticOpResult plus its LED-current
- * mapping (mapOpResultToCurrents), which live in appStore.ts and cannot be
- * imported outside the renderer. TODO: move both into core/critic and have the
- * store and this file share them (the store is outside this task's lane).
+ * #28). This mirrors the renderer store's buildCriticOpResult (appStore.ts),
+ * which cannot be imported outside the renderer: node voltages by spice node,
+ * and every part's branch currents from deriveSolvedCurrents (#9, #45) so the
+ * copper checks (ir-drop, ampacity) run. When the derivation throws, the LED
+ * ammeter currents are used instead, as the store does. TODO: move
+ * buildCriticOpResult into core/critic and share it (the store is outside this
+ * task's lane).
  */
 
 import type { OpResult as CriticOpResult } from '../core/critic/types'
+import { deriveSolvedCurrents } from '../core/critic/solvedCurrents'
 import type { Resolution } from '../core/models/types'
 import type { Circuit } from '../core/netlist/extract'
 import { buildLedSpiceNames } from '../core/spicegen/generate'
@@ -16,8 +20,8 @@ import type { SolveResult } from '../core/solve'
 
 /**
  * nodeVoltages is keyed by SPICE node name (the critic's IR-drop and thermal
- * math works in spice-node space); partCurrents carries each LED's ammeter
- * current by ref, the only per-part currents the op harvests today.
+ * math works in spice-node space); partCurrents/padCurrents/unresolvedRefs come
+ * from the solve's branch currents.
  */
 export function buildCriticOpFromSolve(
   circuit: Circuit,
@@ -32,6 +36,18 @@ export function buildCriticOpFromSolve(
   for (const [netId, volts] of solved.netVoltages) {
     const node = netToNode.get(netId)
     if (node !== undefined) nodeVoltages[node] = volts
+  }
+
+  try {
+    const currents = deriveSolvedCurrents({ circuit, resolutions }, solved)
+    return {
+      nodeVoltages,
+      partCurrents: currents.partCurrents,
+      padCurrents: currents.padCurrents,
+      unresolvedRefs: currents.unresolvedRefs,
+    }
+  } catch {
+    // A derivation failure leaves the critic on LED currents only, as the store does.
   }
 
   const lower = new Map<string, number>()
