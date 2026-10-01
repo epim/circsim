@@ -21,7 +21,8 @@ assets.
 | **Vendor models** (TI / ADI / onsemi), Micro-Cap / Intusoft libraries | Proprietary / non-redistributable | **Never in repo or bundle.** User-import path only (Tier 4). No vendor copyright/“All Rights Reserved”/“encrypted” markers may appear in any `.lib`. | `library-content.test.ts` forbidden-marker scan |
 | **KiCad `packages3D` `.wrl` models** | CC-BY-SA (share-alike) | **Never bundled and never cached.** Loaded only from the user's own KiCad install at runtime; caching a `.wrl` into app-data would itself be redistribution and trigger share-alike. (VRML loading is deferred to post-v1; placeholders are used in v1.) | design (no `.wrl` read/write path in v1) |
 | **kicanvas / Velxio** | MIT-but-alpha / AGPLv3 | **No vendored code from either.** Pattern reference only. | repo review |
-| **Electron, React, Three.js, zustand, troika-three-text, koffi** | MIT | Bundled (npm deps). | `package-lock.json` |
+| **Electron, React, Three.js, zustand, troika-three-text, koffi** and their transitive production dependencies (30 packages in total, all MIT) | MIT | Bundled (npm deps). Electron is a devDependency that electron-builder packs as the runtime. | license-hygiene gate (rule 3) walks `package-lock.json` |
+| **electron-updater** | Not shipped | Removed from `dependencies` (issue #79): nothing imported it, and an update channel cannot be wired up until installers are signed (see the deferral below). Re-add it together with the signing work, and add it and its subtree to this table at that time. | license-hygiene gate (rule 3) |
 | **7zip-min (build-time only)** | LGPL/BSD (7-Zip via 7za) | devDependency; used only to unpack the ngspice download. Not shipped in installers. | `package.json` devDependencies |
 
 ## How "no `table.cm`" is enforced (defense in depth)
@@ -36,6 +37,23 @@ assets.
    `table.cm`, is never used).
 3. `scripts/license-hygiene.mjs` (run in CI and unit-tested) fails the build if
    `table.cm` is found in any `resources/ngspice/<platform>/lib/ngspice/` dir.
+
+## How the shipped npm tree is enforced
+
+`scripts/license-hygiene.mjs` (rule 3) walks `package-lock.json` from the root
+`dependencies` (plus `optionalDependencies` and non-optional peers), resolving
+nested `node_modules` the way npm does, and fails the build when any reachable
+package:
+
+- has no `license` field in the lockfile, or declares `UNLICENSED` /
+  `SEE LICENSE IN ...`; or
+- carries a copyleft SPDX identifier (GPL, LGPL, AGPL, MPL, CC-BY-SA, and
+  similar). In an `A OR B` expression the gate accepts the tree if any
+  alternative is permissive; `A AND B` fails if either side is copyleft.
+
+`devDependencies` are not shipped and are not checked. The rule is unit-tested
+in `src/core/__tests__/license-hygiene.test.ts`, including a check that the
+real lockfile's production tree does not contain `electron-updater`.
 
 ## How model provenance is enforced
 
@@ -93,6 +111,9 @@ v1 ships **unsigned** installers from CI:
 - **Linux (AppImage / `.deb`):** signing is not generally required for direct
   download; an optional GPG-signed `.deb` and `zsync` AppImage updates can be
   added for a repository-based distribution channel.
+
+Auto-update is deferred for the same reason: an update channel needs signed
+builds, so `electron-updater` is not a dependency until that work lands.
 
 This is the only deferred item for v1 and is a release-blocker only for
 distribution beyond direct download. It does not affect functional correctness
