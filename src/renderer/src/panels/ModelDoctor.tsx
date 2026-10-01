@@ -280,17 +280,12 @@ function DoctorRow({
   }
 
   // LibImport onSave: persist binding.
-  const handleLibSave: LibImportProps['onSave'] = (mpn, filePath, subcktName, pinMap) => {
-    // For user-import, the subckt text comes from the file; we store the filePath reference.
-    // We use the filePath as the "text" stub so spicegen can include it.
-    store.getState().saveUserModel(
-      res.ref,
-      mpn,
-      `* user-import from ${filePath}`,
-      subcktName,
-      pinMap,
-      'user-import',
-    )
+  const handleLibSave: LibImportProps['onSave'] = (mpn, _filePath, subcktName, pinMap, modelText) => {
+    // The bound text is the real model (the chosen .subckt plus the subckts and
+    // cards it needs), never a path or comment stub: the deck generator inlines
+    // definitions from memory and ngspice never reads a model by path. The
+    // board's sidecar persists this text, so it is back after a reopen.
+    store.getState().saveUserModel(res.ref, mpn, modelText, subcktName, pinMap, 'user-import')
     setShowLibImport(false)
     setPinEditorOpen(true)
   }
