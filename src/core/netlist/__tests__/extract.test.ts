@@ -187,10 +187,10 @@ describe('extract() — fixture-rc', () => {
   })
 })
 
-// ─── KiCad 9 (2026) name-only net format ──────────────────────────────────────
+// ─── KiCad 10 (20260206) name-only net format ──────────────────────────────────────
 
-describe('extract() — fixture-rc-v9 (KiCad 9 name-only nets)', () => {
-  const board = loadBoard('fixture-rc-v9.kicad_pcb')
+describe('extract() — fixture-rc-v10 (KiCad 10 name-only nets)', () => {
+  const board = loadBoard('fixture-rc-v10.kicad_pcb')
   const circuit = extract(board)
 
   it('extracts the SAME 3-net topology as the legacy id-based fixture', () => {

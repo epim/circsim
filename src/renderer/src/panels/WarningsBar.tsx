@@ -10,7 +10,12 @@
  *     an expandable raw ngspice log section. Dismissable.
  *   - Op fallback caveat: persistent + non-dismissable while the latest
  *     operating point came from a fallback rung (gmin/source/transient-op) —
- *     its voltages, especially 0.000 V readings, may be unreliable (F1).
+ *     its voltages, especially 0.000 V readings, may be unreliable (F1). The
+ *     banner reads in plain language; which rung ran sits behind a Details
+ *     disclosure so solver vocabulary is never the first thing a user sees.
+ *   - Undriven nets: nets with no path to ground and no driver, which the deck
+ *     holds at 0 V through a 1 GOhm bleed. Listed by name so a bled 0 V is never
+ *     mistaken for a measurement (issue #43). Cleared by any deck-dirtying edit.
  *   - Bench-restart toast: brief "bench restarted" notice (window/memory), with
  *     the sequential-logic caveat when digital parts are present. Dismissable.
  *   - Crash toast: SimHost crashed — auto-recovering. Dismissable.
@@ -57,6 +62,7 @@ export default function WarningsBar(): React.ReactElement | null {
   const crashNotice = useApp(s => s.crashNotice)
   const opCaveat = useApp(s => s.opCaveat)
   const railNotes = useApp(s => s.railNotes)
+  const undrivenNets = useApp(s => s.undrivenNets)
   const fidelityMinimizedSig = useApp(s => s.fidelityMinimizedSig)
 
   const fidelity = fidelityBannerItems(resolutions)
@@ -93,6 +99,7 @@ export default function WarningsBar(): React.ReactElement | null {
     crashNotice ||
     opCaveat ||
     railNotes.length > 0 ||
+    undrivenNets.length > 0 ||
     schematicPinNotes.length > 0
   if (!anything) return null
 
@@ -105,6 +112,7 @@ export default function WarningsBar(): React.ReactElement | null {
           {crashNotice.willRespawn
             ? 'The simulation engine crashed and is recovering automatically.'
             : 'The simulation engine crashed and could not be restarted.'}
+          {crashNotice.pausedRunLost && ' Your paused run was lost; press Run to start it again.'}
           <button style={dismissBtn} onClick={() => store.setState({ crashNotice: null })}>
             ×
           </button>
@@ -165,7 +173,19 @@ export default function WarningsBar(): React.ReactElement | null {
       {/* ── Op fallback caveat (persistent, non-dismissable — F1) ─────────── */}
       {opCaveat && (
         <div style={opCaveatStyle} data-testid="op-caveat">
-          <strong>Check these voltages.</strong> {opCaveatMessage(opCaveat.method)}
+          <strong>Check these voltages.</strong>{' '}
+          {opCaveat.method === 'failed' ? (
+            opCaveatMessage(opCaveat.method)
+          ) : (
+            <>
+              These voltages needed a workaround to solve; treat 0.000 V readings as unknown.
+              {/* Solver vocabulary (which fallback rung ran) stays one click away. */}
+              <details style={opCaveatDetailsStyle} data-testid="op-caveat-details">
+                <summary style={opCaveatSummaryStyle}>Details</summary>
+                {opCaveatMessage(opCaveat.method)}
+              </details>
+            </>
+          )}
         </div>
       )}
 
@@ -242,6 +262,25 @@ export default function WarningsBar(): React.ReactElement | null {
       {railNotes.map(note => (
         <RailNoteRow key={`${note.ref}:${note.kicadName}`} note={note} store={store} />
       ))}
+
+      {/* ── Undriven nets (issue #43): held at 0 V by a bleed, not measured ── */}
+      {undrivenNets.length > 0 && (
+        <div style={railNoteStyle} data-testid="undriven-nets">
+          <strong>Undriven nets held at 0 V:</strong>{' '}
+          {undrivenNets.map((n, i) => (
+            <span key={n.netId}>
+              {i > 0 && ', '}
+              <span style={refStyle}>{n.kicadName}</span>
+            </span>
+          ))}
+          . Nothing on the board drives {undrivenNets.length === 1 ? 'this net' : 'these nets'}, so
+          circsim ties {undrivenNets.length === 1 ? 'it' : 'each'} to ground through 1 GOhm to keep
+          the simulation solvable. On the real board{' '}
+          {undrivenNets.length === 1 ? 'it floats' : 'they float'}, and anything{' '}
+          {undrivenNets.length === 1 ? 'it feeds' : 'they feed'} reads a value the hardware would
+          not guarantee.
+        </div>
+      )}
 
       {/* ── Schematic pin-map corrections (informational, spec 2026-07-15) ── */}
       {schematicPinNotes.map(r => (
@@ -367,6 +406,15 @@ const opCaveatStyle: React.CSSProperties = {
   background: '#3a2a10',
   color: '#ffd9a0',
   borderTop: '1px solid #5a4418',
+}
+const opCaveatDetailsStyle: React.CSSProperties = {
+  marginTop: 4,
+  fontSize: 11.5,
+  opacity: 0.85,
+}
+const opCaveatSummaryStyle: React.CSSProperties = {
+  cursor: 'pointer',
+  textDecoration: 'underline',
 }
 // Gated-off rail note: same amber caveat tone as the op fallback, with an inline
 // action row for the manual override.

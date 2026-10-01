@@ -65,7 +65,7 @@ export function createWorkerOpenRunner(
         if (!reply.outcome.ok) finish(run)
         return
       case 'audit':
-        run.sink.onAudit(reply.report)
+        run.sink.onAudit(reply.report, reply.staticOutputs)
         finish(run)
         return
       case 'fatal':

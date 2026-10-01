@@ -23,14 +23,19 @@ import {
   type OpenStage,
 } from './pipeline'
 import type { CriticReport } from '../../../core/critic/types'
+import type { StaticOutputs } from '../../../core/critic/run'
 
 export interface OpenSink {
   /** A stage began. Fires for parsing, extracting, resolving, then auditing. */
   onStage(stage: OpenStage): void
   /** The board is ready (or failed to parse). On failure no audit follows. */
   onOpened(outcome: OpenOutcome): void
-  /** The audit finished. Always after a successful onOpened. */
-  onAudit(report: CriticReport): void
+  /**
+   * The audit finished. Always after a successful onOpened. `staticOutputs` is
+   * present when the audit ran on another thread: the receiver primes its own
+   * critic cache with it (primeStaticOutputs).
+   */
+  onAudit(report: CriticReport, staticOutputs?: StaticOutputs | null): void
 }
 
 export interface BoardOpenRunner {

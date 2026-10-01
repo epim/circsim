@@ -14,11 +14,13 @@ import { join } from 'path'
 import { createAppStore, type BoardHooks } from '../appStore'
 import { createMockSimClient } from '../../ipc/simClient'
 import {
+  auditOpened,
   auditOpenedBoard,
   openBoardPipeline,
   type OpenOutcome,
   type OpenRequest,
 } from '../../boardOpen/pipeline'
+import { exportStaticOutputs } from '../../../../core/critic/run'
 import { createInlineRunner, type BoardOpenRunner, type OpenSink } from '../../boardOpen/runner'
 
 const fixturesDir = join(__dirname, '../../../../../fixtures')
@@ -304,5 +306,97 @@ describe('openBoard: same result as the synchronous path', () => {
     await store.getState().openBoard(rc, 'rc.kicad_pcb')
     expect(store.getState().board).not.toBeNull()
     expect(store.getState().criticReport).not.toBeNull()
+  })
+})
+
+describe('openBoard: the setup-file restore rides the same pipeline (issue #27)', () => {
+  const BOARD_PATH = ['C:', 'work', 'fixture-555.kicad_pcb'].join('\\')
+  const opts = {
+    schematicText: f555Sch,
+    schematicFileName: 'fixture-555.kicad_sch',
+    boardPath: BOARD_PATH,
+  }
+
+  function rigged(): string {
+    const store = createAppStore({ simClient: createMockSimClient() })
+    store.getState().openBoardFromText(f555, 'fixture-555.kicad_pcb', opts)
+    const gnd = store.getState().circuit!.nets.find(n => n.kicadName === 'GND')!.id
+    store.getState().setGround(gnd)
+    store.getState().stubPart('D1', 'open')
+    store.getState().setRailOverride('OUT', 3.3)
+    store.getState().setBomFromText(['Reference,Value', 'U1,NE555', ''].join('\n'))
+    return store.getState().buildSidecarText()!
+  }
+
+  it('restores ground, overrides and the note exactly as the synchronous open does', async () => {
+    const text = rigged()
+    const withSidecar = { ...opts, sidecarText: text }
+
+    const sync = createAppStore({ simClient: createMockSimClient() })
+    sync.getState().openBoardFromText(f555, 'fixture-555.kicad_pcb', withSidecar)
+
+    const async_ = createAppStore({ simClient: createMockSimClient(), openRunner: createInlineRunner() })
+    await async_.getState().openBoard(f555, 'fixture-555.kicad_pcb', withSidecar)
+
+    const a = sync.getState()
+    const b = async_.getState()
+    expect(a.sidecar.note).not.toBeNull()
+    expect(b.sidecar).toEqual(a.sidecar)
+    expect(b.groundNetId).toBe(a.groundNetId)
+    expect(b.instruments).toEqual(a.instruments)
+    expect(b.stubOverrides).toEqual(a.stubOverrides)
+    expect(b.railOverrides).toEqual(a.railOverrides)
+    expect(b.leadPositions).toEqual(a.leadPositions)
+    expect(b.resolutions).toEqual(a.resolutions)
+    expect(b.project.boardPath).toBe(BOARD_PATH)
+    expect(b.circuit).toEqual(a.circuit)
+    expect(b.criticReport).toEqual(a.criticReport)
+  })
+
+  it('an unreadable setup file opens the board and says so', async () => {
+    const store = createAppStore({ simClient: createMockSimClient(), openRunner: createInlineRunner() })
+    await store.getState().openBoard(f555, 'fixture-555.kicad_pcb', { ...opts, sidecarError: 'EACCES' })
+    const s = store.getState()
+    expect(s.board).not.toBeNull()
+    expect(s.sidecar.diskStatus).toBe('unreadable')
+    expect(s.sidecar.note?.messages.join(' ')).toContain('EACCES')
+  })
+
+  it('a reopen drops the previous board setup before the new one lands', async () => {
+    const runner = manualRunner()
+    const store = createAppStore({ simClient: createMockSimClient(), openRunner: runner })
+    store.getState().openBoardFromText(f555, 'fixture-555.kicad_pcb', { ...opts, sidecarText: rigged() })
+    expect(store.getState().sidecar.autosave).toBe(true)
+    void store.getState().openBoard(rc, 'rc.kicad_pcb')
+    // While the next board builds, nothing may keep saving the old setup.
+    expect(store.getState().sidecar.autosave).toBe(false)
+    expect(store.getState().sidecar.path).toBeNull()
+    expect(runner.requests[0].sidecarText).toBeUndefined()
+  })
+
+  it('hands the runner the setup text only when a board path and a readable file exist', () => {
+    const runner = manualRunner()
+    const store = createAppStore({ simClient: createMockSimClient(), openRunner: runner })
+    void store.getState().openBoard(f555, 'a.kicad_pcb', { sidecarText: '{}' })
+    void store.getState().openBoard(f555, 'a.kicad_pcb', { boardPath: BOARD_PATH, sidecarText: '{}', sidecarError: 'x' })
+    void store.getState().openBoard(f555, 'a.kicad_pcb', { boardPath: BOARD_PATH, sidecarText: '{}' })
+    expect(runner.requests.map(r => r.sidecarText)).toEqual([undefined, undefined, '{}'])
+  })
+
+  it('primes the main-thread critic cache from the worker audit, so the re-audit skips clearance', async () => {
+    const runner = manualRunner()
+    const store = createAppStore({ simClient: createMockSimClient(), openRunner: runner })
+    const done = store.getState().openBoard(rc, 'rc.kicad_pcb')
+    // The worker has its own copy of everything: clone the outcome as a message would.
+    const outcome = structuredClone(outcomeFor(rc))
+    if (!outcome.ok) throw new Error('fixture must parse')
+    runner.sinks[0].onOpened(outcome)
+    const audit = auditOpened(outcome.opened)
+    runner.sinks[0].onAudit(audit.report, structuredClone(audit.staticOutputs))
+    expect(audit.staticOutputs).not.toBeNull()
+    // The circuit in the store is the cloned one; its cache entry came from the hand-off.
+    expect(exportStaticOutputs(store.getState().circuit!)).not.toBeNull()
+    runner.finish()
+    await done
   })
 })

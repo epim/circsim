@@ -100,7 +100,7 @@ describe('electron-builder.yml — common extraResources (outside asar)', () => 
   })
 
   it('ships the fidelity + licensing docs (openDocs / About read these)', () => {
-    expect(top.some((t) => /docs\/.*what-circsim-can-tell-you\.md/.test(t))).toBe(true)
+    expect(top.some((t) => /docs\/.*what-circsim-can-tell-you\.html/.test(t))).toBe(true)
     expect(top.some((t) => /docs\/licensing\.md/.test(t))).toBe(true)
   })
 

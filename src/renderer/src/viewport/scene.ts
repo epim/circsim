@@ -25,17 +25,17 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { BoardModel } from '../../../core/kicad/types'
-import { buildSubstrate, kicadToWorld } from './boardGeometry'
-import { buildCopper, buildViaInstances, makeCopperMaterial } from './copperGeometry'
-import { buildComponentBoxes } from './componentGeometry'
-import { buildSilkscreenEntries, createSilkscreenTexts } from './silkscreen'
+import { kicadToWorld } from './boardGeometry'
+import { assembleBoard, disposeObjectTree, type AssembledBoard } from './boardAssembly'
+import { buildSilkscreenEntries, createSilkscreenMesh } from './silkscreen'
 import { createPicker, type PickCallback } from './picking'
+import { createFrameCoalescer, type FrameCoalescer } from './frameCoalescer'
+import { NetTintTable } from './netTint'
 import { createOverlayController, type OverlayController, type OverlayMode, type LegendData } from './overlay'
 import { createMarkerController, type MarkerController, type AnnotationLabel, type ProbeMarker, type ProbeMarkerOpts } from './markers'
-import { createLedGlowController, isLed, ledColorFor, ledIntensity, type LedGlowController } from './ledGlow'
+import { createLedGlowController, ledColorFor, ledIntensity, type LedGlowController } from './ledGlow'
 import { createCriticOverlayController, MARKER_Z_LIFT, type CriticOverlayController } from './criticOverlay'
 import type { Finding } from '../../../core/critic/types'
-import { padWorldPos } from '../../../core/critic/geom'
 import { projectAnchorSet, type Pt } from '../bench/leadGeometry'
 
 // ─── E2E LED-glow hook (First Light, L5) ─────────────────────────────────────────
@@ -182,9 +182,13 @@ export interface SceneManager {
    * a component are along the ray; resolveDrop (bench/leads.ts) then picks
    * whichever key matches the dragged jack's `accepts`. Miss → null.
    * pickNetAt remains for callers that only accept nets.
+   *
+   * `pointMm` is where the ray first met the board, in KiCad board millimetres
+   * (the frame of a Finding.location), rounded to 0.01 mm. The store records it
+   * as the lead's copper position when a lead is dropped (issue #27).
    */
   pickAttachTargetAt(xPx: number, yPx: number, width: number, height: number):
-    { netId?: number; ref?: string } | null
+    { netId?: number; ref?: string; pointMm?: { x: number; y: number } } | null
 
   /**
    * Bench leads: project net + component anchor world positions to canvas px
@@ -236,10 +240,6 @@ export interface SceneManager {
   focusFinding(finding: Finding): void
 }
 
-// ─── FR4 material ─────────────────────────────────────────────────────────────
-
-const FR4_COLOR = 0x1a6b2a  // dark green
-
 // ─── implementation ───────────────────────────────────────────────────────────
 
 /**
@@ -260,15 +260,14 @@ export function createSceneManager(): SceneManager {
   let callbacks: SceneCallbacks = {}
 
   // Scene objects (can be replaced on board reload)
-  let substrateGroup: THREE.Group | null = null
-  let copperGroup: THREE.Group | null = null
-  let componentGroup: THREE.Group | null = null
+  let assembled: AssembledBoard | null = null
   let silkscreenGroup: THREE.Group | null = null
 
   // ── Task 20: Overlay + markers ──────────────────────────────────────────────
-  // Net materials map: netId → MeshStandardMaterial (built in loadBoard, reused here)
-  let netMaterialsMap = new Map<number, THREE.MeshStandardMaterial>()
-  let overlayController: OverlayController = createOverlayController(netMaterialsMap)
+  // Per-net copper color and emissive (built in loadBoard, reused here). One
+  // texture for the whole board, so a tint is a few float writes (#57, #77).
+  let netTints = new NetTintTable([], new THREE.Color(0xb87333))
+  let overlayController: OverlayController = createOverlayController(netTints)
   const markerController: MarkerController = createMarkerController()
 
   // ── LED operating-point glow (additive over the voltage overlay) ─────────────
@@ -300,13 +299,19 @@ export function createSceneManager(): SceneManager {
   // Pointer event handlers (attached in mount, removed in dispose)
   let _canvas: HTMLCanvasElement | null = null
 
+  // Hover picking runs at most once per animation frame, on the newest pointer
+  // position (#58). A 120 Hz mouse used to trigger a full pick per event.
+  const hoverPick: FrameCoalescer<{ x: number; y: number }> = createFrameCoalescer(ndc => {
+    if (!_canvas) return
+    picker.onPointerMove(ndc, getActiveCamera())
+  })
+
   function _onPointerMove(e: PointerEvent): void {
     if (!_canvas) return
-    const cam = getActiveCamera()
     const rect = _canvas.getBoundingClientRect()
     const x = ((e.clientX - rect.left) / rect.width)  * 2 - 1
     const y = ((e.clientY - rect.top)  / rect.height) * -2 + 1
-    picker.onPointerMove({ x, y }, cam)
+    hoverPick.push({ x, y })
   }
 
   function _onClick(e: MouseEvent): void {
@@ -319,6 +324,8 @@ export function createSceneManager(): SceneManager {
   }
 
   function _onPointerLeave(): void {
+    // Drop a queued pick so it cannot re-apply hover after the pointer left.
+    hoverPick.cancel()
     picker.clearHover()
   }
 
@@ -427,6 +434,7 @@ export function createSceneManager(): SceneManager {
     dispose(): void {
       if (animFrameId !== null) cancelAnimationFrame(animFrameId)
       animFrameId = null
+      hoverPick.cancel()
       controls?.dispose()
       // Remove picking event listeners
       if (_canvas) {
@@ -461,169 +469,47 @@ export function createSceneManager(): SceneManager {
       // Clear picking registrations before rebuilding geometry
       picker.clear()
 
-      // Remove previous substrate
-      if (substrateGroup) {
-        scene.remove(substrateGroup)
-        substrateGroup.traverse(obj => {
-          if (obj instanceof THREE.Mesh) {
-            obj.geometry.dispose()
-            if (obj.material instanceof THREE.Material) obj.material.dispose()
-          }
-        })
+      // Remove everything the previous board built (geometry, materials, textures)
+      if (assembled) {
+        for (const group of [assembled.substrateGroup, assembled.copperGroup, assembled.componentGroup]) {
+          scene.remove(group)
+          disposeObjectTree(group)
+        }
+        assembled.netTints.dispose()
+        assembled = null
       }
-
-      // Remove previous copper
-      if (copperGroup) {
-        scene.remove(copperGroup)
-        copperGroup.traverse(obj => {
-          if (obj instanceof THREE.Mesh || obj instanceof THREE.InstancedMesh) {
-            obj.geometry.dispose()
-            if (obj.material instanceof THREE.Material) obj.material.dispose()
-          }
-        })
-      }
-
-      // Remove previous components
-      if (componentGroup) {
-        scene.remove(componentGroup)
-        componentGroup.traverse(obj => {
-          if (obj instanceof THREE.Mesh) {
-            obj.geometry.dispose()
-            if (obj.material instanceof THREE.Material) obj.material.dispose()
-          }
-        })
-      }
-
-      // Remove previous silkscreen
       if (silkscreenGroup) {
         scene.remove(silkscreenGroup)
+        disposeObjectTree(silkscreenGroup)
+        silkscreenGroup = null
       }
 
-      substrateGroup = new THREE.Group()
+      // Substrate, copper (two merged meshes), vias, and component boxes. The
+      // picker registrations happen inside.
+      const built = assembleBoard(board, picker)
+      assembled = built
+      scene.add(built.substrateGroup)
+      scene.add(built.copperGroup)
 
-      const substGeo = buildSubstrate(board.outline, board.boardThicknessMm)
-      const substMat = new THREE.MeshStandardMaterial({
-        color: FR4_COLOR,
-        roughness: 0.8,
-        metalness: 0.0,
-      })
-      const substMesh = new THREE.Mesh(substGeo, substMat)
-
-      // Center the board around the origin
-      substGeo.computeBoundingBox()
-      const bb = substGeo.boundingBox!
-      const cx = (bb.min.x + bb.max.x) / 2
-      const cy = (bb.min.y + bb.max.y) / 2
-      substMesh.position.set(-cx, -cy, 0)
-
-      substrateGroup.add(substMesh)
-      scene.add(substrateGroup)
-
-      // ── Copper geometry ──
-      copperGroup = new THREE.Group()
-      // Copper sits on top of the substrate (Z = boardThickness)
-      const copperZ = board.boardThicknessMm
-      copperGroup.position.set(-cx, -cy, copperZ)
-
-      // Rebuild net materials + overlay controller for the new board
-      // (dispose old materials first to free GPU memory)
-      for (const mat of netMaterialsMap.values()) mat.dispose()
-      netMaterialsMap = new Map<number, THREE.MeshStandardMaterial>()
-      overlayController = createOverlayController(netMaterialsMap)
-
-      // Compute net positions (world-space position of first pad per net)
-      // Used for op annotation label placement.
-      netPositionsMap = new Map<number, THREE.Vector3>()
-      for (const fp of board.footprints) {
-        for (const pad of fp.pads) {
-          if (pad.netId === undefined || pad.netId === 0) continue
-          if (!netPositionsMap.has(pad.netId)) {
-            const pos = padWorldPos(fp, pad)
-            const world = kicadToWorld(pos.x, pos.y)
-            // Apply the same board-centering offset used for the copper group
-            netPositionsMap.set(pad.netId, new THREE.Vector3(world.x - cx, world.y - cy, copperZ))
-          }
-        }
-      }
-
-      const copperMap = buildCopper(board)
-      for (const [netId, entry] of copperMap) {
-        // One shared material per net (both F and B sides share so tinting is consistent)
-        const mat = makeCopperMaterial()
-        netMaterialsMap.set(netId, mat)
-
-        if (entry.F) {
-          const mesh = new THREE.Mesh(entry.F, mat)
-          copperGroup.add(mesh)
-          picker.registerCopperMesh(mesh, netId)
-        }
-        if (entry.B) {
-          // B-side copper is flipped below the board
-          const mesh = new THREE.Mesh(entry.B, mat)
-          mesh.position.z = -copperZ  // offset to the back face
-          copperGroup.add(mesh)
-          picker.registerCopperMesh(mesh, netId)
-        }
-      }
-
-      // Vias
-      if (board.vias.length > 0) {
-        const viaResult = buildViaInstances(board)
-        // Offset vias to board center
-        viaResult.mesh.position.set(-cx, -cy, 0)
-        scene.add(viaResult.mesh)
-        picker.registerViaInstance(viaResult.mesh, viaResult.netIds)
-      }
-
-      scene.add(copperGroup)
-
-      // ── Component placeholder boxes ──
-      componentGroup = new THREE.Group()
-      componentGroup.position.set(-cx, -cy, 0)
+      // Rebuild the overlay controller against the new net tint table.
+      netTints = built.netTints
+      overlayController = createOverlayController(netTints)
+      netPositionsMap = built.netPositions
+      componentAnchorByRef = built.componentAnchors
+      const { x: cx, y: cy } = built.center
+      const bb = built.bounds
 
       // Fresh LED-glow controller for this board, anchored to the component group.
       ledGlowController?.dispose()
-      ledGlowController = createLedGlowController(componentGroup)
-
-      // ref → footprint, for LED classification / color capture.
-      const fpByRef = new Map(board.footprints.map(fp => [fp.ref, fp]))
-
-      componentAnchorByRef = new Map<string, THREE.Vector3>()
-
-      const boxEntries = buildComponentBoxes(board.footprints, board.boardThicknessMm)
-      for (const entry of boxEntries) {
-        const mat = new THREE.MeshStandardMaterial({
-          color: entry.color,
-          roughness: 0.7,
-          metalness: 0.1,
-          transparent: true,
-          opacity: 0.85,
-        })
-        const mesh = new THREE.Mesh(entry.geo, mat)
-        mesh.position.set(entry.worldX, entry.worldY, entry.worldZ)
-        mesh.userData = { ref: entry.ref, className: entry.className }
-        componentGroup.add(mesh)
-        picker.registerComponentBox(mesh, entry.ref)
-
-        // World-space anchor for bench lead clamps: the box position plus the
-        // group's board-centering offset (same convention as netPositionsMap).
-        componentAnchorByRef.set(
-          entry.ref,
-          new THREE.Vector3(entry.worldX - cx, entry.worldY - cy, entry.worldZ),
-        )
-
+      ledGlowController = createLedGlowController(built.componentGroup)
+      const glow = ledGlowController
+      for (const { ref, mesh, fp } of built.ledBoxes) {
         // LEDs get an emissive channel + halo so they can light at their OP current.
-        const fp = fpByRef.get(entry.ref)
-        if (fp && isLed({ ref: fp.ref, value: fp.value, libId: fp.libId, properties: fp.properties })) {
-          // Flag the mesh so the picker's external-highlight (critic focus) leaves
-          // this LED-owned material alone — it shares its emissive with the glow.
-          mesh.userData.isLed = true
-          ledGlowController.registerLed(entry.ref, mesh, ledColorFor({
-            ref: fp.ref, value: fp.value, libId: fp.libId, properties: fp.properties,
-          }))
-        }
+        glow.registerLed(ref, mesh, ledColorFor({
+          ref: fp.ref, value: fp.value, libId: fp.libId, properties: fp.properties,
+        }))
       }
-      scene.add(componentGroup)
+      scene.add(built.componentGroup)
 
       // ── Board Critic overlay group ──
       // Share the board-centering offset so finding markers (placed from
@@ -637,24 +523,26 @@ export function createSceneManager(): SceneManager {
       criticOverlay.group.position.set(-cx, -cy, 0)
       if (criticOverlay.group.parent !== scene) scene.add(criticOverlay.group)
 
-      // ── Silkscreen (troika Text — async, non-blocking) ──
+      // ── Silkscreen: one mesh for every string (one draw call) ──
+      // Needs a canvas for the glyph atlas; best-effort, so a board still loads
+      // where none is available.
       const silkEntries = buildSilkscreenEntries(board.silkscreen, board.boardThicknessMm)
       if (silkEntries.length > 0) {
-        // Create a new group synchronously; texts are added asynchronously.
-        silkscreenGroup = new THREE.Group()
-        silkscreenGroup.position.set(-cx, -cy, 0)
-        scene.add(silkscreenGroup)
-
-        createSilkscreenTexts(silkEntries).then(textObjs => {
-          if (!silkscreenGroup || !scene) return
-          for (const obj of textObjs) {
-            silkscreenGroup.add(obj)
+        try {
+          const silkMesh = createSilkscreenMesh(silkEntries)
+          if (silkMesh) {
+            silkscreenGroup = new THREE.Group()
+            silkscreenGroup.position.set(-cx, -cy, 0)
+            silkscreenGroup.add(silkMesh)
+            scene.add(silkscreenGroup)
           }
-          dirty = true
-        }).catch(() => {
-          // Silkscreen text loading is best-effort; log but don't crash
-        })
+        } catch {
+          // Silkscreen text is best-effort; the board is usable without it.
+        }
       }
+
+      // Build the copper picking index now so the first hover does not pay for it.
+      picker.warm()
 
       // Fit perspective camera to board
       if (perspCamera) {
@@ -696,8 +584,8 @@ export function createSceneManager(): SceneManager {
 
     flipToBack(): void {
       isFlipped = !isFlipped
-      if (substrateGroup) {
-        substrateGroup.rotation.y = isFlipped ? Math.PI : 0
+      if (assembled) {
+        assembled.substrateGroup.rotation.y = isFlipped ? Math.PI : 0
       }
       dirty = true
     },
@@ -788,9 +676,15 @@ export function createSceneManager(): SceneManager {
       const ndcY = (yPx / height) * -2 + 1
       const hit = picker.raycastTargets({ x: ndcX, y: ndcY }, cam)
       if (!hit) return null
-      const result: { netId?: number; ref?: string } = {}
+      const result: { netId?: number; ref?: string; pointMm?: { x: number; y: number } } = {}
       if (hit.netId !== undefined) result.netId = hit.netId
       if (hit.ref !== undefined) result.ref = hit.ref
+      // Inverse of kicadToWorld plus the board-centering offset applied in loadBoard.
+      const round = (v: number): number => Math.round(v * 100) / 100
+      result.pointMm = {
+        x: round(hit.point.x + boardCenter.x),
+        y: round(-(hit.point.y + boardCenter.y)),
+      }
       return result
     },
 

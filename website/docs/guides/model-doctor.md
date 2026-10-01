@@ -19,7 +19,7 @@ If you have a SPICE model file for the part (from the manufacturer, or anywhere)
 3. **Verify the pin map**: map each board pad to the correct model terminal. *Check this against the datasheet; a wrong pin map produces confidently-wrong results.*
 4. **Bind** it to the part.
 
-Imported models are prepended to circsim's library, so your model for a given part number wins over any bundled one, and it's remembered for next time.
+Imported models are prepended to circsim's library, so your model for a given part number wins over any bundled one. They are remembered for the rest of the session, and across restarts once you [save the board's setup](./save-and-report), which stores your models and every Model Doctor override beside the board.
 
 ### Ask your LLM
 
@@ -27,10 +27,21 @@ No model file? Click **Ask your LLM** (in the **⋮** overflow menu). circsim gi
 
 1. **Copy the prompt** and paste it into your LLM of choice.
 2. **Paste the `.subckt` response** back into circsim.
-3. **Validate with ngspice**: circsim loads the model into the real engine and tells you whether it accepted it. If ngspice rejects it, nothing is saved; revise and retry.
+3. **Validate with ngspice**: circsim loads the model into the real engine and tells you whether it accepted it. If ngspice rejects it, nothing is saved; revise and retry. Multi-line models are fine: the whole pasted block is loaded, and the error text shown is ngspice's own. Validation checks that ngspice accepts the model, not that the throwaway circuit settles: a model that loads cleanly passes even if its test circuit has no operating point. Validation runs a throwaway test circuit in the engine, so your board's current readings stay on screen untouched, and the next run reloads the board into the engine.
 4. **Save** to your library, which opens the pin-map editor so you can verify the terminal mapping (the LLM's suggested map is a suggestion, not gospel).
 
 This keeps a fully-offline, no-API workflow honest: the model only counts once *ngspice itself* accepts it.
+
+### Imported models are treated as code {#models-are-code}
+
+A SPICE model is not just data. ngspice can run commands embedded in a model, including `shell`, `write`, `source` and `load`, and a model pasted from a forum or written by an LLM would run them with your user's privileges. circsim therefore gates every deck before ngspice sees it, and refuses a model that contains:
+
+- a `.control` / `.endc` block (or the legacy `.exec`, or a `*#` command comment);
+- a file reference: `.include`, `.inc`, `.lib`, `.source`, `.csparam`, or an `input_file` / `state_file` model parameter;
+- any dot card circsim does not recognise as a plain circuit or analysis card;
+- a card that contains a line break (ngspice would split it into several cards).
+
+Models are always inlined into the deck, never loaded by path, so a legitimate model never needs any of these. When the gate refuses a deck you see an error that names the offending card, and the circuit is not loaded. Open the model file, delete the control block or include, and import it again. Only bring in model files you would be willing to read first.
 
 ### Stub it
 

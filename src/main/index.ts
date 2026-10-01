@@ -14,8 +14,11 @@
 
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { join } from 'path'
-import { readFile, stat } from 'fs/promises'
+import { copyFile, readFile, rename, stat, unlink, writeFile } from 'fs/promises'
 import { createProductionSupervisor, unwrapPort } from './simhostSupervisor'
+import { sidecarPathFor } from '../core/persist/paths'
+import { MAX_SIDECAR_BYTES } from '../core/persist/sidecar'
+import { addRecent, normalizeRecent, removeRecent } from '../core/persist/recent'
 
 /** Shape of resources/models/index.json (only the fields we read here). */
 interface ModelIndex {
@@ -90,6 +93,29 @@ function createWindow(): BrowserWindow {
   return win
 }
 
+// ─── Report export ────────────────────────────────────────────────────────────
+
+/**
+ * Render a standalone report HTML page to PDF in a hidden, script-disabled,
+ * sandboxed window. The page goes through a temp file (a data: URL would hit
+ * URL length limits on a large board) which is removed afterwards.
+ */
+async function renderPdf(html: string): Promise<Buffer> {
+  const tmp = join(app.getPath('temp'), `circsim-report-${process.pid}-${Date.now()}.html`)
+  await writeFile(tmp, html, 'utf8')
+  const win = new BrowserWindow({
+    show: false,
+    webPreferences: { sandbox: true, javascript: false, contextIsolation: true, nodeIntegration: false },
+  })
+  try {
+    await win.loadFile(tmp)
+    return await win.webContents.printToPDF({ printBackground: true, pageSize: 'A4' })
+  } finally {
+    win.destroy()
+    await unlink(tmp).catch(() => undefined)
+  }
+}
+
 // ─── IPC handlers for the preload bridge ─────────────────────────────────────
 
 function registerIpcHandlers(): void {
@@ -122,6 +148,114 @@ function registerIpcHandlers(): void {
     }
   })
 
+  // ── Per-board setup file (`<board>.circsim.json`, issue #27) ──────────────────
+  // The renderer never supplies a destination path: both handlers take the BOARD
+  // path and derive the sidecar name from it (sidecarPathFor refuses anything that
+  // is not a .kicad_pcb), so this bridge can read and write exactly one kind of
+  // file and can never touch the board itself.
+
+  /** Read the setup file beside a board. Never throws: absent, text, or an error string. */
+  ipcMain.handle('circsim:readSidecar', async (_event, boardPath: string) => {
+    const p = typeof boardPath === 'string' ? sidecarPathFor(boardPath) : null
+    if (!p) return { exists: false }
+    try {
+      const st = await stat(p)
+      if (!st.isFile()) return { exists: false }
+      if (st.size > MAX_SIDECAR_BYTES) return { exists: true, error: 'the file is larger than 8 MB' }
+      return { exists: true, text: (await readFile(p)).toString('utf8') }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { exists: false }
+      return { exists: true, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  /**
+   * Write the setup file beside a board, atomically (temp file + rename). With
+   * `backupExisting` the current file is first copied to `<file>.bak`, used for
+   * the first write over an old-format, truncated or unreadable file.
+   */
+  ipcMain.handle(
+    'circsim:writeSidecar',
+    async (_event, boardPath: string, text: string, opts?: { backupExisting?: boolean }) => {
+      const p = typeof boardPath === 'string' ? sidecarPathFor(boardPath) : null
+      if (!p) throw new Error('Not a .kicad_pcb path; refusing to write a setup file.')
+      if (typeof text !== 'string' || text.length > MAX_SIDECAR_BYTES) throw new Error('Setup text is not valid.')
+      if (opts?.backupExisting) {
+        try {
+          await copyFile(p, p + '.bak')
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+        }
+      }
+      const tmp = `${p}.${process.pid}.tmp`
+      try {
+        await writeFile(tmp, text, 'utf8')
+        await rename(tmp, p)
+      } catch (err) {
+        await unlink(tmp).catch(() => undefined)
+        throw err
+      }
+      return { path: p }
+    },
+  )
+
+  // ── Recent boards (userData/recent-boards.json) ────────────────────────────────
+  const recentFile = (): string => join(app.getPath('userData'), 'recent-boards.json')
+  const readRecent = async (): Promise<string[]> => {
+    try {
+      return normalizeRecent(JSON.parse((await readFile(recentFile())).toString('utf8')))
+    } catch {
+      return []
+    }
+  }
+  const writeRecent = async (list: string[]): Promise<string[]> => {
+    try {
+      await writeFile(recentFile(), JSON.stringify({ boards: list }, null, 2), 'utf8')
+    } catch {
+      // Best effort: a read-only profile just means no recent list.
+    }
+    return list
+  }
+  ipcMain.handle('circsim:getRecentBoards', () => readRecent())
+  ipcMain.handle('circsim:addRecentBoard', async (_event, boardPath: string) =>
+    writeRecent(addRecent(await readRecent(), boardPath)),
+  )
+  ipcMain.handle('circsim:removeRecentBoard', async (_event, boardPath: string) =>
+    writeRecent(removeRecent(await readRecent(), boardPath)),
+  )
+  ipcMain.handle('circsim:clearRecentBoards', () => writeRecent([]))
+
+  // ── Report export (markdown or PDF) ────────────────────────────────────────────
+  // The save location always comes from the native save dialog; the renderer only
+  // supplies the content and a suggested file name.
+  ipcMain.handle(
+    'circsim:exportReport',
+    async (_event, req: { format: 'md' | 'pdf'; content: string; suggestedName: string }) => {
+      if (!mainWindow) return { cancelled: true }
+      if (!req || (req.format !== 'md' && req.format !== 'pdf') || typeof req.content !== 'string') {
+        throw new Error('Invalid report export request.')
+      }
+      if (req.content.length > 16 * 1024 * 1024) throw new Error('The report is too large to export.')
+      const safeName = String(req.suggestedName || 'circsim-report')
+        .replace(/[\\/:*?"<>|]+/g, '_')
+        .slice(0, 120)
+      const ext = req.format
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: ext === 'md' ? 'Export report as markdown' : 'Export report as PDF',
+        defaultPath: `${safeName}.${ext}`,
+        filters: [ext === 'md' ? { name: 'Markdown', extensions: ['md'] } : { name: 'PDF', extensions: ['pdf'] }],
+      })
+      if (result.canceled || !result.filePath) return { cancelled: true }
+      const filePath = result.filePath.toLowerCase().endsWith(`.${ext}`) ? result.filePath : `${result.filePath}.${ext}`
+      if (ext === 'md') {
+        await writeFile(filePath, req.content, 'utf8')
+      } else {
+        await writeFile(filePath, await renderPdf(req.content))
+      }
+      return { cancelled: false, filePath }
+    },
+  )
+
   /** Return platform path information. */
   ipcMain.handle('circsim:platformPaths', () => {
     return {
@@ -152,14 +286,15 @@ function registerIpcHandlers(): void {
 
   /**
    * Open the "what circsim can tell you" fidelity doc.
-   * In packaged builds, open the bundled docs/what-circsim-can-tell-you.md
-   * via shell.openPath (rendered as plain text). In dev, open it from the
-   * project root. If the file is not found, fall back to a no-op (graceful).
-   * Task 28 — Spec §16 risk 7, §12.
+   * Opens the bundled docs/what-circsim-can-tell-you.html (rendered from
+   * website/docs/concepts/fidelity.md by scripts/fidelity-doc.mjs) in the
+   * default browser via shell.openPath. Packaged: <resources>/docs; dev: the
+   * project docs/ dir. If the file is not found, fall back to a no-op (graceful).
+   * Task 28 — Spec §16 risk 7, §12; issue #61.
    */
   ipcMain.handle('circsim:openDocs', async () => {
     try {
-      await shell.openPath(docPath('what-circsim-can-tell-you.md'))
+      await shell.openPath(docPath('what-circsim-can-tell-you.html'))
     } catch {
       // Non-fatal: if the doc isn't present (CI runner without a display),
       // the promise still resolves so the UI doesn't stall.
@@ -198,8 +333,12 @@ function registerIpcHandlers(): void {
         'The bundled SPICE model library was written in-house for circsim from ' +
         'public datasheet parameters and is MIT-licensed. Each file in ' +
         'resources/models/ carries a "Provenance:" header. No vendor (TI/ADI/' +
-        'onsemi) or Micro-Cap/Intusoft model text is included. The GPL-encumbered ' +
-        'ngspice "table.cm" code model is excluded from every platform bundle.'
+        'onsemi) or Micro-Cap/Intusoft model text is included. The discrete diode, ' +
+        'LED and transistor cards are derived from datasheet operating points by ' +
+        'the checked-in script scripts/fit-model-cards.mjs, and a CI fingerprint ' +
+        'test rejects any card that reproduces a known third-party library card. ' +
+        'The GPL-encumbered ngspice "table.cm" code model is excluded from every ' +
+        'platform bundle.'
     }
   })
 

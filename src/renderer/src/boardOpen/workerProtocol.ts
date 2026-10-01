@@ -9,8 +9,9 @@
  */
 
 import type { CriticReport } from '../../../core/critic/types'
+import type { StaticOutputs } from '../../../core/critic/run'
 import {
-  auditOpenedBoard,
+  auditOpened,
   openBoardPipeline,
   type OpenOutcome,
   type OpenRequest,
@@ -29,7 +30,7 @@ export interface OpenWorkerRequest {
 export type OpenWorkerReply =
   | { type: 'stage'; id: number; stage: OpenStage }
   | { type: 'opened'; id: number; outcome: OpenOutcome }
-  | { type: 'audit'; id: number; report: CriticReport }
+  | { type: 'audit'; id: number; report: CriticReport; staticOutputs: StaticOutputs | null }
   | { type: 'fatal'; id: number; message: string }
 
 /**
@@ -44,8 +45,8 @@ export function serveOpenRequest(msg: OpenWorkerRequest, post: (reply: OpenWorke
     post({ type: 'opened', id, outcome })
     if (!outcome.ok) return
     post({ type: 'stage', id, stage: 'auditing' })
-    const report = auditOpenedBoard(outcome.opened)
-    post({ type: 'audit', id, report })
+    const { report, staticOutputs } = auditOpened(outcome.opened)
+    post({ type: 'audit', id, report, staticOutputs })
   } catch (err) {
     post({ type: 'fatal', id, message: err instanceof Error ? err.message : String(err) })
   }

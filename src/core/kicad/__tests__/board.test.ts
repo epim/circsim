@@ -284,17 +284,17 @@ describe('parseBoard — TrackSegment discriminated union', () => {
   })
 })
 
-// ─── KiCad 9 / 2026 name-only net format ──────────────────────────────────────
+// ─── KiCad 10 name-only net format ──────────────────────────────────────
 
-describe('parseBoard — KiCad 9 (2026) name-only net format', () => {
-  const FIXTURE_V9_PATH = join(__dirname, '../../../../fixtures/fixture-rc-v9.kicad_pcb')
-  const fixtureV9Text = readFileSync(FIXTURE_V9_PATH, 'utf-8')
+describe('parseBoard — KiCad 10 (20260206) name-only net format', () => {
+  const FIXTURE_V10_PATH = join(__dirname, '../../../../fixtures/fixture-rc-v10.kicad_pcb')
+  const fixtureV10Text = readFileSync(FIXTURE_V10_PATH, 'utf-8')
 
   it('synthesizes a net table from name-only references (no top-level net table)', () => {
-    // KiCad 9/2026 dropped the numeric net id AND the top-level net table:
+    // KiCad 10 (20260206) dropped the numeric net id AND the top-level net table:
     // every reference is `(net "NAME")`. The parser must synthesize ids so the
     // rest of the pipeline (which keys on numeric ids) keeps working.
-    const board = parseBoard(fixtureV9Text)
+    const board = parseBoard(fixtureV10Text)
     // 3 distinct named nets: VIN, OUT, GND. The empty net is never referenced.
     expect(board.netById.size).toBe(3)
     const names = [...board.netById.values()].map(n => n.name).sort()
@@ -308,7 +308,7 @@ describe('parseBoard — KiCad 9 (2026) name-only net format', () => {
   it('assigns the SAME synthesized id to every reference of one net name', () => {
     // The connectivity guarantee: R1.pad2, R2.pad1, the segment and the via all
     // name "OUT", so they must all resolve to one shared id.
-    const board = parseBoard(fixtureV9Text)
+    const board = parseBoard(fixtureV10Text)
     const r1 = board.footprints[0]
     const r2 = board.footprints[1]
     const r1Pad2 = r1.pads.find(p => p.number === '2')!
@@ -325,7 +325,7 @@ describe('parseBoard — KiCad 9 (2026) name-only net format', () => {
   })
 
   it('distinct net names get distinct ids (VIN ≠ OUT ≠ GND)', () => {
-    const board = parseBoard(fixtureV9Text)
+    const board = parseBoard(fixtureV10Text)
     const r1 = board.footprints[0]
     const r2 = board.footprints[1]
     const vin = r1.pads.find(p => p.number === '1')!.netId
@@ -336,8 +336,8 @@ describe('parseBoard — KiCad 9 (2026) name-only net format', () => {
     expect(board.netById.get(gnd!)!.name).toBe('GND')
   })
 
-  it('still parses footprints, tracks and vias from the v9 file', () => {
-    const board = parseBoard(fixtureV9Text)
+  it('still parses footprints, tracks and vias from the KiCad 10 file', () => {
+    const board = parseBoard(fixtureV10Text)
     expect(board.footprints).toHaveLength(2)
     expect(board.footprints[0].ref).toBe('R1')
     expect(board.tracks).toHaveLength(1)
