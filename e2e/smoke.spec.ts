@@ -51,14 +51,6 @@ async function launchApp(): Promise<{ app: ElectronApplication; page: import('@p
   return { app, page }
 }
 
-/**
- * Flip to false when #128 (macOS: ngspice's free-memory pre-check aborts the
- * 30 s / 10 us bench transient, so Run never streams) is fixed. While true, the
- * Run test on darwin asserts the known symptom instead of the live trace; it
- * fails loudly the moment the bug stops reproducing so this flag cannot rot.
- */
-const KNOWN_BUG_128_OPEN = true
-
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 test.describe('circsim smoke E2E', () => {
@@ -204,20 +196,8 @@ ${diag}
     await expect(runBtn).toBeEnabled({ timeout: 10_000 })
     await runBtn.click()
 
-    if (KNOWN_BUG_128_OPEN && process.platform === 'darwin') {
-      // Known bug #128: ngspice's macOS free-memory estimate rejects the bench
-      // transient, so no sample ever streams. Pin the symptom and its cause.
-      await expect
-        .poll(() => readSimDiagnostics(page), {
-          timeout: 20_000,
-          message: 'known bug #128 no longer reproduces on macOS: set KNOWN_BUG_128_OPEN to false',
-        })
-        .toContain('memory required')
-      expect((await traceStats()).count).toBe(0)
-      return
-    }
-
-    // Samples must reach the ring buffer and be drawn: a one-pixel-wide trace
+    // Samples must reach the ring buffer and be drawn on every platform
+    // (regression test for #128, fixed in #130): a one-pixel-wide trace
     // across a ~500 px canvas is several hundred trace-coloured pixels.
     await expect.poll(async () => (await traceStats()).count, { timeout: 20_000 }).toBeGreaterThan(200)
 

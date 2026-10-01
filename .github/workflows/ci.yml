@@ -279,10 +279,8 @@ jobs:
   #                    --dir provides dist/mac*/circsim.app so the packaged spec
   #                    launches the asar-external dylib and .cm paths. The
   #                    macos-15-intel dmg is still only verified statically in
-  #                    the release job. Known bug #128: on macOS ngspice's
-  #                    free-memory pre-check aborts the bench transient, so the
-  #                    smoke Run test pins that symptom on this leg until the
-  #                    fix lands (KNOWN_BUG_128_OPEN in e2e/smoke.spec.ts).
+  #                    the release job. The smoke Run test is also the macOS
+  #                    regression test for #128 (ngspice free-memory pre-check).
   #
   # Runs in parallel with `test`; the release job gates on BOTH.
   # ===========================================================================
