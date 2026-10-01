@@ -17,7 +17,11 @@ You can **minimize** it (the **»** button) to a compact header badge (**⚠ N a
 
 ## "Check these voltages": the operating-point caveat
 
-*(persistent, appears after a fallback solve)* The [operating point](./energize) converged, but only through a **numerical fallback**: *gmin-stepping* or *source-stepping* (solver techniques that ease a stubborn circuit toward a solution when a direct solve won't settle), or a transient assist, rather than a clean direct solve. You don't need to understand those methods; the point is that a fallback op can report a misleading `0.000 V` on nets it couldn't resolve, so treat the voltages as suspect and look for the underlying cause (a floating node, a missing ground path). A clean solve shows no caveat.
+*(persistent, appears after a fallback solve)* The banner reads: **"Check these voltages. These voltages needed a workaround to solve; treat 0.000 V readings as unknown."** The [operating point](./energize) converged, but only through a **numerical fallback** rather than a clean direct solve, and a fallback op can report a misleading `0.000 V` on nets it couldn't resolve. Treat the voltages as suspect and look for the underlying cause (a floating node, a missing ground path). A clean solve shows no caveat.
+
+You don't need to understand the solver to use this. If you're curious which workaround ran (*gmin-stepping* or *source-stepping*, techniques that ease a stubborn circuit toward a solution, or a transient assist), open the **Details** disclosure under the banner.
+
+The bundled op-amp, comparator, 555, and regulator models are written so that ordinary boards solve directly, with no fallback. So when this banner does appear on a board built from them, it is a real signal about the circuit (typically a floating node or a missing DC path), not routine noise to dismiss.
 
 ## "The simulator couldn't find a stable solution"
 

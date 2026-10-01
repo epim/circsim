@@ -10,7 +10,9 @@
  *     an expandable raw ngspice log section. Dismissable.
  *   - Op fallback caveat: persistent + non-dismissable while the latest
  *     operating point came from a fallback rung (gmin/source/transient-op) —
- *     its voltages, especially 0.000 V readings, may be unreliable (F1).
+ *     its voltages, especially 0.000 V readings, may be unreliable (F1). The
+ *     banner reads in plain language; which rung ran sits behind a Details
+ *     disclosure so solver vocabulary is never the first thing a user sees.
  *   - Bench-restart toast: brief "bench restarted" notice (window/memory), with
  *     the sequential-logic caveat when digital parts are present. Dismissable.
  *   - Crash toast: SimHost crashed — auto-recovering. Dismissable.
@@ -165,7 +167,19 @@ export default function WarningsBar(): React.ReactElement | null {
       {/* ── Op fallback caveat (persistent, non-dismissable — F1) ─────────── */}
       {opCaveat && (
         <div style={opCaveatStyle} data-testid="op-caveat">
-          <strong>Check these voltages.</strong> {opCaveatMessage(opCaveat.method)}
+          <strong>Check these voltages.</strong>{' '}
+          {opCaveat.method === 'failed' ? (
+            opCaveatMessage(opCaveat.method)
+          ) : (
+            <>
+              These voltages needed a workaround to solve; treat 0.000 V readings as unknown.
+              {/* Solver vocabulary (which fallback rung ran) stays one click away. */}
+              <details style={opCaveatDetailsStyle} data-testid="op-caveat-details">
+                <summary style={opCaveatSummaryStyle}>Details</summary>
+                {opCaveatMessage(opCaveat.method)}
+              </details>
+            </>
+          )}
         </div>
       )}
 
@@ -367,6 +381,15 @@ const opCaveatStyle: React.CSSProperties = {
   background: '#3a2a10',
   color: '#ffd9a0',
   borderTop: '1px solid #5a4418',
+}
+const opCaveatDetailsStyle: React.CSSProperties = {
+  marginTop: 4,
+  fontSize: 11.5,
+  opacity: 0.85,
+}
+const opCaveatSummaryStyle: React.CSSProperties = {
+  cursor: 'pointer',
+  textDecoration: 'underline',
 }
 // Gated-off rail note: same amber caveat tone as the op fallback, with an inline
 // action row for the manual override.
