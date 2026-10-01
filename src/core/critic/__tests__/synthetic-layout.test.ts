@@ -13,12 +13,9 @@
  * centres, so the assertions here are against KiCad, not against circsim's
  * renderer.
  *
- * KNOWN DEFECT. One assertion encodes behavior circsim gets wrong today and is
- * written with `it.fails` (it passes while the defect exists, and FAILS the moment
- * it is fixed, telling the fixer to flip the flag below):
- *   - #11 the clearance check compares centerlines and ignores track width.
- * Issue #3 (pad rotation handedness in geom.ts padWorldPos) is fixed; its
- * assertions below are ordinary tests against the KiCad-derived pad centres.
+ * Issue #3 (pad rotation handedness in geom.ts padWorldPos) and issue #11 (the
+ * clearance check ignored track width) are fixed; their assertions below are
+ * ordinary tests.
  */
 
 import { readFileSync } from 'node:fs'
@@ -32,11 +29,6 @@ import type { BoardModel, Footprint, Pad, Vec2 } from '../../kicad/types'
 import { extract } from '../../netlist/extract'
 import { padWorldPos, segPointDistanceMm, trackResistanceOhms } from '../geom'
 import { runCritic } from '../run'
-
-/** Flip to false when #11 (clearance ignores track width) is fixed. */
-const KNOWN_BUG_11_OPEN = true
-
-const itBug11 = KNOWN_BUG_11_OPEN ? it.fails : it
 
 const FIXTURE_DIR = join(__dirname, '../../../../fixtures/synthetic')
 const board = parseBoard(readFileSync(join(FIXTURE_DIR, 'routed-rotated-kicad10.kicad_pcb'), 'utf8'))
@@ -204,7 +196,7 @@ describe('clearance on synthetic copper', () => {
     expect(f[0].severity).toBe('error')
   })
 
-  itBug11('two 1.0 mm tracks whose copper overlaps by 0.4 mm (centerlines 0.6 mm apart) are a clearance error (known bug #11)', () => {
+  it('two 1.0 mm tracks whose copper overlaps by 0.4 mm (centerlines 0.6 mm apart) are a clearance error', () => {
     // Centerline distance 0.6 mm clears the 0.2 mm minimum, but the copper edges
     // are 0.6 - 1.0 = -0.4 mm apart: the tracks are shorted.
     const f = clearanceFindings(twoTracks(1.0, 0.6))
