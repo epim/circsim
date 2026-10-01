@@ -206,6 +206,20 @@ jobs:
         env:
           CIRCSIM_REQUIRE_PACKAGED: '1'
 
+      # The smoke spec prints renderer state and console on failure; the
+      # screenshot and error context land in test-results/. Without this the
+      # Test job kept nothing, so a red packaged launch could not be diagnosed.
+      - name: Upload packaged smoke diagnostics (macOS, on failure)
+        if: failure() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-smoke-${{ matrix.os }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+
   # ===========================================================================
   # KiCad load job: every fixture and bundled sample must load in a real KiCad
   # (issue #24). The fixtures use board format version 20260206, which KiCad 9

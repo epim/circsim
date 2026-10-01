@@ -46,6 +46,37 @@ function packagedExePath(): string {
 
 const PACKAGED_EXE = packagedExePath()
 
+// The first op solve loads libngspice and the code models inside the SimHost
+// utility process; on a loaded CI runner that has taken well over 10 s.
+const OP_TIMEOUT_MS = 25_000
+
+/**
+ * On failure, print what the renderer shows (a failed op leaves no DOM trace
+ * other than banners and cards) plus the renderer console, so a CI failure of
+ * this gate is diagnosable from the log alone.
+ */
+async function dumpDiagnostics(
+  page: import('@playwright/test').Page,
+  rendererLog: string[],
+): Promise<void> {
+  try {
+    const state = await page.evaluate(() => ({
+      text: document.body.innerText.slice(0, 4000),
+      testIds: Array.from(document.querySelectorAll('[data-testid]'))
+        .map(e => e.getAttribute('data-testid'))
+        .filter((v, i, a) => a.indexOf(v) === i),
+    }))
+    console.log(`[diag] testids: ${state.testIds.join(', ')}`)
+    console.log(`[diag] body text:
+${state.text}`)
+  } catch (e) {
+    console.log(`[diag] could not read page state: ${String(e)}`)
+  }
+  console.log(`[diag] renderer log (${rendererLog.length} lines):
+${rendererLog.slice(-60).join('
+')}`)
+}
+
 test('packaged app: open sample → power on → op annotations (real ngspice from bundle)', async () => {
   if (process.env['CIRCSIM_REQUIRE_PACKAGED'] === '1') {
     expect(existsSync(PACKAGED_EXE), `packaged binary missing: ${PACKAGED_EXE}`).toBe(true)
@@ -54,8 +85,11 @@ test('packaged app: open sample → power on → op annotations (real ngspice fr
 
   const app = await electron.launch({ executablePath: PACKAGED_EXE, args: [] })
   pipeAppOutput(app)
+  const rendererLog: string[] = []
   try {
     const page = await app.firstWindow()
+    page.on('console', m => rendererLog.push(`[console.${m.type()}] ${m.text()}`))
+    page.on('pageerror', e => rendererLog.push(`[pageerror] ${e.message}`))
     await page.waitForLoadState('load')
     await page.waitForTimeout(3000)
 
@@ -73,7 +107,14 @@ test('packaged app: open sample → power on → op annotations (real ngspice fr
     const powerOn = page.locator('[data-testid="power-on-btn"]')
     await expect(powerOn).toBeEnabled({ timeout: 10_000 })
     await powerOn.click()
-    await expect(page.locator('[data-testid="op-annotation"]').first()).toBeVisible({ timeout: 25_000 })
+    try {
+      await expect(page.locator('[data-testid="op-annotation"]').first()).toBeVisible({
+        timeout: OP_TIMEOUT_MS,
+      })
+    } catch (err) {
+      await dumpDiagnostics(page, rendererLog)
+      throw err
+    }
   } finally {
     await app.close()
   }

@@ -197,11 +197,21 @@ describe('ngspice resources layout', () => {
     }
 
     it('build-ngspice.sh builds without FFTW3 and gates on dynamic dependencies', () => {
-      const script = fs.readFileSync(path.join(PROJECT_ROOT, 'scripts', 'build-ngspice.sh'), 'utf8')
-      expect(script).toMatch(/--with-fftw3=no/)
-      expect(script).toMatch(/readelf -d/)
-      expect(script).toMatch(/otool -L/)
-      expect(script).toMatch(/dynamicDeps/)
+      // Comment lines are dropped first: the flag and tool names are also
+      // mentioned in explanatory comments, which must not satisfy these checks.
+      const code = fs
+        .readFileSync(path.join(PROJECT_ROOT, 'scripts', 'build-ngspice.sh'), 'utf8')
+        .split(/\r?\n/)
+        .filter(line => !/^\s*#/.test(line))
+        .join('\n')
+      // The flag is an argument line of the configure invocation itself.
+      expect(code).toMatch(/^"\$\{SRC_DIR\}\/configure" \\\n(?: {2}--[^\n]*\\\n)*? {2}--with-fftw3=no \\\n/m)
+      // The gate reads the produced library, rejects non-runtime deps and
+      // records the list in the manifest.
+      expect(code).toMatch(/readelf -d "\$\{lib\}"/)
+      expect(code).toMatch(/otool -L "\$\{lib\}"/)
+      expect(code).toMatch(/if \[\[ -n "\$\{BAD_DEPS\}" \]\]; then(?:(?!\nfi\n)[\s\S])*?\n {2}exit 1\nfi\n/)
+      expect(code).toMatch(/^ {2}dynamicDeps: JSON\.parse\(process\.env\.DYN_DEPS_JSON\),$/m)
     })
 
     it.skipIf(!sourceBuilt)('manifest.json records dynamicDeps, all within the C/C++ runtime', () => {
