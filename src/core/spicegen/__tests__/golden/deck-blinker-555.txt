@@ -94,7 +94,7 @@ bsrc vcc gnd i = 0.5*(1 + tanh((v(vcc,gnd) - 1)/0.25))*0.5*( i(vsns) + sqrt(i(vs
 * because the loop through THRES is what the operating point has to solve.
 bdisch disch gnd i = v(disch,gnd)*( (1 - ((time < 1e-6 ? 1 - time/1e-6 : 0)*0.5*(1 + tanh(3*(v(q,gnd) - 0.5))) + (time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0))*v(rok,gnd))/15 + (((time < 1e-6 ? 1 - time/1e-6 : 0)*0.5*(1 + tanh(3*(v(q,gnd) - 0.5))) + (time < 1e-6 ? time/1e-6 : 1)*(v(q,gnd) > 0.5 ? 1 : 0))*v(rok,gnd))/1e9 )
 .ends NE555
-.model LED_RED D(is=1e-19 rs=2.0 n=1.7 cjo=30p vj=0.75 m=0.333 bv=5 ibv=100u eg=1.9 xti=3)
+.model LED_RED D(is=8.51e-21 rs=2 n=1.7 cjo=30p vj=0.75 m=0.333 bv=5 ibv=100u eg=1.9 xti=3)
 .save all
 .save i(vsense_d1)
 .end

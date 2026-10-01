@@ -31,7 +31,7 @@ Not all models are equal, and circsim is explicit about which kind each part get
 
 ### Primitive-level models
 
-Diodes, LEDs, bipolar transistors, and discrete MOSFETs are modeled as **ngspice primitives**: real `.model` cards whose parameters (saturation current, forward voltage, transistor gain, MOSFET turn-on thresholds) come straight from the part's datasheet using SPICE's standard device equations. These are as good as SPICE gets at the hobbyist level. (The exact equation sets have names: *Gummel-Poon* for bipolar transistors, *VDMOS* for power MOSFETs, which you'll see in the [model library reference](../reference/model-library); you don't need them to use the models.)
+Diodes, LEDs, bipolar transistors, and discrete MOSFETs are modeled as **ngspice primitives**: real `.model` cards whose parameters (saturation current, forward voltage, transistor gain, MOSFET turn-on thresholds) are derived from the part's datasheet operating points using SPICE's standard device equations (the fitting script is in the repository, and CI rejects any card that reproduces a known third-party library card). These are as good as SPICE gets at the hobbyist level. (The exact equation sets have names: *Gummel-Poon* for bipolar transistors, *VDMOS* for power MOSFETs, which you'll see in the [model library reference](../reference/model-library); you don't need them to use the models.)
 
 ### Behavioral macromodels
 
@@ -42,6 +42,8 @@ Some behavioral models are deliberately *simplified operating-point stubs*: a ba
 ### Digital logic
 
 The 74HC and CD4000 logic families use **behavioral digital models** (built on ngspice's XSPICE extension, which lets a real logic gate live inside an analog simulation). The gate does the right truth table with datasheet-typical thresholds and delays. Schmitt-trigger parts (the 74HC14, CD40106) carry true hysteresis, so an *RC astable* (an oscillator made from just a resistor, a capacitor, and one gate) built around one actually oscillates.
+
+Every gate output has a finite drive: roughly 40 ohm and 25 mA for 74HC at 5 V, roughly 400 ohm and 3 mA for CD4000 at 5 V (both scale with the rail). A logic pin wired straight to an LED, a relay coil, or a heavy load therefore sags toward the load instead of holding the rail. The active-low clear, preset, and master-reset pins of the 74HC74, 74HC164, and 74HC595 behave as active-low, so tying them high leaves the register free to clock.
 
 ## Stubs and interactive pins {#stubs-and-interactive-pins}
 

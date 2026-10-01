@@ -169,7 +169,7 @@ describe.skipIf(!haveNgspice)('op-informed rail sensing (real ngspice)', () => {
 
     // Pass 1: no measured rail yet, so the CD40106 used the 12 V family default
     // swing (mid 6.0 / V_T+ 7.2 / rail 12).
-    expect(result.pass1Deck.join('\n')).toContain('(v(out) > 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000')
+    expect(result.pass1Deck.join('\n')).toContain('(v(u1_o_1y) > 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000')
 
     // Tier-3 sensing read the divider-biased rail off the REAL pass-1 op.
     expect(result.measuredRails.get(vgatedNetId)).toBeCloseTo(5, 1)
@@ -182,7 +182,7 @@ describe.skipIf(!haveNgspice)('op-informed rail sensing (real ngspice)', () => {
     const pass2Text = result.deck.join('\n')
     // The rail is the divider's ~5 V less microvolts of draw from the gate, so the
     // rounded swing prints as 4.9999 or 5.0000.
-    expect(pass2Text).toMatch(/\(v\(out\) > 2\.5000 \? 3\.0000 : 2\.0000\)\) \? 0 : (4\.9999|5\.0000)/)
+    expect(pass2Text).toMatch(/\(v\(u1_o_1y\) > 2\.5000 \? 3\.0000 : 2\.0000\)\) \? 0 : (4\.9999|5\.0000)/)
     expect(pass2Text).not.toContain('12.0000')
     // Provenance names the tier (the raw vHigh is the un-rounded ~4.99996 V op).
     expect(pass2Text).toContain('(op-measured rail; family default 12)')
@@ -208,7 +208,27 @@ describe.skipIf(!haveNgspice)('op-informed rail sensing (real ngspice)', () => {
     expect(result.measuredRails.has(vgatedNetId)).toBe(false)
     expect(result.gatedOff).toEqual([{ ref: 'U1', netId: vgatedNetId, kicadName: '/VGATED' }])
     expect(result.pass2).toBe('not-needed')
-    expect(result.deck.join('\n')).toContain('(v(out) > 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000')
+    expect(result.deck.join('\n')).toContain('(v(u1_o_1y) > 6.0000 ? 7.2000 : 4.8000)) ? 0 : 12.0000')
+  }, 90_000)
+
+  it('an input that reaches only the chip is reported undriven, not silently 0 V (issue #43)', async () => {
+    // Remove R3: IN (1A) now touches only U1's sense-only input. The deck bleeds
+    // it to ground so the matrix solves, and the solve must say so.
+    const f = buildFixture(12)
+    const resolutions = f.resolutions.filter(r => r.ref !== 'R3')
+    const circuit: Circuit = { ...f.circuit, parts: f.circuit.parts.filter(p => p.ref !== 'R3') }
+    const inputs = buildSolveInputs(null, circuit, resolutions, f.instruments, f.groundNetId, {
+      title: 'rail-sensing-undriven', modelTexts,
+    })
+
+    const { errs, result } = await solve(inputs)
+    expect(errs).toEqual([])
+    // The op reads IN as a tidy 0 V and the chip output as a confident level...
+    expect(result.op.values.in).toBeCloseTo(0, 3)
+    // ...and the solve names IN as undriven. OUT is driven by the gate and the
+    // rail nets by the supply, so only IN is listed.
+    expect(result.undrivenNets).toEqual([{ netId: 3, kicadName: 'IN', spiceNode: 'in' }])
+    expect(result.deck.join('\n')).toContain('r_float_1 in 0 1e9')
   }, 90_000)
 
   it('a manual override pins the voltage regardless of the measured op', async () => {
@@ -225,7 +245,7 @@ describe.skipIf(!haveNgspice)('op-informed rail sensing (real ngspice)', () => {
     )
     const text = deck.join('\n')
     // 3.3 V swing: mid 1.65 / V_T+ 1.98 / V_T- 1.32 / rail 3.3 — tier-2 beats tier-3.
-    expect(text).toContain('(v(out) > 1.6500 ? 1.9800 : 1.3200)) ? 0 : 3.3000')
+    expect(text).toContain('(v(u1_o_1y) > 1.6500 ? 1.9800 : 1.3200)) ? 0 : 3.3000')
     expect(text).not.toContain(': 5.0000')
     expect(text).not.toContain('12.0000')
     expect(text).toContain('* U1 vhigh: 3.3 (user rail override; family default 12)')
