@@ -77,13 +77,31 @@ const OP_FAILS_SUBCKT = ['.subckt tv a b', 'v1 a 0 5', 'r1 a b 1k', '.ends', '']
 // Missing .ends: a genuinely broken paste that must still be rejected.
 const BROKEN_SUBCKT = ['.subckt tbad a b', 'r1 a b 1000', ''].join('\n')
 
-/** A SimClient over a real in-process SimHost (what the utility process runs). */
+/** How one waitFor call ended: by the awaited event, or by the (backstop) timer. */
+interface WaitRecord {
+  type: SimEvent['type']
+  requestedTimeoutMs: number | undefined
+  endedBy: 'pending' | 'event' | 'timer'
+}
+
+/** Long enough that a slow CI runner never trips it; it only turns a hang into a failure. */
+const WAIT_BACKSTOP_MS = 60_000
+
+/**
+ * A SimClient over a real in-process SimHost (what the utility process runs).
+ *
+ * waitFor records how each call ended instead of racing the production timeout
+ * (8 s) against the runner's speed: the test asserts on the outcome, never on
+ * elapsed wall-clock time.
+ */
 function createHostClient(): {
   client: SimClientLike
   host: SimHost
   events: SimEvent[]
+  waits: WaitRecord[]
   start(): Promise<void>
 } {
+  const waits: WaitRecord[] = []
   const listeners = new Set<SimEventListener>()
   const events: SimEvent[] = []
   const host = new SimHost({
@@ -103,25 +121,26 @@ function createHostClient(): {
       return () => listeners.delete(listener)
     },
     waitFor(type, timeoutMs) {
+      const record: WaitRecord = { type, requestedTimeoutMs: timeoutMs, endedBy: 'pending' }
+      waits.push(record)
       return new Promise((resolve, reject) => {
-        let timer: ReturnType<typeof setTimeout> | undefined
         const off = client.onEvent((e) => {
           if (e.type === type) {
-            if (timer) clearTimeout(timer)
+            clearTimeout(timer)
             off()
+            record.endedBy = 'event'
             resolve(e as never)
           }
         })
-        if (timeoutMs !== undefined) {
-          timer = setTimeout(() => {
-            off()
-            reject(new Error(`waitFor('${type}') timed out`))
-          }, timeoutMs)
-        }
+        const timer = setTimeout(() => {
+          off()
+          record.endedBy = 'timer'
+          reject(new Error(`waitFor('${type}') timed out`))
+        }, WAIT_BACKSTOP_MS)
       })
     },
   }
-  return { client, host, events, start: () => host.start() }
+  return { client, host, events, waits, start: () => host.start() }
 }
 
 describe.skipIf(!haveNgspice)('issue #18: multi-line subckt through real ngspice', () => {
@@ -160,7 +179,7 @@ describe.skipIf(!haveNgspice)('issue #18: multi-line subckt through real ngspice
     )
 
     it('accepts a valid multi-line subckt, promptly, without touching the board readout', async () => {
-      const { client, host, start } = createHostClient()
+      const { client, host, waits, start } = createHostClient()
       disposeHost = () => host.dispose()
       await start()
       const store = await createAppStore({ simClient: client })
@@ -169,32 +188,32 @@ describe.skipIf(!haveNgspice)('issue #18: multi-line subckt through real ngspice
       const shown = new Map<number, number>([[1, 3.3]])
       store.setState({ opVoltages: shown, deckDirty: false })
 
-      const t0 = Date.now()
       const res = await store.getState().validateSubckt(VALID_SUBCKT, 'tsub', 2)
-      const elapsed = Date.now() - t0
 
       expect(res).toEqual({ ok: true })
-      // Resolves on load completion, not the 8 s fallback timer.
-      expect(elapsed).toBeLessThan(5000)
+      // Resolves on load completion (the opResult event), not by running out the
+      // fallback timer. Asserted on how the wait ended, never on elapsed time:
+      // the wall clock says nothing reliable on a slow CI runner.
+      expect(waits.filter((w) => w.type === 'opResult').map((w) => w.endedBy)).toEqual(['event'])
       expect(store.getState().opVoltages).toBe(shown)
       // The probe deck replaced the board deck in the live engine.
       expect(store.getState().deckDirty).toBe(true)
     })
 
     it('rejects a broken paste and reports the ngspice error', async () => {
-      const { client, host, start } = createHostClient()
+      const { client, host, waits, start } = createHostClient()
       disposeHost = () => host.dispose()
       await start()
       const store = await createAppStore({ simClient: client })
       store.getState().openBoardFromText(sample, 'first-light.kicad_pcb')
       store.setState({ deckDirty: false })
 
-      const t0 = Date.now()
       const res = await store.getState().validateSubckt(BROKEN_SUBCKT, 'tbad', 2)
 
       expect(res.ok).toBe(false)
       expect(res.ok === false && res.error).toMatch(/subckt/i)
-      expect(Date.now() - t0).toBeLessThan(5000)
+      // A rejected paste also resolves on the opResult event, not the fallback timer.
+      expect(waits.filter((w) => w.type === 'opResult').map((w) => w.endedBy)).toEqual(['event'])
       expect(store.getState().deckDirty).toBe(true)
     })
 
