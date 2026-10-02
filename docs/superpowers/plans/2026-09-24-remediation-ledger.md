@@ -100,6 +100,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #133 Electron 44 loses the software WebGL fallback: GPU-less machines get no 3D view where Electron 30 rendered one | R | blocked | fix/133-software-webgl-fallback | #150 | 1 | 05ad41d | no software WebGL path exists on the GPU-less macOS runner under Electron 44: 26 switch sets fail (ANGLE metal or swiftshader only, SwiftShader Vulkan init fails, electron#53994); #150 records the limitation in docs and the smoke; issue stays open as blocked upstream |
 | #152 validate-subckt integration timeout under default forks: worker-load timing flake | S | in-review | fix/152-validate-subckt-pool-timeout | #156 | 1 | | sonnet rung, reviewer APPROVE; cold store import inside the timed test body; merge chain |
 | #155 vitest fork worker exits unexpectedly during real-ngspice integration files: one crash fails the whole Test leg | S | in-progress | fix/155-worker-crash-diagnostics | | 0 | | launched 2026-10-02 00:16 PDT (wf, sonnet, one reviewer) |
+| #157 Polled sample channel differs from a foreground tran by about 5 ppm on macOS Intel: the 5e-13 equality assertion is not platform-stable | S | in-progress | fix/157-sample-channel-tolerance | | 0 | | filed 2026-10-02 from a #156 CI flake; launched in the fleet |
 
 ## Wave log
 
