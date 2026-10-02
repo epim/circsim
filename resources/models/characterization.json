@@ -1967,10 +1967,9 @@
       "unit": "s",
       "setup": {"kind":"logic","vcc":4.5,"inputs":{"1D":1,"1PRE_N":1,"1CLR_N":1},"clocks":{"1CLK":1000000}},
       "analysis": {"type":"tran","step":"1n","stop":"3u"},
-      "measure": {"stat":"delay","node":"1q","threshold":2.25,"ref":"1clk","refThreshold":2.25,"edge":"rise","after":1e-07},
-      "expect": {"typ":1.8e-08,"rel":0.25},
-      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: typical CLK to Q propagation delay; the library applies the datasheet-typical 18 ns (delaysNs in logic74hc.json)",
-      "knownFailing": "#136"
+      "measure": {"stat":"delay","node":"1q","threshold":2.25,"ref":"1clk","refThreshold":2.25,"edge":"rise","after":5e-09},
+      "expect": {"typ":1.8e-08,"rel":0.15},
+      "source": "74HC74 datasheet (NXP/TI), Vcc=4.5 V, 25 C: typical CLK to Q propagation delay; the library applies the datasheet-typical 18 ns (delaysNs in logic74hc.json) once, on the flip-flop clock input. The measured 50 percent to 50 percent delay runs about 1.5 ns above it because the input bridge switches at 70 percent of the rail on a rising edge. Q is clocked high by the first CLK edge at t = 0 (D is already high), so the measurement window opens at 5 ns"
     },
     {
       "id": "logic-74hc164-tpd-clk-q0",
@@ -1980,9 +1979,19 @@
       "setup": {"kind":"logic","vcc":4.5,"inputs":{"A":1,"B":1,"CLR_N":1},"clocks":{"CLK":1000000}},
       "analysis": {"type":"tran","step":"1n","stop":"3u"},
       "measure": {"stat":"delay","node":"q0","threshold":2.25,"ref":"clk","refThreshold":2.25,"edge":"rise","after":1e-07},
-      "expect": {"typ":2.1e-08,"rel":0.25},
-      "source": "74HC164 datasheet (NXP/TI), Vcc=4.5 V, 25 C: typical CLK to Qn propagation delay; the library applies the datasheet-typical 21 ns (delaysNs in logic74hc.json)",
-      "knownFailing": "#136"
+      "expect": {"typ":2.1e-08,"rel":0.15},
+      "source": "74HC164 datasheet (NXP/TI), Vcc=4.5 V, 25 C: typical CLK to Qn propagation delay; the library applies the datasheet-typical 21 ns (delaysNs in logic74hc.json) once, on the flip-flop clock input. The measured 50 percent to 50 percent delay runs about 2 ns above it because the input bridge switches at 70 percent of the rail on a rising edge and the serial-input AND adds no delay to the clocked path"
+    },
+    {
+      "id": "logic-74hc595-tpd-stcp-q0",
+      "entry": "logic-74hc595",
+      "quantity": "propagation delay tPLH, STCP input mid-rail to Q0 output mid-rail, DS=1, Vcc=4.5 V, unloaded",
+      "unit": "s",
+      "setup": {"kind":"logic","vcc":4.5,"inputs":{"DS":1,"MR_N":1,"OE_N":0},"clocks":{"SHCP":1000000,"STCP":100000}},
+      "analysis": {"type":"tran","step":"1n","stop":"15u"},
+      "measure": {"stat":"delay","node":"q0","threshold":2.25,"ref":"stcp","refThreshold":2.25,"edge":"rise","after":1e-06},
+      "expect": {"typ":2.4e-08,"rel":0.15},
+      "source": "74HC595 datasheet (NXP/TI), Vcc=4.5 V, 25 C: typical STCP to Qn propagation delay; the library applies its 24 ns (delaysNs in logic74hc.json) once, on the storage-rank clock input. The measured 50 percent to 50 percent delay runs about 2 ns above it because the input bridge switches at 70 percent of the rail on a rising edge"
     },
     {
       "id": "logic-cd4011-tpd-rise",
