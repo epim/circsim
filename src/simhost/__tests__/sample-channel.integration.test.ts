@@ -158,4 +158,57 @@ describe.skipIf(!haveNgspice)('live sample channel (real libngspice)', () => {
       await host.dispose()
     }
   }, 30_000)
+
+  it("(4) the last latest snapshot is the run's final point even when its rows were delivered in an earlier tick (#157)", async () => {
+    // Deterministic: the clock is injected and the ticks are stepped by hand, so
+    // no wall-clock timing decides the outcome. Tick 1 releases the first part
+    // of the run and takes a snapshot; tick 2 comes inside the snapshot
+    // interval, so it delivers the rest of the rows WITHOUT one; the run's
+    // finalize drain then finds no new rows. The snapshot the renderer ends on
+    // must still be the final point, which is what the copper tint settles on.
+    let clock = 1_000_000
+    const events: SimEvent[] = []
+    const host = new SimHost({
+      emit: (e) => events.push(e),
+      disableWatchdog: true,
+      disableTimers: true,
+      now: () => clock
+    })
+    const running = (): boolean => (host as unknown as { engine: { isRunning(): boolean } }).engine.isRunning()
+    const ended = (): boolean => {
+      const h = host as unknown as { sampler: unknown; bgThreadRunning: boolean }
+      return h.sampler !== null && !h.bgThreadRunning
+    }
+    try {
+      await host.start()
+      host.handleCommand({ type: 'loadCircuit', deckLines: RC_DECK })
+      host.handleCommand({ type: 'watch', vectors: ['out'] })
+      host.handleCommand({ type: 'setPace', realtimeFactor: 1 })
+      host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-5, tstopSeconds: 5e-3 })
+      await host.whenIdle()
+      // Let the background thread compute the whole run on its own clock.
+      await until(events, () => ended() && !running(), 15_000)
+
+      clock += 2.5 // 2.5 ms of pace-1 sim time is due
+      host.sampleTick()
+      clock += 10 // everything is due, but inside the 33 ms snapshot interval
+      host.sampleTick()
+      host.pacingTick() // finalizes the finished run: drains, nothing new to read
+      await host.whenIdle()
+
+      const batches = events.filter((e): e is Samples => e.type === 'samples')
+      const time = batches.flatMap((b) => Array.from(b.simTime))
+      expect(time.length, 'both ticks delivered rows').toBeGreaterThan(400)
+      expect(time[time.length - 1]).toBeCloseTo(5e-3, 12)
+
+      const ref = await host.runTran(1e-5, 5e-3)
+      expect(time.length).toBe(ref.time.length)
+      const latest = [...batches].reverse().find((b) => b.latest)!.latest!
+      const iv1 = latest.vectorNames.indexOf('v1#branch')
+      expect(iv1).toBeGreaterThanOrEqual(0)
+      expect(latest.values[iv1]).toBe(ref.vectors['i(v1)'][ref.time.length - 1])
+    } finally {
+      await host.dispose()
+    }
+  }, 60_000)
 })

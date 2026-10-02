@@ -270,6 +270,8 @@ export class SimHost {
     cursor: number
     /** this.now() of the last `latest` snapshot (-Infinity: none yet). */
     lastBulkAt: number
+    /** Plot index of the point the last `latest` snapshot was read at (-1: none yet). */
+    bulkRow: number
     /** watchVersion the two lists below were resolved against. */
     watchVersion: number
     /** Names delivered as full series, and the rest as `latest` values. */
@@ -473,6 +475,7 @@ export class SimHost {
             names,
             cursor: 0,
             lastBulkAt: -Infinity,
+            bulkRow: -1,
             watchVersion: -1,
             watched: [],
             bulk: []
@@ -789,6 +792,7 @@ export class SimHost {
     while (this.pollSamples(true) >= MAX_ROWS_PER_BATCH) {
       /* keep reading while full batches come back */
     }
+    this.emitFinalSnapshot()
   }
 
   /**
@@ -839,6 +843,7 @@ export class SimHost {
         // The plot is shorter than what was already delivered: ngspice started
         // a new one under the same run. Read it from its beginning.
         s.cursor = 0
+        s.bulkRow = -1
       }
       if (Number.isFinite(headRead.data[0])) t.head = headRead.data[0]
       const available = headRead.length - s.cursor
@@ -864,14 +869,9 @@ export class SimHost {
       if (s.bulk.length > 0 && now - s.lastBulkAt >= BULK_INTERVAL_MS) {
         // Each unwatched vector at the newest DELIVERED point, so the tint and
         // the scope trace show the same instant.
-        const at = s.cursor + rows - 1
-        const values = new Float64Array(s.bulk.length)
-        for (let i = 0; i < s.bulk.length; i++) {
-          const r = engine.readVector(s.bulk[i], at, 1) ?? engine.readVector(s.bulk[i], -1, 1)
-          values[i] = r && r.data.length > 0 ? r.data[0] : NaN
-        }
-        latest = { vectorNames: s.bulk, values }
+        latest = this.readLatest(s, s.cursor + rows - 1)
         s.lastBulkAt = now
+        s.bulkRow = s.cursor + rows - 1
       }
     } finally {
       engine.unlockVectors()
@@ -893,6 +893,42 @@ export class SimHost {
       transfer
     )
     return rows
+  }
+
+  /** The unwatched vectors at plot point `at`; the caller holds the vector lock. */
+  private readLatest(s: NonNullable<SimHost['sampler']>, at: number): LatestSnapshot {
+    const values = new Float64Array(s.bulk.length)
+    for (let i = 0; i < s.bulk.length; i++) {
+      const r = this.engine.readVector(s.bulk[i], at, 1) ?? this.engine.readVector(s.bulk[i], -1, 1)
+      values[i] = r && r.data.length > 0 ? r.data[0] : NaN
+    }
+    return { vectorNames: s.bulk, values }
+  }
+
+  /**
+   * End of a run: when the last snapshot is older than the last delivered
+   * point, take one now and emit it as a batch of zero rows (issue #157). The
+   * ticks that delivered the run's final rows can fall inside the snapshot
+   * interval, and the drain that follows then finds no new rows to carry one.
+   */
+  private emitFinalSnapshot(): void {
+    const s = this.sampler
+    if (!this.tran || !s) return
+    this.resolveWatched(s)
+    if (s.bulk.length === 0 || s.cursor === 0 || s.bulkRow >= s.cursor - 1) return
+    let latest: LatestSnapshot
+    this.engine.lockVectors()
+    try {
+      latest = this.readLatest(s, s.cursor - 1)
+    } finally {
+      this.engine.unlockVectors()
+    }
+    s.lastBulkAt = this.now()
+    s.bulkRow = s.cursor - 1
+    this.emit(
+      { type: 'samples', vectorNames: s.watched, columns: s.watched.map(() => new Float64Array(0)), simTime: new Float64Array(0), latest },
+      [latest.values.buffer as ArrayBuffer]
+    )
   }
 
   /** Split the run's vectors into watched (full series) and bulk (latest only). */
