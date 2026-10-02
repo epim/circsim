@@ -100,7 +100,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #133 Electron 44 loses the software WebGL fallback: GPU-less machines get no 3D view where Electron 30 rendered one | R | blocked | fix/133-software-webgl-fallback | #150 | 1 | 05ad41d | no software WebGL path exists on the GPU-less macOS runner under Electron 44: 26 switch sets fail (ANGLE metal or swiftshader only, SwiftShader Vulkan init fails, electron#53994); #150 records the limitation in docs and the smoke; issue stays open as blocked upstream |
 | #152 validate-subckt integration timeout under default forks: worker-load timing flake | S | merged | fix/152-validate-subckt-pool-timeout | #156 | 1 | 50588fc | sonnet rung, reviewer APPROVE; cold store import moved out of the timed body; merged 2026-10-02 01:05 PDT; canary green |
 | #155 vitest fork worker exits unexpectedly during real-ngspice integration files: one crash fails the whole Test leg | S | in-review | fix/155-worker-crash-diagnostics | #158 | 1 | | sonnet rung, reviewer APPROVE; crash diagnostics (exit code, signal, ngspice stderr) in the vitest report; merge chain |
-| #157 Polled sample channel differs from a foreground tran by about 5 ppm on macOS Intel: the 5e-13 equality assertion is not platform-stable | S | in-progress | fix/157-sample-channel-tolerance | | 0 | | filed 2026-10-02 from a #156 CI flake; launched in the fleet |
+| #157 Polled sample channel differs from a foreground tran by about 5 ppm on macOS Intel: the 5e-13 equality assertion is not platform-stable | S | in-review | fix/157-sample-channel-tolerance | #159 | 1 | | sonnet rung, reviewer APPROVE; real bug: stale latest snapshot in drainSamples, not a tolerance; merge chain after #158 |
 
 ## Wave log
 
