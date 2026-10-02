@@ -31,8 +31,7 @@ import {
   type Page,
 } from '@playwright/test'
 import { existsSync } from 'fs'
-import { execSync } from 'child_process'
-import { APP_MAIN, pipeAppOutput, resolvePackagedExe } from './util'
+import { pipeAppOutput, resolvePackagedExe } from './util'
 
 const PACKAGED_EXE: string =
   process.env['CIRCSIM_PACKAGED_EXE'] ?? resolvePackagedExe() ?? '<packaged binary not built>'
@@ -137,8 +136,8 @@ test('packaged app: open First Light → energize → op annotations (real ngspi
     // glyph quads in it. Before the fix the labels never appeared.
     //
     // Some runners have no GL path under Electron 44 (macos-15-intel, issue
-    // #133), so the 3D scene never starts and the viewport shows its fallback
-    // notice (PR #110). There the glyph count cannot be asserted; assert the
+    // #133; no switch set restores one, see src/main/index.ts), so the 3D scene
+    // never starts and the viewport shows its fallback notice (PR #110). There the glyph count cannot be asserted; assert the
     // notice instead. Legs with GL keep the exact glyph assertion, so this does
     // not weaken the check anywhere it can hold.
     const unavailable = page.locator('[data-testid="viewport-unavailable"]')
@@ -150,6 +149,9 @@ test('packaged app: open First Light → energize → op annotations (real ngspi
       .poll(async () => (await unavailable.count()) > 0 || (await readGlyphs()) > 0, { timeout: 15_000 })
       .toBe(true)
     if ((await unavailable.count()) > 0) {
+      // Record why, so a GPU-less leg stays diagnosable from the log (issue #133).
+      const gpu = await app.evaluate(({ app: a }) => a.getGPUFeatureStatus())
+      console.log(`[smoke] 3D view unavailable; gpu feature status: ${JSON.stringify(gpu)}`)
       await expect(unavailable).toBeVisible()
       await expect(unavailable).toContainText('3D view unavailable')
     } else {
@@ -201,86 +203,4 @@ test('packaged app: open sample → power on → op annotations (555 blinker)', 
       timeout: OP_TIMEOUT_MS,
     })
   })
-})
-
-// TEMPORARY (issue #133 experiment, removed before merge): probe which switch
-// sets give a WebGL context on a GPU-less runner. Prints one JSON line per
-// candidate; never fails.
-type ProbeCand = { label: string; args: string[]; env?: Record<string, string>; unpackaged?: boolean }
-const GL_PROBE_CANDIDATES: ProbeCand[] = [
-  { label: 'in-process-gpu+gl-angle+swiftshader', args: ['--in-process-gpu', '--use-gl=angle', '--use-angle=swiftshader'] },
-  { label: 'swiftshader+disable-features-vulkan', args: ['--use-angle=swiftshader', '--disable-features=Vulkan,VulkanFromANGLE'] },
-  { label: 'swiftshader+all-blocklist-overrides', args: ['--use-angle=swiftshader', '--ignore-gpu-blocklist', '--disable-gpu-driver-bug-workarounds', '--disable-gpu-sandbox', '--no-sandbox', '--in-process-gpu'] },
-  { label: 'swiftshader+webgpu-adapter', args: ['--use-angle=swiftshader', '--enable-unsafe-webgpu', '--use-webgpu-adapter=swiftshader'] },
-  { label: 'swiftshader+angle-verbose', args: ['--use-angle=swiftshader', '--v=1', '--vmodule=*angle*=2,*vk_renderer*=2,*gl_display*=2'] },
-  { label: 'metal+angle-verbose', args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--v=1', '--vmodule=*angle*=2,*gl_display*=2,*gpu_info*=2'] },
-  { label: 'metal+unsafe-swiftshader-off-hw', args: ['--use-angle=metal', '--use-gl=angle', '--disable-gpu-sandbox'] },
-]
-
-function dumpPackagedLayout(): void {
-  try {
-    const appDir = PACKAGED_EXE.replace(/\/Contents\/MacOS\/.*$/, '')
-    const fw = `${appDir}/Contents/Frameworks/Electron Framework.framework`
-    const sh = (cmd: string): string => {
-      try {
-        return execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-      } catch (e) {
-        return `ERR ${String(e)}`
-      }
-    }
-    console.log(`[probe-layout] libs: ${sh(`ls -la "${fw}/Versions/A/Libraries"`)}`)
-    console.log(`[probe-layout] codesign app: ${sh(`codesign -dvv "${appDir}" 2>&1`)}`)
-    console.log(`[probe-layout] codesign gpu helper: ${sh(`codesign -dvv --entitlements - "${appDir}/Contents/Frameworks/circsim Helper (GPU).app" 2>&1`)}`)
-    console.log(`[probe-layout] sw_vers: ${sh('sw_vers; sysctl -n machdep.cpu.brand_string; system_profiler SPDisplaysDataType 2>&1 | head -30')}`)
-  } catch (e) {
-    console.log(`[probe-layout] failed ${String(e)}`)
-  }
-}
-
-test('gl probe (temporary, issue #133)', async () => {
-  test.skip(process.platform !== 'darwin' || !existsSync(PACKAGED_EXE), 'macOS probe only')
-  test.setTimeout(600_000)
-  dumpPackagedLayout()
-  for (const cand of GL_PROBE_CANDIDATES) {
-    let result: unknown
-    try {
-      const app = await electron.launch(
-        cand.unpackaged
-          ? { args: [APP_MAIN, '--enable-logging=stderr', ...cand.args], env: { ...process.env, CIRCSIM_E2E: '1' } as Record<string, string> }
-          : {
-              executablePath: PACKAGED_EXE,
-              args: ['--enable-logging=stderr', ...cand.args],
-              env: { ...process.env, ...(cand.env ?? {}) } as Record<string, string>,
-            },
-      )
-      pipeAppOutput(app)
-      try {
-        const page = await app.firstWindow()
-        await page.waitForLoadState('load')
-        await page.waitForTimeout(2500)
-        const gpu = (await app.evaluate(({ app: a }) => a.getGPUFeatureStatus())) as unknown as Record<string, string>
-        const ctx = await page.evaluate(() => {
-          const out: Record<string, unknown> = {}
-          for (const kind of ['webgl2', 'webgl']) {
-            const c = document.createElement('canvas')
-            const gl = c.getContext(kind) as WebGLRenderingContext | null
-            if (!gl) {
-              out[kind] = null
-              continue
-            }
-            const ext = gl.getExtension('WEBGL_debug_renderer_info')
-            out[kind] = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'context-no-ext'
-          }
-          return out
-        })
-        const unavailable = await page.locator('[data-testid="viewport-unavailable"]').count()
-        result = { ctx, unavailable, webgl: gpu['webgl'], webgl2: gpu['webgl2'], gpu }
-      } finally {
-        await app.close()
-      }
-    } catch (e) {
-      result = { error: String(e) }
-    }
-    console.log(`[probe] ${cand.label} ${cand.args.join(' ')} => ${JSON.stringify(result)}`)
-  }
 })

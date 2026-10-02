@@ -100,7 +100,7 @@ Don't have a board handy? That's fine: circsim ships with two sample projects yo
 ## System requirements
 
 - A GPU that supports WebGL2 (any integrated graphics from the last decade). The 3D board renders at 60 fps on integrated graphics.
-  Without a usable GPU (some virtual machines, remote desktops), circsim falls back to a software renderer. If WebGL cannot start at all, the 3D view shows a notice and the parts list, bench, and simulation results keep working.
+  Without a usable GPU (some virtual machines, remote desktops), circsim falls back to a software renderer on Windows and Linux. macOS machines with no Metal-capable GPU, such as Intel virtual machines, have no working software path in the Electron version circsim ships (its SwiftShader Vulkan backend fails to initialize there), so no switch can restore one. In that case, and anywhere else WebGL cannot start, the 3D view shows a notice and the parts list, bench, and simulation results keep working.
 - A display of at least 1280 x 800. The window opens at that size and has no smaller layout, so a smaller screen will clip it.
 - ~250 MB of disk for the installed app.
 - No internet connection required, ever. The app refuses network requests rather than relying on never making them ([how](../reference/architecture#how-the-offline-promise-is-enforced)).
