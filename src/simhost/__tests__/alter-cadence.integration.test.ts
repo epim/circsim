@@ -159,51 +159,104 @@ describe.skipIf(!haveNgspice)('knob drags: an alter every 200 ms (real libngspic
     return m !== null && Number(m[1]) > 100
   }
 
-  it('(2) a run that ends while the knob is still turning delivers its tail and reports done', async () => {
-    const t = trace()
-    const host = new SimHost({ emit: t.emit, disableWatchdog: true })
-    try {
-      await host.start()
-      host.handleCommand({ type: 'loadCircuit', deckLines: RC_DECK })
-      host.handleCommand({ type: 'watch', vectors: ['out'] })
-      host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
-      const runFrom = t.events.length // the startup smoke deck has logged its own "Data Rows"
-      // A whole 30 s bench window at 100 us: 300k points, under a second of
-      // ngspice time unhalted, so it ends while the knob is still turning.
-      host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-4, tstopSeconds: 30 })
-      await host.whenIdle()
+  for (const delayedStartup of [false, true]) {
+    it(`(2) a run that ends while the knob is still turning delivers its tail and reports done${delayedStartup ? ' with a delayed startup waiter' : ''}`, async () => {
+      const t = trace()
+      const host = new SimHost({ emit: t.emit, disableWatchdog: true })
+      let dragTimer: ReturnType<typeof setInterval> | undefined
+      try {
+        await host.start()
+        host.handleCommand({ type: 'loadCircuit', deckLines: RC_DECK })
+        host.handleCommand({ type: 'watch', vectors: ['out'] })
+        host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
+        await host.whenIdle()
 
-      let endedWall = -1
-      let doneWall = -1
-      const watchEnd = (e: SimEvent): void => {
-        if (endedWall < 0 && e.type === 'log' && isRunEnd(e.text)) endedWall = Date.now()
-        if (doneWall < 0 && e.type === 'status' && !e.running && e.simTimeSeconds >= 30) doneWall = Date.now()
-      }
-      t.events.slice(runFrom).forEach(watchEnd)
-      t.onEvent = watchEnd
-      // Keep turning the knob until well past the end of the run: 1.5 s is
-      // several alters, and three times the bound on the settle wait.
-      const firstAlterWall = Date.now()
-      const deadline = firstAlterWall + 20_000
-      let k = 0
-      while (Date.now() < deadline && !(endedWall > 0 && Date.now() - endedWall > 1500)) {
-        host.handleCommand({ type: 'alter', device: 'v1', value: k++ % 2 === 0 ? 6 : 5 })
-        await sleep(200)
-      }
-      console.log(
-        `[alter-cadence] rc pace max: delivered ${t.delivered()} s; ngspice done ${endedWall - firstAlterWall} ms after the first alter, ` +
-          `renderer told ${doneWall - endedWall} ms after that`
-      )
+        const step = 1e-4
+        const dragIntervalMs = 200
+        // Size the finite run from this process's solve rate. A fixed 300k-step
+        // run may outlast the drag on a slow runner. Aim for four knob intervals
+        // of unhalted solve work, capped at one non-continuous bench window.
+        const calibrationStart = performance.now()
+        await host.runTran(step, 1)
+        const calibrationMs = performance.now() - calibrationStart
+        const stop = Number(Math.min(30, 4 * dragIntervalMs / calibrationMs).toPrecision(6))
 
-      expect(endedWall, 'the run was still going when the knob started turning').toBeGreaterThan(firstAlterWall)
-      expect(t.delivered(), 'the whole run reached the renderer').toBe(30)
-      expect(doneWall, 'a final status says the run is over').toBeGreaterThan(0)
-      // The tail is a tick or two of reads and one pacing tick away, not a
-      // settle wait for an announcement that cannot come.
-      expect(doneWall - endedWall).toBeLessThan(400)
-      expect(t.events.some((e) => e.type === 'log' && /run simulation not started/i.test(e.text)), 'no resume of a finished run').toBe(false)
-    } finally {
-      await host.dispose()
-    }
-  }, 60_000)
+        let firstAlterOrder = -1
+        let endedOrder = -1
+        let doneOrder = -1
+        let firstAlterWall = -1
+        let endedWall = -1
+        let doneWall = -1
+        let postEndTurns = 0
+        let doneAfterTurns = -1
+        let turns = 0
+        let resolveEnd!: () => void
+        let resolveDrag!: () => void
+        const runEnded = new Promise<void>((resolve) => { resolveEnd = resolve })
+        const dragFinished = new Promise<void>((resolve) => { resolveDrag = resolve })
+        const turn = (): void => {
+          // Eight post-end alters exercise the old endlessly re-armed resume
+          // wait. Leave one complete knob interval for the last batch to drain.
+          if (postEndTurns === 8) {
+            clearInterval(dragTimer)
+            resolveDrag()
+            return
+          }
+          if (firstAlterOrder < 0) {
+            firstAlterOrder = t.events.length
+            firstAlterWall = performance.now()
+          }
+          if (endedOrder >= 0) postEndTurns++
+          host.handleCommand({ type: 'alter', device: 'v1', value: turns++ % 2 === 0 ? 6 : 5 })
+        }
+        t.onEvent = (e): void => {
+          if (firstAlterOrder < 0 && e.type === 'samples' && e.simTime.length > 0) {
+            // Begin at the first streamed sample, independently of when the
+            // caller's startup waiter returns. Register before launching the run.
+            turn()
+            dragTimer = setInterval(turn, dragIntervalMs)
+          }
+          if (endedOrder < 0 && e.type === 'log' && isRunEnd(e.text)) {
+            endedOrder = t.events.length
+            endedWall = performance.now()
+            resolveEnd()
+          }
+          if (doneOrder < 0 && e.type === 'status' && !e.running && e.simTimeSeconds >= stop - step * 1e-6) {
+            doneOrder = t.events.length
+            doneWall = performance.now()
+            doneAfterTurns = postEndTurns
+          }
+        }
+        host.handleCommand({ type: 'runTransient', tstepSeconds: step, tstopSeconds: stop })
+        await host.whenIdle()
+        // Reproduce a caller that does not regain control until the background
+        // run has finished, without relying on this machine's solve speed.
+        if (delayedStartup) await runEnded
+        await dragFinished
+        await host.whenIdle()
+        console.log(
+          `[alter-cadence] rc pace max${delayedStartup ? ' delayed startup' : ''}: calibrated ${calibrationMs.toFixed(1)} ms/s; ` +
+            `delivered ${t.delivered()}/${stop} s; ngspice done ${(endedWall - firstAlterWall).toFixed(1)} ms after the first alter; ` +
+            `renderer told ${(doneWall - endedWall).toFixed(1)} ms after that (${doneAfterTurns} post-end turns)`
+        )
+
+        expect(firstAlterOrder, 'a streamed sample started the knob drag').toBeGreaterThanOrEqual(0)
+        expect(endedOrder, 'the run was still going when the knob started turning').toBeGreaterThan(firstAlterOrder)
+        // ngspice's decimal endpoint can differ from the requested stop by an
+        // IEEE-754 rounding bit. This tolerance is far smaller than one step.
+        expect(t.delivered(), 'the whole run reached the renderer').toBeCloseTo(stop, 10)
+        expect(doneOrder, 'a final status says the run is over').toBeGreaterThan(endedOrder)
+        // The tail must arrive within two further knob turns, while the drag
+        // continues, rather than waiting for a never-coming resume announcement.
+        expect(doneAfterTurns).toBeLessThanOrEqual(2)
+        expect(postEndTurns).toBe(8)
+        expect(t.failures()).toEqual([])
+        expect(t.events.some((e) => e.type === 'log' && /run simulation not started/i.test(e.text)), 'no resume of a finished run').toBe(false)
+      } finally {
+        clearInterval(dragTimer)
+        t.onEvent = null
+        await host.dispose()
+      }
+    }, 60_000)
+  }
 })
