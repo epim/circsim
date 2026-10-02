@@ -16,6 +16,9 @@ export default defineConfig({
     exclude: ['node_modules', 'out', 'dist'],
     pool: 'forks',
     poolOptions: { forks: { isolate: true } },
+    // Name the cause when a fork worker dies mid-file (issue #155).
+    globalSetup: ['test/vitest/workerCrashGlobalSetup.ts'],
+    setupFiles: ['test/vitest/workerCrashSetup.ts'],
     testTimeout: 120_000,
     hookTimeout: 120_000
   }
