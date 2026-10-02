@@ -31,7 +31,8 @@ import {
   type Page,
 } from '@playwright/test'
 import { existsSync } from 'fs'
-import { pipeAppOutput, resolvePackagedExe } from './util'
+import { execSync } from 'child_process'
+import { APP_MAIN, pipeAppOutput, resolvePackagedExe } from './util'
 
 const PACKAGED_EXE: string =
   process.env['CIRCSIM_PACKAGED_EXE'] ?? resolvePackagedExe() ?? '<packaged binary not built>'
@@ -205,40 +206,59 @@ test('packaged app: open sample → power on → op annotations (555 blinker)', 
 // TEMPORARY (issue #133 experiment, removed before merge): probe which switch
 // sets give a WebGL context on a GPU-less runner. Prints one JSON line per
 // candidate; never fails.
-const GL_PROBE_CANDIDATES: Array<{ label: string; args: string[] }> = [
-  { label: 'baseline', args: [] },
-  { label: 'gl-angle+angle-swiftshader', args: ['--use-gl=angle', '--use-angle=swiftshader'] },
-  { label: 'angle-swiftshader-webgl', args: ['--use-angle=swiftshader-webgl'] },
-  { label: 'gl-angle+swiftshader-webgl', args: ['--use-gl=angle', '--use-angle=swiftshader-webgl'] },
-  { label: 'ignore-blocklist+nosandbox', args: ['--ignore-gpu-blocklist', '--disable-gpu-sandbox'] },
-  {
-    label: 'gl-angle+swiftshader+blocklist+nosandbox',
-    args: ['--use-gl=angle', '--use-angle=swiftshader', '--ignore-gpu-blocklist', '--disable-gpu-sandbox'],
-  },
-  { label: 'angle-swiftshader+nosandbox', args: ['--use-angle=swiftshader', '--disable-gpu-sandbox'] },
-  { label: 'angle-swiftshader+in-process-gpu', args: ['--use-angle=swiftshader', '--in-process-gpu'] },
-  { label: 'angle-gl', args: ['--use-angle=gl'] },
-  { label: 'angle-metal', args: ['--use-angle=metal'] },
-  { label: 'disable-gpu', args: ['--disable-gpu'] },
-  { label: 'disable-gpu+angle-swiftshader', args: ['--disable-gpu', '--use-angle=swiftshader'] },
+type ProbeCand = { label: string; args: string[]; env?: Record<string, string>; unpackaged?: boolean }
+const GL_PROBE_CANDIDATES: ProbeCand[] = [
+  { label: 'packaged+vkloader-debug', args: ['--use-angle=swiftshader'], env: { VK_LOADER_DEBUG: 'all' } },
+  { label: 'unpackaged-electron-baseline', args: [], unpackaged: true },
+  { label: 'unpackaged-electron+angle-swiftshader', args: ['--use-angle=swiftshader'], unpackaged: true },
+  { label: 'packaged+no-sandbox', args: ['--use-angle=swiftshader', '--no-sandbox'] },
+  { label: 'packaged+use-vulkan-swiftshader', args: ['--use-angle=vulkan', '--use-vulkan=swiftshader'] },
+  { label: 'packaged+enable-features-vulkan', args: ['--use-angle=swiftshader', '--enable-features=Vulkan,VulkanFromANGLE'] },
+  { label: 'packaged+single-process-gpu', args: ['--use-angle=swiftshader', '--disable-gpu-sandbox', '--disable-gpu-process-crash-limit'] },
 ]
+
+function dumpPackagedLayout(): void {
+  try {
+    const appDir = PACKAGED_EXE.replace(/\/Contents\/MacOS\/.*$/, '')
+    const fw = `${appDir}/Contents/Frameworks/Electron Framework.framework`
+    const sh = (cmd: string): string => {
+      try {
+        return execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+      } catch (e) {
+        return `ERR ${String(e)}`
+      }
+    }
+    console.log(`[probe-layout] libs: ${sh(`ls -la "${fw}/Versions/A/Libraries"`)}`)
+    console.log(`[probe-layout] codesign app: ${sh(`codesign -dvv "${appDir}" 2>&1`)}`)
+    console.log(`[probe-layout] codesign gpu helper: ${sh(`codesign -dvv --entitlements - "${appDir}/Contents/Frameworks/circsim Helper (GPU).app" 2>&1`)}`)
+    console.log(`[probe-layout] sw_vers: ${sh('sw_vers; sysctl -n machdep.cpu.brand_string; system_profiler SPDisplaysDataType 2>&1 | head -30')}`)
+  } catch (e) {
+    console.log(`[probe-layout] failed ${String(e)}`)
+  }
+}
 
 test('gl probe (temporary, issue #133)', async () => {
   test.skip(process.platform !== 'darwin' || !existsSync(PACKAGED_EXE), 'macOS probe only')
   test.setTimeout(600_000)
+  dumpPackagedLayout()
   for (const cand of GL_PROBE_CANDIDATES) {
     let result: unknown
     try {
-      const app = await electron.launch({
-        executablePath: PACKAGED_EXE,
-        args: ['--enable-logging=stderr', ...cand.args],
-      })
+      const app = await electron.launch(
+        cand.unpackaged
+          ? { args: [APP_MAIN, '--enable-logging=stderr', ...cand.args], env: { ...process.env, CIRCSIM_E2E: '1' } as Record<string, string> }
+          : {
+              executablePath: PACKAGED_EXE,
+              args: ['--enable-logging=stderr', ...cand.args],
+              env: { ...process.env, ...(cand.env ?? {}) } as Record<string, string>,
+            },
+      )
       pipeAppOutput(app)
       try {
         const page = await app.firstWindow()
         await page.waitForLoadState('load')
         await page.waitForTimeout(2500)
-        const gpu = (await app.evaluate(({ app: a }) => a.getGPUFeatureStatus())) as Record<string, string>
+        const gpu = (await app.evaluate(({ app: a }) => a.getGPUFeatureStatus())) as unknown as Record<string, string>
         const ctx = await page.evaluate(() => {
           const out: Record<string, unknown> = {}
           for (const kind of ['webgl2', 'webgl']) {
