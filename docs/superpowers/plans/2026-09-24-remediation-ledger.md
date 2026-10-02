@@ -99,7 +99,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #149 alter-cadence integration test is timing-dependent on slow runners: case (2) asserts the run was still going when the knob started | S | merged | fix/149-alter-cadence-precondition | #153 | 2 | a0eba0c | codex-circsim PR, fix round by my fleet, opus APPROVE round 2; merged 2026-10-01 23:55 PDT; canary green; codex assignment closed |
 | #133 Electron 44 loses the software WebGL fallback: GPU-less machines get no 3D view where Electron 30 rendered one | R | blocked | fix/133-software-webgl-fallback | #150 | 1 | 05ad41d | no software WebGL path exists on the GPU-less macOS runner under Electron 44: 26 switch sets fail (ANGLE metal or swiftshader only, SwiftShader Vulkan init fails, electron#53994); #150 records the limitation in docs and the smoke; issue stays open as blocked upstream |
 | #152 validate-subckt integration timeout under default forks: worker-load timing flake | S | in-progress | fix/152-validate-subckt-pool-timeout | | 0 | | launched 2026-10-02 00:14 PDT (wf, sonnet, one reviewer) |
-| #155 vitest fork worker exits unexpectedly during real-ngspice integration files: one crash fails the whole Test leg | S | todo | | | 0 | | filed 2026-10-02 after the second occurrence (local canary after #138, CI on #154) |
+| #155 vitest fork worker exits unexpectedly during real-ngspice integration files: one crash fails the whole Test leg | S | in-progress | fix/155-worker-crash-diagnostics | | 0 | | launched 2026-10-02 00:16 PDT (wf, sonnet, one reviewer) |
 
 ## Wave log
 
