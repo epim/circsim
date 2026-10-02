@@ -5,7 +5,7 @@
  * and writes PNGs into website/docs/public/img/ for the VitePress docs.
  * Run with: npx playwright test e2e/screenshots.spec.ts
  *
- * Two tests live here:
+ * Three tests live here (the third captures the sensor-node sample):
  *   1. "capture docs screenshots": the nine docs-site images (1280x800 window).
  *   2. "capture README hero and demo gif": the README hero still and a short
  *      GIF of a board going from open to energized to a Critic finding, taken
@@ -14,7 +14,7 @@
  *      not on PATH. Without ffmpeg the still is written and the GIF is skipped.
  *
  * The app must be built first (npm run build), same as the other E2E specs.
- * Only the project's own boards (the bundled First Light and 555 samples) are
+ * Only the project's own boards (the bundled First Light, 555 and sensor-node samples) are
  * ever captured: third-party corpus boards are never rendered into the repo.
  */
 
@@ -265,5 +265,63 @@ test('capture README hero and demo gif', async () => {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.log('[shot] first-light hero error:', (e as Error).message)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// The third bundled sample: sensor-node (94 parts). It has no start-screen
+// button, so the capture drops the file onto the window exactly as a user would
+// (a disk-backed File from an <input type=file>, so the preload can resolve its
+// path), the same route e2e/drag-drop.spec.ts exercises.
+// ---------------------------------------------------------------------------
+
+const SENSOR_NODE = join(__dirname, '..', 'resources', 'sample', 'sensor-node.kicad_pcb')
+
+async function dropBoard(page: Page, filePath: string): Promise<void> {
+  const id = '__shot-drop-source'
+  await page.evaluate((inputId: string) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.id = inputId
+    document.body.appendChild(input)
+  }, id)
+  await page.locator(`#${id}`).setInputFiles([filePath])
+  await page.evaluate((inputId: string) => {
+    const input = document.getElementById(inputId) as HTMLInputElement
+    const dt = new DataTransfer()
+    for (const f of Array.from(input.files ?? [])) dt.items.add(f)
+    // The drop handler lives on the App root element (first child of #root).
+    const target = document.querySelector('#root > div') as HTMLElement
+    target.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
+    input.remove()
+  }, id)
+}
+
+test('capture sensor-node sample screenshots', async () => {
+  test.skip(!!process.env['CI'], 'screenshot capture is a local docs tool')
+  mkdirSync(IMG_DIR, { recursive: true })
+  test.setTimeout(180_000)
+  const app = await electron.launch({ args: [APP_MAIN], env: { ...process.env, CIRCSIM_E2E: '1' } })
+  try {
+    const page = await app.firstWindow()
+    await resizeWindow(app)
+    await page.waitForLoadState('load')
+    await page.locator('[data-testid="open-sample-btn"]').waitFor({ timeout: 30_000 })
+
+    await dropBoard(page, SENSOR_NODE)
+    await page.locator('[data-testid="energize-btn"]').waitFor({ timeout: 30_000 })
+    await page.locator('[data-testid="part-row"]').first().waitFor({ timeout: 30_000 })
+    await page.waitForTimeout(2000)
+
+    // The 5 V input rail is the supply, not the 3.3 V rail the bench auto-attaches to: move it,
+    // so the regulator makes the 3.3 V rail itself.
+    await page.getByLabel('Remove Power supply (PSU)').first().click()
+    await page.locator('[data-testid="supply-chip"]', { hasText: '+5V' }).first().click()
+    await page.waitForTimeout(500)
+    await page.locator('[data-testid="energize-btn"]').click()
+    await page.waitForTimeout(8000)
+    await shot(page, 'sensor-node-energized')
+  } finally {
+    await app.close()
   }
 })

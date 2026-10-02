@@ -4,7 +4,10 @@
  * TDD for the Board Critic geometry helpers (C0). Written before geom.ts.
  */
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { parseBoard } from '../../kicad/board'
 import type { Footprint, Pad, TrackSegment, OutlineGeometry } from '../../kicad/types'
 import {
   padWorldPos,
@@ -17,6 +20,13 @@ import {
   segSegDistanceMm,
   pointInOutline,
 } from '../geom'
+import { checkPadsAgainstFlashes, type PadFlash } from './padOracle'
+
+const ROOT = join(__dirname, '../../../..')
+
+function readFlashes(rel: string): PadFlash[] {
+  return (JSON.parse(readFileSync(join(ROOT, rel), 'utf8')) as { flashes: PadFlash[] }).flashes
+}
 
 // ─── helpers to build minimal fixtures ─────────────────────────────────────────
 
@@ -52,19 +62,36 @@ describe('padWorldPos', () => {
     expect(padWorldPos(f, f.pads[0])).toEqual({ x: 11, y: 10 })
   })
 
-  it('rotates the pad offset with KiCad handedness (positive angle is counter-clockwise on screen)', () => {
-    // KiCad RotatePoint, Y-down: x' = x cos + y sin, y' = -x sin + y cos.
-    // (1,0) at 90 -> (0,-1) (up on screen); origin (10,10) -> (10,9)
-    const f90 = fp(10, 10, 90, [pad('1', 1, 0)])
-    expect(padWorldPos(f90, f90.pads[0])).toEqual({ x: 10, y: 9 })
+  // The rotation convention is pinned to KiCad itself, not to a hand-derived expectation or to
+  // the renderer: kicad-cli plotted every pad of these two boards (committed copies of the
+  // Gerber flashes, rewritten from live kicad-cli by padGeometry.oracle.test.ts and
+  // test/corpus/sample.corpus.test.ts) and padWorldPos must land on KiCad's centres.
+  it('lands every pad on the centre kicad-cli plots, for 90 and 270 degree footprints on both sides', () => {
+    const board = parseBoard(readFileSync(join(ROOT, 'fixtures/fixture-rotated.kicad_pcb'), 'utf8'))
+    const flashes = readFlashes('fixtures/fixture-rotated.flashes.json')
+    const rots = new Set(board.footprints.map((f) => `${f.layer}${((f.at.rotDeg % 360) + 360) % 360}`))
+    expect(rots).toEqual(new Set(['F90', 'F270', 'B90', 'B270']))
+    const { checked, mismatches } = checkPadsAgainstFlashes(board, padWorldPos, flashes)
+    expect(checked).toBe(10)
+    expect(mismatches).toEqual([])
+  })
 
-    // (1,0) at 270 -> (0,1); origin (10,10) -> (10,11)
-    const f270 = fp(10, 10, 270, [pad('1', 1, 0)])
-    expect(padWorldPos(f270, f270.pads[0])).toEqual({ x: 10, y: 11 })
+  it('lands every pad of the 94-part sensor-node on the centre kicad-cli plots (0, 90, 180 degrees, F and B)', () => {
+    const board = parseBoard(readFileSync(join(ROOT, 'resources/sample/sensor-node.kicad_pcb'), 'utf8'))
+    const flashes = readFlashes('test/corpus/oracle/sensor-node.flashes.json')
+    const { checked, mismatches } = checkPadsAgainstFlashes(board, padWorldPos, flashes)
+    expect(checked).toBeGreaterThan(200)
+    expect(mismatches).toEqual([])
+  })
 
-    // (1,0) at 180 -> (-1,0) -> (9,10)
-    const f180 = fp(10, 10, 180, [pad('1', 1, 0)])
-    expect(padWorldPos(f180, f180.pads[0])).toEqual({ x: 9, y: 10 })
+  it('would fail for the opposite handedness (the oracle is not vacuous)', () => {
+    const board = parseBoard(readFileSync(join(ROOT, 'fixtures/fixture-rotated.kicad_pcb'), 'utf8'))
+    const flashes = readFlashes('fixtures/fixture-rotated.flashes.json')
+    const mirrored = (f: Footprint, p: Pad): { x: number; y: number } => {
+      const r = padWorldPos({ ...f, at: { ...f.at, rotDeg: -f.at.rotDeg } }, p)
+      return r
+    }
+    expect(checkPadsAgainstFlashes(board, mirrored, flashes).mismatches.length).toBeGreaterThan(0)
   })
 
   it('handles off-axis angles and negative or over-full-turn angles', () => {

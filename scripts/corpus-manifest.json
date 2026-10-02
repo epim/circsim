@@ -129,13 +129,7 @@
       "license": "CERN-OHL-P-2.0",
       "kicadMajor": 9,
       "formatVersion": 20241229,
-      "source": "KiCad 9.0.9 demos/royalblue54L_feather/RoyalBlue54L-Feather.kicad_pcb",
-      "knownFailing": {
-        "stage": "parse",
-        "issue": "#22",
-        "match": "Unexpected ')'",
-        "reason": "The shipped file has a missing open paren at line 602 ((curved_edges no)filter_ratio 0.9)). KiCad tolerates it, circsim rejects it. Spec section 12 promises an open-anyway path; tracked by #22 item 6."
-      }
+      "source": "KiCad 9.0.9 demos/royalblue54L_feather/RoyalBlue54L-Feather.kicad_pcb"
     },
     {
       "id": "k10-pic-programmer",

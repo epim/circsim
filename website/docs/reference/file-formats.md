@@ -35,13 +35,21 @@ circsim supports KiCad 6 to 10. The claim rests on a corpus of boards that KiCad
 | KiCad 6 | 20211014 | 3 | 3 |
 | KiCad 7 | 20221018 | 3 | 3 |
 | KiCad 8 | 20240108 | 3 | 3 |
-| KiCad 9 | 20241229 | 4 | 3 |
+| KiCad 9 | 20241229 | 4 | 4 |
 | KiCad 10 | 20241229, 20250513, 20260206 | 3 | 3 |
 
 Two things in that table need a note:
 
-- One KiCad 9 board does not open. The shipped `RoyalBlue54L-Feather` demo has an unbalanced parenthesis (`(curved_edges no)filter_ratio 0.9)`) that KiCad tolerates and circsim's parser rejects with an error. The corpus suite requires that failure, so it is tracked and not hidden.
+- The KiCad 9 board `RoyalBlue54L-Feather` is written with a defect, and circsim opens it anyway. Every pad's `teardrops` block in the shipped file ends `(curved_edges no)filter_ratio 0.9)`: the open parenthesis of `(filter_ratio 0.9)` is missing (349 times in that file). KiCad's own reader accepts it, because each keyword handler consumes its own closing parenthesis. See [how strict the parser is](#how-strict-the-parser-is).
 - The KiCad 10 demo boards were not all re-saved by 10.0. Two still carry older format stamps, and only the file written as 20260206 has the name-only nets. Five small synthetic boards in `fixtures/synthetic/`, one per KiCad generation, add a unit test that parses all five dialects and compares the results field by field.
+
+### How strict the parser is
+
+circsim's reader is strict about structure and tolerant about content. An unbalanced parenthesis or an unterminated list is an error that names the line and column, and the board does not open. Tokens it does not recognize inside a list are ignored, which is what lets a board saved by a newer KiCad open.
+
+There is exactly one exception, and it is a named construct, not a general recovery: a bare `filter_ratio` that directly follows a closed child list inside a `teardrops` block is read as the head of `(filter_ratio ...)`, ending at the next closing parenthesis, which is where KiCad ends it. A board written that way parses to the same tree as a correctly written one. The reader does not guess at any other missing parenthesis, because a wrong guess would move whole footprints and tracks to the wrong parent and produce a plausible but false board; a file that is broken in some other way fails with its line and column instead. There is no viewer-only "open anyway" mode for such files.
+
+The decision is pinned by `src/core/sexpr/__tests__/parse.teardrops.test.ts` and by the corpus suite, which opens the RoyalBlue file and compares its connectivity with `kicad-cli`'s.
 
 KiCad releases after 10 are untested until their boards join the corpus. A board saved by a newer KiCad may still open, but nothing here shows it.
 
