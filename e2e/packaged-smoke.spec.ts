@@ -201,3 +201,66 @@ test('packaged app: open sample → power on → op annotations (555 blinker)', 
     })
   })
 })
+
+// TEMPORARY (issue #133 experiment, removed before merge): probe which switch
+// sets give a WebGL context on a GPU-less runner. Prints one JSON line per
+// candidate; never fails.
+const GL_PROBE_CANDIDATES: Array<{ label: string; args: string[] }> = [
+  { label: 'baseline', args: [] },
+  { label: 'gl-angle+angle-swiftshader', args: ['--use-gl=angle', '--use-angle=swiftshader'] },
+  { label: 'angle-swiftshader-webgl', args: ['--use-angle=swiftshader-webgl'] },
+  { label: 'gl-angle+swiftshader-webgl', args: ['--use-gl=angle', '--use-angle=swiftshader-webgl'] },
+  { label: 'ignore-blocklist+nosandbox', args: ['--ignore-gpu-blocklist', '--disable-gpu-sandbox'] },
+  {
+    label: 'gl-angle+swiftshader+blocklist+nosandbox',
+    args: ['--use-gl=angle', '--use-angle=swiftshader', '--ignore-gpu-blocklist', '--disable-gpu-sandbox'],
+  },
+  { label: 'angle-swiftshader+nosandbox', args: ['--use-angle=swiftshader', '--disable-gpu-sandbox'] },
+  { label: 'angle-swiftshader+in-process-gpu', args: ['--use-angle=swiftshader', '--in-process-gpu'] },
+  { label: 'angle-gl', args: ['--use-angle=gl'] },
+  { label: 'angle-metal', args: ['--use-angle=metal'] },
+  { label: 'disable-gpu', args: ['--disable-gpu'] },
+  { label: 'disable-gpu+angle-swiftshader', args: ['--disable-gpu', '--use-angle=swiftshader'] },
+]
+
+test('gl probe (temporary, issue #133)', async () => {
+  test.skip(process.platform !== 'darwin' || !existsSync(PACKAGED_EXE), 'macOS probe only')
+  test.setTimeout(600_000)
+  for (const cand of GL_PROBE_CANDIDATES) {
+    let result: unknown
+    try {
+      const app = await electron.launch({
+        executablePath: PACKAGED_EXE,
+        args: ['--enable-logging=stderr', ...cand.args],
+      })
+      pipeAppOutput(app)
+      try {
+        const page = await app.firstWindow()
+        await page.waitForLoadState('load')
+        await page.waitForTimeout(2500)
+        const gpu = (await app.evaluate(({ app: a }) => a.getGPUFeatureStatus())) as Record<string, string>
+        const ctx = await page.evaluate(() => {
+          const out: Record<string, unknown> = {}
+          for (const kind of ['webgl2', 'webgl']) {
+            const c = document.createElement('canvas')
+            const gl = c.getContext(kind) as WebGLRenderingContext | null
+            if (!gl) {
+              out[kind] = null
+              continue
+            }
+            const ext = gl.getExtension('WEBGL_debug_renderer_info')
+            out[kind] = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'context-no-ext'
+          }
+          return out
+        })
+        const unavailable = await page.locator('[data-testid="viewport-unavailable"]').count()
+        result = { ctx, unavailable, webgl: gpu['webgl'], webgl2: gpu['webgl2'], gpu }
+      } finally {
+        await app.close()
+      }
+    } catch (e) {
+      result = { error: String(e) }
+    }
+    console.log(`[probe] ${cand.label} ${cand.args.join(' ')} => ${JSON.stringify(result)}`)
+  }
+})
