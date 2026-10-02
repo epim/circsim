@@ -208,13 +208,13 @@ test('packaged app: open sample → power on → op annotations (555 blinker)', 
 // candidate; never fails.
 type ProbeCand = { label: string; args: string[]; env?: Record<string, string>; unpackaged?: boolean }
 const GL_PROBE_CANDIDATES: ProbeCand[] = [
-  { label: 'packaged+vkloader-debug', args: ['--use-angle=swiftshader'], env: { VK_LOADER_DEBUG: 'all' } },
-  { label: 'unpackaged-electron-baseline', args: [], unpackaged: true },
-  { label: 'unpackaged-electron+angle-swiftshader', args: ['--use-angle=swiftshader'], unpackaged: true },
-  { label: 'packaged+no-sandbox', args: ['--use-angle=swiftshader', '--no-sandbox'] },
-  { label: 'packaged+use-vulkan-swiftshader', args: ['--use-angle=vulkan', '--use-vulkan=swiftshader'] },
-  { label: 'packaged+enable-features-vulkan', args: ['--use-angle=swiftshader', '--enable-features=Vulkan,VulkanFromANGLE'] },
-  { label: 'packaged+single-process-gpu', args: ['--use-angle=swiftshader', '--disable-gpu-sandbox', '--disable-gpu-process-crash-limit'] },
+  { label: 'in-process-gpu+gl-angle+swiftshader', args: ['--in-process-gpu', '--use-gl=angle', '--use-angle=swiftshader'] },
+  { label: 'swiftshader+disable-features-vulkan', args: ['--use-angle=swiftshader', '--disable-features=Vulkan,VulkanFromANGLE'] },
+  { label: 'swiftshader+all-blocklist-overrides', args: ['--use-angle=swiftshader', '--ignore-gpu-blocklist', '--disable-gpu-driver-bug-workarounds', '--disable-gpu-sandbox', '--no-sandbox', '--in-process-gpu'] },
+  { label: 'swiftshader+webgpu-adapter', args: ['--use-angle=swiftshader', '--enable-unsafe-webgpu', '--use-webgpu-adapter=swiftshader'] },
+  { label: 'swiftshader+angle-verbose', args: ['--use-angle=swiftshader', '--v=1', '--vmodule=*angle*=2,*vk_renderer*=2,*gl_display*=2'] },
+  { label: 'metal+angle-verbose', args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--v=1', '--vmodule=*angle*=2,*gl_display*=2,*gpu_info*=2'] },
+  { label: 'metal+unsafe-swiftshader-off-hw', args: ['--use-angle=metal', '--use-gl=angle', '--disable-gpu-sandbox'] },
 ]
 
 function dumpPackagedLayout(): void {
