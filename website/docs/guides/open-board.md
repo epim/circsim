@@ -11,6 +11,8 @@ With no board loaded, the viewport offers:
 - **Open…**: a file picker for your own board.
 - **Recent boards**: the boards you opened before, newest first (see [Save your setup & export a report](./save-and-report)).
 
+A third bundled sample, `sensor-node.kicad_pcb` (94 parts: ESP32 module, regulator, shift registers, 16 LEDs, sensors, switched loads), has no button on the start screen. It is in the `sample` folder next to the other two (in the repository: `resources/sample/`); open it with **Open…** or drag it onto the window. circsim puts the bench supply on the 3.3 V rail by default, so attach it to **+5V** instead, which is the board's input.
+
 ## From the header
 
 The **Open…** button in the top bar opens a file picker at any time. Opening a new board replaces the current one.

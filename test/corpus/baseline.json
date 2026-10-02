@@ -277,6 +277,26 @@
     "supplyNode": "_12v",
     "supplyVolts": 5
   },
+  "k9-royalblue-feather": {
+    "footprints": 71,
+    "footprintsBackSide": 15,
+    "footprintsRotated": 54,
+    "nets": 95,
+    "tracks": 943,
+    "vias": 183,
+    "zones": 267,
+    "tiers": {
+      "tier6": 36,
+      "tier2": 34,
+      "tier3": 1
+    },
+    "stubbedPct": 50.7,
+    "islands": 0,
+    "deckLines": 88,
+    "outlineWarnings": 0,
+    "supplyNode": "vdd",
+    "supplyVolts": 5
+  },
   "k9-royalblue-nfc": {
     "footprints": 2,
     "footprintsBackSide": 0,

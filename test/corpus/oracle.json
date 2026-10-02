@@ -69,6 +69,11 @@
     "digest": "a26cbf799cad86a0e2072d849ba9863236f9e4ad9af21eb42a110d530c6660f4",
     "kicadCli": "10.0.3"
   },
+  "k9-royalblue-feather": {
+    "pads": 313,
+    "digest": "f1b2c4aaa3228e46fd3e3990d81a3cdd5e5267d6621a4664c083ab47eb716a34",
+    "kicadCli": "10.0.3"
+  },
   "k9-royalblue-nfc": {
     "pads": 2,
     "digest": "9ec88bfa32268cf0e32205cef4f67f167cbce8c2dcfae536da30503e9260c4ca",
