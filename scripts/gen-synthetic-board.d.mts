@@ -11,6 +11,8 @@ export interface SyntheticPad {
   type?: 'smd' | 'thru_hole'
   drill?: number
   net?: string
+  /** KiCad (pintype ...) text, for example 'unspecified+no_connect' for an intentionally open pin. */
+  pintype?: string
 }
 
 export interface SyntheticFootprint {

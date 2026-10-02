@@ -48,7 +48,11 @@ interface Sample {
 
 const SAMPLES: Sample[] = [
   { name: 'blinker-555', board: 'blinker-555.kicad_pcb', schematic: 'blinker-555.kicad_sch', supplyNet: 'VCC', volts: 5 },
-  { name: 'first-light', board: 'first-light.kicad_pcb', supplyNet: 'VIN', volts: 5 }
+  { name: 'first-light', board: 'first-light.kicad_pcb', supplyNet: 'VIN', volts: 5 },
+  // 94 parts, no schematic: the realistic-board golden (issue #22). The +5V net is the
+  // bench supply; the regulator, shift registers, op-amp, comparator, transistors and
+  // 16 LED lanes all appear in the one diff.
+  { name: 'sensor-node', board: 'sensor-node.kicad_pcb', supplyNet: '+5V', volts: 5 }
 ]
 
 /** Every bundled model file, keyed by file name, exactly as the app feeds generateDeck. */
@@ -145,6 +149,9 @@ function nodeTokens(card: string): string[] | undefined {
     }
     case 'm':
       return args.slice(0, 4)
+    case 'a':
+      // XSPICE code model: nodes (singly or in [ ] vectors) then the model name.
+      return args.slice(0, -1).flatMap((a) => a.replace(/[[\]]/g, '').split(/\s+/)).filter((a) => a !== '')
     case 'x': {
       // x nodes... subcktName [params: ...]
       const cut = args.findIndex((a) => a.toLowerCase() === 'params:')
@@ -205,9 +212,12 @@ describe('deck node invariant', () => {
 
       // Every node that is not ground or a board net must connect at least two card pins
       // (an internal splice or sense node), otherwise it is a typo or a stray net.
+      // One-sided by design: the d_dff stages of the XSPICE shift registers expose an
+      // inverted output (<ref>_d_qN_n) and an unused set pin (a_<ref>_N_nset) that nothing reads.
+      const oneSided = /^(a_[a-z0-9]+_\d+_nset|[a-z0-9]+_d_q\d+_n)$/
       const stray: string[] = []
       for (const [node, count] of seen) {
-        if (known.has(node)) continue
+        if (known.has(node) || oneSided.test(node)) continue
         if (count < 2) stray.push(node)
       }
       expect(stray, `nodes used by only one top-level card: ${stray.join(', ')}`).toEqual([])

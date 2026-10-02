@@ -9,6 +9,8 @@
  * - Bare tokens that parse as a valid JS number become numbers; otherwise strings
  * - Tolerant of unknown tokens: never throws on unrecognised atoms
  * - Throws SexprError { line, col, message } on structural errors (unbalanced parens)
+ * - One named repair for a KiCad writer defect (see `repairTeardropFilterRatio`):
+ *   a file KiCad itself opens is not rejected here. Everything else stays strict.
  *
  * Allocation (issue #60): one pass over the text with an index cursor. There is
  * no token array and no per-character string building, so the only allocations
@@ -44,6 +46,13 @@ export interface ParseOptions {
    * `filled_polygon` point lists, which dominate pour-heavy boards.
    */
   skipHeads?: readonly string[]
+  /**
+   * Called once for each place the parser repaired a known KiCad writer defect
+   * instead of throwing (currently only the teardrops `filter_ratio` missing its
+   * open paren, issue #22). `line` and `col` are 1-based and point at the
+   * offending token. Without it the repair is silent.
+   */
+  onRepair?: (message: string, line: number, col: number) => void
 }
 
 // --- scanner constants -------------------------------------------------------
@@ -60,6 +69,9 @@ const BSLASH = 92
 
 /** Cap on distinct list heads kept for sharing, so hostile input cannot grow the table. */
 const MAX_SHARED_HEADS = 1024
+
+const FILTER_RATIO = 'filter_ratio'
+const TEARDROPS = 'teardrops'
 
 const NUMERIC =/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/
 
@@ -270,7 +282,55 @@ export function parseSexpr(text: string, options?: ParseOptions): SExpr {
         stack.push(maybeNumber(head))
         continue
       }
-      stack.push(parseExpr())
+      const tokStart = pos // parseList has already skipped trivia, so this is the token start
+      const child = parseExpr()
+      if (
+        child === FILTER_RATIO &&
+        stack.length > base + 1 &&
+        stack[base] === TEARDROPS &&
+        Array.isArray(stack[stack.length - 1])
+      ) {
+        stack.push(repairTeardropFilterRatio(child, line, tokStart - lineStart + 1))
+        continue
+      }
+      stack.push(child)
+    }
+  }
+
+  /**
+   * KiCad 9.0.x wrote every teardrops block as `(curved_edges no)filter_ratio 0.9)`:
+   * the open paren of `(filter_ratio 0.9)` is missing. KiCad's reader takes it,
+   * because each keyword handler consumes its own closing paren, so boards saved
+   * that way open in KiCad (the RoyalBlue54L Feather demo has 349 of them). Read
+   * strictly, the stray `)` closes teardrops early and every later close shifts one
+   * level, ending in a stray `)` at the end of the file.
+   *
+   * The repair is deliberately narrow: only a bare `filter_ratio` that directly
+   * follows a closed child list inside a `teardrops` list. It is read as the head
+   * of a list that ends at the next `)`, which is where KiCad ends it. Any other
+   * stray atom or paren is still the structural error it was.
+   */
+  function repairTeardropFilterRatio(head: string, atLine: number, atCol: number): SExpr[] {
+    options?.onRepair?.(
+      `Repaired a KiCad writer defect: '${FILTER_RATIO}' inside '${TEARDROPS}' is missing its open paren (line ${atLine}, col ${atCol})`,
+      atLine,
+      atCol
+    )
+    const items: SExpr[] = [head]
+    for (;;) {
+      skipTrivia()
+      if (pos >= n) {
+        throw new SexprError(
+          `Unexpected end of input - '${FILTER_RATIO}' at line ${atLine}, col ${atCol} is not closed`,
+          atLine,
+          atCol
+        )
+      }
+      if (text.charCodeAt(pos) === RPAREN) {
+        pos++
+        return items
+      }
+      items.push(parseExpr())
     }
   }
 

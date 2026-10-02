@@ -79,12 +79,22 @@ describe('KiCad support statement (backed by the corpus manifest)', () => {
 
   it('a board the corpus requires to fail is named in the support statement', () => {
     const doc = read('website/docs/reference/file-formats.md')
-    const failing = manifest.boards.filter((b) => b.knownFailing)
-    expect(failing.length).toBeGreaterThan(0)
-    for (const b of failing) {
+    // No board is a required failure today: RoyalBlue54L-Feather (a KiCad 9 writer defect, #22)
+    // opens through one named parser repair. If a board is marked knownFailing again, it must be named.
+    for (const b of manifest.boards.filter((x) => x.knownFailing)) {
       const file = b.source.split('/').pop()!.replace(/\.kicad_pcb$/, '')
       expect(doc, b.id).toContain(file)
     }
+  })
+
+  it('the tolerated KiCad 9 writer defect is documented where the parser strictness is decided', () => {
+    const doc = read('website/docs/reference/file-formats.md')
+    const royal = manifest.boards.find((b) => b.id === 'k9-royalblue-feather')
+    expect(royal, 'the RoyalBlue board stays in the corpus').toBeDefined()
+    expect(royal!.knownFailing, 'it opens, so the marker is flipped').toBeUndefined()
+    expect(doc).toContain('RoyalBlue54L-Feather')
+    expect(doc).toContain('How strict the parser is')
+    expect(doc).toContain('filter_ratio')
   })
 
   it('the name-only net format is attributed to KiCad 10 (format 20260206), not KiCad 9', () => {
