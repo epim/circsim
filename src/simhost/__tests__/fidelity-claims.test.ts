@@ -8,7 +8,7 @@
  *
  *   1. Every backticked row id or test file in the page's "Where each claim is
  *      checked" section exists, and no cited row is a silent knownFailing
- *      unless the page says it is (the two #136 flip-flop rows).
+ *      (no row is known failing at the moment).
  *   2. The tolerance each row enforces is no looser than the figure the page
  *      states, so loosening a band in the JSON fails here and forces the page
  *      to be softened in the same change.
@@ -108,11 +108,9 @@ describe('fidelity page cites real gates', () => {
     }
   })
 
-  it('only the #136 flip-flop rows are cited while known failing', () => {
+  it('no cited row is known failing', () => {
     const failing = tokens.filter((t) => rowById.get(t)?.knownFailing).sort()
-    expect(failing).toEqual(['logic-74hc164-tpd-clk-q0', 'logic-74hc74-tpd-clk-q'])
-    for (const id of failing) expect(rowById.get(id)?.knownFailing).toBe('#136')
-    expect(PAGE).toContain('#136')
+    expect(failing).toEqual([])
   })
 })
 
@@ -132,6 +130,8 @@ describe('gate tolerances are no looser than the page states', () => {
     // "within 25 percent" (74HC) and "within 10 percent" (CD4011)
     rel(hc, 0.25),
     rel(['logic-cd4011-tpd-rise', 'logic-cd4011-tpd-fall'], 0.1),
+    // "within 15 percent" (flip-flop and shift-register clock to output, issue #136)
+    rel(['logic-74hc74-tpd-clk-q', 'logic-74hc164-tpd-clk-q0', 'logic-74hc595-tpd-stcp-q0'], 0.15),
     // "no propagation delay": within 2 ns (74HC14) and 5 ns (CD40106)
     abs(['logic-74hc14-tpd-rise', 'logic-74hc14-tpd-fall'], 2e-9),
     abs(['logic-cd40106-tpd-rise', 'logic-cd40106-tpd-fall'], 5e-9),

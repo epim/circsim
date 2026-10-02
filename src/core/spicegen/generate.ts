@@ -1432,6 +1432,12 @@ function expandXspiceDigital(
   }
 
   const rd = `${tpl.delaysNs}n`
+  // XSPICE d_dff adds its output rise_delay/fall_delay on top of clk_delay (and
+  // of set_delay/reset_delay), and the active-low set/reset inverter adds its
+  // own delay again. Carry the datasheet delay once, on the clk/set/reset input
+  // of the flip-flop, and park every other stage at the model minimum so CLK to
+  // Q, PRE to Q and CLR to Q each take delaysNs, not two or three times it.
+  const ffStageNs = '1p'
 
   // Per-instance adc/dac model cards (names are ref-scoped to avoid collisions
   // when several digital chips share a deck).
@@ -1475,7 +1481,7 @@ function expandXspiceDigital(
         const inv = `${dNode(sig)}_h`
         if (!invertedControls.has(sig)) {
           invertedControls.add(sig)
-          lines.push(`.model a_${refLc}_inv_${sig.toLowerCase()}_m d_inverter(rise_delay=${rd} fall_delay=${rd})`)
+          lines.push(`.model a_${refLc}_inv_${sig.toLowerCase()}_m d_inverter(rise_delay=${ffStageNs} fall_delay=${ffStageNs})`)
           lines.push(`a_${refLc}_inv_${sig.toLowerCase()} ${dNode(sig)} ${inv} a_${refLc}_inv_${sig.toLowerCase()}_m`)
         }
         return inv
@@ -1484,7 +1490,7 @@ function expandXspiceDigital(
       const reset = ctl(g.reset, `${inst}_nrst`)
       lines.push(
         `.model ${inst}_m d_dff(clk_delay=${rd} set_delay=${rd} reset_delay=${rd} ` +
-          `rise_delay=${rd} fall_delay=${rd})`,
+          `rise_delay=${ffStageNs} fall_delay=${ffStageNs})`,
       )
       lines.push(
         `${inst} ${dNode(g.data as string)} ${dNode(g.clk as string)} ${set} ${reset} ` +

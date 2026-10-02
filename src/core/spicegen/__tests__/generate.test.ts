@@ -3212,6 +3212,19 @@ describe('generateDeck: logic output stage and active-low controls (issues #12, 
     expect(text).toMatch(/a_u1_1 u1_d_d u1_d_clk u1_d_pre_n_h u1_d_clr_n_h u1_d_q u1_d_q_n a_u1_1_m/)
   })
 
+  test('flip-flop delay is carried once: clk/set/reset hold delaysNs, output and inverter stages sit at the minimum (#136)', () => {
+    // d_dff adds its output rise_delay/fall_delay on top of clk_delay/set_delay/
+    // reset_delay and the active-low inverter adds its own, so applying delaysNs
+    // to every stage doubled CLK-to-Q and tripled PRE/CLR-to-Q.
+    const pinMap = { '1': 'D', '2': 'Q', '3': 'CLK', '4': 'PRE_N', '5': 'CLR_N', '7': 'GND', '14': 'VCC' }
+    const text = deckFor('DFF', pinMap, TEXT).join('\n')
+    expect(text).toContain('.model a_u1_1_m d_dff(clk_delay=18n set_delay=18n reset_delay=18n rise_delay=1p fall_delay=1p)')
+    expect(text).toContain('.model a_u1_inv_pre_n_m d_inverter(rise_delay=1p fall_delay=1p)')
+    expect(text).toContain('.model a_u1_inv_clr_n_m d_inverter(rise_delay=1p fall_delay=1p)')
+    // Plain gates still carry the full delay on their single stage.
+    expect(deckFor('NAND', NAND_PINS, TEXT).join('\n')).toContain('d_nand(rise_delay=9n fall_delay=9n)')
+  })
+
   test('a template without activeLow still wires set and reset straight through', () => {
     const noAl = JSON.parse(TEXT)
     delete noAl.templates.DFF.activeLow
