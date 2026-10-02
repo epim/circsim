@@ -164,6 +164,7 @@ describe.skipIf(!haveNgspice)('knob drags: an alter every 200 ms (real libngspic
       const t = trace()
       const host = new SimHost({ emit: t.emit, disableWatchdog: true })
       let dragTimer: ReturnType<typeof setInterval> | undefined
+      let deadline: ReturnType<typeof setTimeout> | undefined
       try {
         await host.start()
         host.handleCommand({ type: 'loadCircuit', deckLines: RC_DECK })
@@ -190,6 +191,10 @@ describe.skipIf(!haveNgspice)('knob drags: an alter every 200 ms (real libngspic
         let postEndTurns = 0
         let doneAfterTurns = -1
         let turns = 0
+        // Cap the drag so a run that never streams or never logs its end fails
+        // as an assertion below with a reason, not at the 60 s test timeout. The
+        // deadline covers the case where no sample ever starts the drag.
+        const maxTurns = 40
         let resolveEnd!: () => void
         let resolveDrag!: () => void
         const runEnded = new Promise<void>((resolve) => { resolveEnd = resolve })
@@ -197,7 +202,7 @@ describe.skipIf(!haveNgspice)('knob drags: an alter every 200 ms (real libngspic
         const turn = (): void => {
           // Eight post-end alters exercise the old endlessly re-armed resume
           // wait. Leave one complete knob interval for the last batch to drain.
-          if (postEndTurns === 8) {
+          if (postEndTurns === 8 || turns >= maxTurns) {
             clearInterval(dragTimer)
             resolveDrag()
             return
@@ -227,10 +232,15 @@ describe.skipIf(!haveNgspice)('knob drags: an alter every 200 ms (real libngspic
             doneAfterTurns = postEndTurns
           }
         }
+        deadline = setTimeout(() => { resolveEnd(); resolveDrag() }, (maxTurns + 5) * dragIntervalMs)
         host.handleCommand({ type: 'runTransient', tstepSeconds: step, tstopSeconds: stop })
         await host.whenIdle()
         // Reproduce a caller that does not regain control until the background
-        // run has finished, without relying on this machine's solve speed.
+        // run has finished, without relying on this machine's solve speed. With
+        // the drag now registered before the run launches, this case behaves like
+        // the normal one: the drag starts at the first streamed sample whatever
+        // this waiter does. It only guards against moving the drag back to after
+        // this waiter, which would let the run finish before any alter.
         if (delayedStartup) await runEnded
         await dragFinished
         await host.whenIdle()
@@ -246,14 +256,18 @@ describe.skipIf(!haveNgspice)('knob drags: an alter every 200 ms (real libngspic
         // IEEE-754 rounding bit. This tolerance is far smaller than one step.
         expect(t.delivered(), 'the whole run reached the renderer').toBeCloseTo(stop, 10)
         expect(doneOrder, 'a final status says the run is over').toBeGreaterThan(endedOrder)
-        // The tail must arrive within two further knob turns, while the drag
-        // continues, rather than waiting for a never-coming resume announcement.
-        expect(doneAfterTurns).toBeLessThanOrEqual(2)
-        expect(postEndTurns).toBe(8)
+        // Guards the resume-settle wait (RESUME_SETTLE_MAX_MS, 500 ms): the
+        // final status must arrive within one knob turn (200 ms cadence) of the
+        // run ending, while the drag continues, rather than after a wait for a
+        // never-coming resume announcement. One turn is at least as strict as
+        // the old 400 ms bound; two turns would allow 400 to 600 ms and straddle
+        // the 500 ms wait this test exists to catch.
+        expect(doneAfterTurns).toBeLessThanOrEqual(1)
         expect(t.failures()).toEqual([])
         expect(t.events.some((e) => e.type === 'log' && /run simulation not started/i.test(e.text)), 'no resume of a finished run').toBe(false)
       } finally {
         clearInterval(dragTimer)
+        clearTimeout(deadline)
         t.onEvent = null
         await host.dispose()
       }
