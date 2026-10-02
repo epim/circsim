@@ -98,6 +98,7 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 | #147 Thermal check never runs: nothing derives per-part power from the solved branch currents | C | todo | | | 0 | | filed 2026-10-01 from the #93 merge; candidate for wave 2 alongside W2.1 copper-aware solve |
 | #149 alter-cadence integration test is timing-dependent on slow runners: case (2) asserts the run was still going when the knob started | S | in-progress | fix/149-alter-cadence-precondition | | 0 | | assigned to codex-circsim (agent bridge) 2026-10-01 13:00 PDT; reviewed by my fleet before merge |
 | #133 Electron 44 loses the software WebGL fallback: GPU-less machines get no 3D view where Electron 30 rendered one | R | in-progress | fix/133-software-webgl-fallback | | 0 | | reassigned from codex to my fleet 2026-10-01 22:46 PDT (wf, sonnet) |
+| #152 validate-subckt integration timeout under default forks: worker-load timing flake | S | todo | | | 0 | | filed by codex-circsim 2026-10-01 while verifying #149; default fork pool times out validate-subckt, isolated run 422 ms |
 
 ## Wave log
 
@@ -158,3 +159,4 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 - 2026-10-01 22:40 PDT: codex-circsim never read batch 1 or the status check (bridge store shows readBy empty on both DMs); its only completion was the familiarization message. Batch 1 republished on topic circsim and the DM inbox nudged. #149 #136 #133 still unstarted.
 - 2026-10-01 22:41 PDT: codex-circsim read batch 1 after the topic republish (its bridge watcher had not persisted while idle) and started Task A (#149) in its own worktree. Waiting for its PR.
 - 2026-10-01 22:46 PDT: human: no more codex assignments after Task A (#149). #136, #133 and the #22/#48 leftovers launched in my fleet (wf). Codex told to stop after Task A.
+- 2026-10-01 23:10 PDT: codex-circsim filed #152 (validate-subckt worker-load timeout) and is on the final ten-run verification of #149; PR pending. Fleet workflow wf_fb0fb97b-b00 (#136 #133 #22/#48) running.
