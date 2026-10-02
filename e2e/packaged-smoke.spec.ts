@@ -136,8 +136,8 @@ test('packaged app: open First Light → energize → op annotations (real ngspi
     // glyph quads in it. Before the fix the labels never appeared.
     //
     // Some runners have no GL path under Electron 44 (macos-15-intel, issue
-    // #133), so the 3D scene never starts and the viewport shows its fallback
-    // notice (PR #110). There the glyph count cannot be asserted; assert the
+    // #133; no switch set restores one, see src/main/index.ts), so the 3D scene
+    // never starts and the viewport shows its fallback notice (PR #110). There the glyph count cannot be asserted; assert the
     // notice instead. Legs with GL keep the exact glyph assertion, so this does
     // not weaken the check anywhere it can hold.
     const unavailable = page.locator('[data-testid="viewport-unavailable"]')
@@ -149,6 +149,9 @@ test('packaged app: open First Light → energize → op annotations (real ngspi
       .poll(async () => (await unavailable.count()) > 0 || (await readGlyphs()) > 0, { timeout: 15_000 })
       .toBe(true)
     if ((await unavailable.count()) > 0) {
+      // Record why, so a GPU-less leg stays diagnosable from the log (issue #133).
+      const gpu = await app.evaluate(({ app: a }) => a.getGPUFeatureStatus())
+      console.log(`[smoke] 3D view unavailable; gpu feature status: ${JSON.stringify(gpu)}`)
       await expect(unavailable).toBeVisible()
       await expect(unavailable).toContainText('3D view unavailable')
     } else {

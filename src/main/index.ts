@@ -80,6 +80,18 @@ function docPath(...parts: string[]): string {
 // older fallback behaviour. It only takes effect when no hardware GPU path is
 // available, and the app loads only local content, so the "unsafe" caveat on
 // the flag (untrusted web content) does not apply. Must run before app ready.
+//
+// Limit (issue #133): this does not help on a macOS machine with no
+// Metal-capable GPU (the macos-15-intel CI runner, Intel VMs). There ANGLE only
+// allows the metal and swiftshader backends, Metal fails, and SwiftShader's
+// Vulkan backend fails in eglInitialize with Internal Vulkan error -3, so the
+// GPU process exits and WebGL is "disabled_off". Packaged-smoke probes on that
+// runner tried 26 switch sets (--use-gl=angle, --use-angle=swiftshader,
+// swiftshader-webgl, vulkan, gl and metal, --ignore-gpu-blocklist,
+// --disable-gpu-sandbox, --no-sandbox, --in-process-gpu, Vulkan feature
+// toggles, and combinations) against both the packaged app and the stock
+// Electron binary; none produced a context. Electron's own CI hit the same
+// wall and disables the GPU there. The viewport shows its fallback notice.
 app.commandLine.appendSwitch('enable-unsafe-swiftshader')
 
 // ─── Offline enforcement (issues #37, #38) ────────────────────────────────────
