@@ -35,23 +35,23 @@ abr_u5_clk [sr_clk] [u5_d_clk] adcm_u5
 abr_u5_clr_n [_3v3] [u5_d_clr_n] adcm_u5
 .model a_u5_1_m d_and(rise_delay=21n fall_delay=21n)
 a_u5_1 [u5_d_a u5_d_b] u5_d_dser a_u5_1_m
-.model a_u5_inv_clr_n_m d_inverter(rise_delay=21n fall_delay=21n)
+.model a_u5_inv_clr_n_m d_inverter(rise_delay=1p fall_delay=1p)
 a_u5_inv_clr_n u5_d_clr_n u5_d_clr_n_h a_u5_inv_clr_n_m
-.model a_u5_2_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u5_2_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u5_2 u5_d_dser u5_d_clk a_u5_2_nset u5_d_clr_n_h u5_d_q0 u5_d_q0_n a_u5_2_m
-.model a_u5_3_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u5_3_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u5_3 u5_d_q0 u5_d_clk a_u5_3_nset u5_d_clr_n_h u5_d_q1 u5_d_q1_n a_u5_3_m
-.model a_u5_4_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u5_4_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u5_4 u5_d_q1 u5_d_clk a_u5_4_nset u5_d_clr_n_h u5_d_q2 u5_d_q2_n a_u5_4_m
-.model a_u5_5_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u5_5_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u5_5 u5_d_q2 u5_d_clk a_u5_5_nset u5_d_clr_n_h u5_d_q3 u5_d_q3_n a_u5_5_m
-.model a_u5_6_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u5_6_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u5_6 u5_d_q3 u5_d_clk a_u5_6_nset u5_d_clr_n_h u5_d_q4 u5_d_q4_n a_u5_6_m
-.model a_u5_7_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u5_7_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u5_7 u5_d_q4 u5_d_clk a_u5_7_nset u5_d_clr_n_h u5_d_q5 u5_d_q5_n a_u5_7_m
-.model a_u5_8_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u5_8_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u5_8 u5_d_q5 u5_d_clk a_u5_8_nset u5_d_clr_n_h u5_d_q6 u5_d_q6_n a_u5_8_m
-.model a_u5_9_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u5_9_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u5_9 u5_d_q6 u5_d_clk a_u5_9_nset u5_d_clr_n_h u5_d_q7 u5_d_q7_n a_u5_9_m
 abr_u5_out_q0 [u5_d_q0] [u5_o_q0] dacm_u5
 b_u5_out_q0 u5_o_q0 q1 I = 0.025*tanh((v(u5_o_q0)-v(q1))/1)
@@ -79,23 +79,23 @@ abr_u6_clk [sr_clk] [u6_d_clk] adcm_u6
 abr_u6_clr_n [_3v3] [u6_d_clr_n] adcm_u6
 .model a_u6_1_m d_and(rise_delay=21n fall_delay=21n)
 a_u6_1 [u6_d_a u6_d_b] u6_d_dser a_u6_1_m
-.model a_u6_inv_clr_n_m d_inverter(rise_delay=21n fall_delay=21n)
+.model a_u6_inv_clr_n_m d_inverter(rise_delay=1p fall_delay=1p)
 a_u6_inv_clr_n u6_d_clr_n u6_d_clr_n_h a_u6_inv_clr_n_m
-.model a_u6_2_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u6_2_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u6_2 u6_d_dser u6_d_clk a_u6_2_nset u6_d_clr_n_h u6_d_q0 u6_d_q0_n a_u6_2_m
-.model a_u6_3_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u6_3_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u6_3 u6_d_q0 u6_d_clk a_u6_3_nset u6_d_clr_n_h u6_d_q1 u6_d_q1_n a_u6_3_m
-.model a_u6_4_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u6_4_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u6_4 u6_d_q1 u6_d_clk a_u6_4_nset u6_d_clr_n_h u6_d_q2 u6_d_q2_n a_u6_4_m
-.model a_u6_5_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u6_5_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u6_5 u6_d_q2 u6_d_clk a_u6_5_nset u6_d_clr_n_h u6_d_q3 u6_d_q3_n a_u6_5_m
-.model a_u6_6_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u6_6_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u6_6 u6_d_q3 u6_d_clk a_u6_6_nset u6_d_clr_n_h u6_d_q4 u6_d_q4_n a_u6_6_m
-.model a_u6_7_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u6_7_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u6_7 u6_d_q4 u6_d_clk a_u6_7_nset u6_d_clr_n_h u6_d_q5 u6_d_q5_n a_u6_7_m
-.model a_u6_8_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u6_8_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u6_8 u6_d_q5 u6_d_clk a_u6_8_nset u6_d_clr_n_h u6_d_q6 u6_d_q6_n a_u6_8_m
-.model a_u6_9_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=21n fall_delay=21n)
+.model a_u6_9_m d_dff(clk_delay=21n set_delay=21n reset_delay=21n rise_delay=1p fall_delay=1p)
 a_u6_9 u6_d_q6 u6_d_clk a_u6_9_nset u6_d_clr_n_h u6_d_q7 u6_d_q7_n a_u6_9_m
 abr_u6_out_q0 [u6_d_q0] [u6_o_q0] dacm_u6
 b_u6_out_q0 u6_o_q0 q9 I = 0.025*tanh((v(u6_o_q0)-v(q9))/1)
