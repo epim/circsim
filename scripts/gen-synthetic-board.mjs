@@ -108,7 +108,7 @@ const LAYERS_NEW = [
  *   nets: string[],                        // net names (index + 1 is the legacy id)
  *   outline: { x0, y0, x1, y1 },           // Edge.Cuts rectangle (omit for none)
  *   footprints: [{ ref, value, lib, at: {x, y, rot}, side: 'F'|'B', pads: [{
- *       num, x, y, w, h, shape?, type?: 'smd'|'thru_hole', drill?, net? }] }],
+ *       num, x, y, w, h, shape?, type?: 'smd'|'thru_hole', drill?, net?, pintype? }] }],
  *   tracks: [{ net, layer, width, pts: [[x, y], ...] }],   // polyline, one segment per hop
  *   vias: [{ net, x, y, size?, drill? }],
  *   zones: [{ net, layer, outline: [[x, y], ...] }]
@@ -186,7 +186,7 @@ export function generateBoard(spec) {
       const padAt = rot ? `(at ${num(p.x)} ${num(p.y)} ${num(rot)})` : `(at ${num(p.x)} ${num(p.y)})`
       const drill = isThru ? ` (drill ${num(p.drill ?? 0.8)})` : ''
       out.push(
-        `    (pad ${q(p.num)} ${isThru ? 'thru_hole' : 'smd'} ${shape} ${padAt} (size ${num(p.w)} ${num(p.h)})${drill} (layers ${layers}) ${netRef(p.net)} ${idNode()})`
+        `    (pad ${q(p.num)} ${isThru ? 'thru_hole' : 'smd'} ${shape} ${padAt} (size ${num(p.w)} ${num(p.h)})${drill} (layers ${layers}) ${netRef(p.net)}${p.pintype ? ` (pintype ${q(p.pintype)})` : ''} ${idNode()})`
       )
     }
     out.push('  )')
