@@ -53,12 +53,22 @@ interface StoreLike {
   setState(partial: Record<string, unknown>): void
 }
 const STORE_MODULE = '../../renderer/src/store/appStore'
-async function createAppStore(opts: { simClient: SimClientLike }): Promise<StoreLike> {
-  const mod = (await import(/* @vite-ignore */ STORE_MODULE)) as {
-    createAppStore(o: { simClient: SimClientLike }): StoreLike
-  }
-  return mod.createAppStore(opts)
-}
+type CreateAppStore = (opts: { simClient: SimClientLike }) => StoreLike
+
+// The first import of the renderer store transforms and evaluates its whole
+// module graph (core pipeline, solve seam, models). That is cold-start cost, not
+// validation work: it takes ~0.3 s alone but several seconds when many fork
+// workers compete for the CPU, and when it ran inside the first test body it
+// was charged against that test's 5 s budget (issue #152). Importing at module
+// level runs it in the collection phase, which has no per-test timeout, so the
+// tests below time only the validation they exercise. Skipped with the suite
+// when the bundled ngspice is missing.
+const createAppStore: CreateAppStore = haveNgspice
+  ? ((await import(/* @vite-ignore */ STORE_MODULE)) as { createAppStore: CreateAppStore })
+      .createAppStore
+  : () => {
+      throw new Error('createAppStore is unavailable: ngspice resources are missing')
+    }
 
 const VALID_SUBCKT = [
   '* a hand-written two-pin part',
@@ -182,7 +192,7 @@ describe.skipIf(!haveNgspice)('issue #18: multi-line subckt through real ngspice
       const { client, host, waits, start } = createHostClient()
       disposeHost = () => host.dispose()
       await start()
-      const store = await createAppStore({ simClient: client })
+      const store = createAppStore({ simClient: client })
       store.getState().openBoardFromText(sample, 'first-light.kicad_pcb')
       // A displayed board result the probe must not overwrite.
       const shown = new Map<number, number>([[1, 3.3]])
@@ -204,7 +214,7 @@ describe.skipIf(!haveNgspice)('issue #18: multi-line subckt through real ngspice
       const { client, host, waits, start } = createHostClient()
       disposeHost = () => host.dispose()
       await start()
-      const store = await createAppStore({ simClient: client })
+      const store = createAppStore({ simClient: client })
       store.getState().openBoardFromText(sample, 'first-light.kicad_pcb')
       store.setState({ deckDirty: false })
 
@@ -221,7 +231,7 @@ describe.skipIf(!haveNgspice)('issue #18: multi-line subckt through real ngspice
       const { client, host, events, start } = createHostClient()
       disposeHost = () => host.dispose()
       await start()
-      const store = await createAppStore({ simClient: client })
+      const store = createAppStore({ simClient: client })
 
       const res = await store.getState().validateSubckt(OP_FAILS_SUBCKT, 'tv', 2)
 
@@ -237,7 +247,7 @@ describe.skipIf(!haveNgspice)('issue #18: multi-line subckt through real ngspice
       const { client, host, start } = createHostClient()
       disposeHost = () => host.dispose()
       await start()
-      const store = await createAppStore({ simClient: client })
+      const store = createAppStore({ simClient: client })
 
       const bad = await store.getState().validateSubckt(BROKEN_SUBCKT, 'tbad', 2)
       expect(bad.ok).toBe(false)

@@ -19,6 +19,12 @@ Run these before opening a PR:
 - `npm test` (unit tests plus the real-ngspice integration tests; each test file runs in its own process because libngspice is a process-global singleton)
 - `npm run test:e2e` after `npm run build`, when you touch the app shell or renderer
 
+If vitest reports `Worker exited unexpectedly`, a test process died mid-file
+(libngspice aborting, or the OS killing it). The run prints a `WORKER CRASH`
+block naming the test file, the test that started last, the exit code or
+signal, the worker's memory and the last ngspice stderr lines, and on CI the
+same block is appended to the job summary. See `test/vitest/workerCrash.ts`.
+
 ## Architecture rule
 
 `src/core` is pure TypeScript. It must not import `electron`, `react`, or

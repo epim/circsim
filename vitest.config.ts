@@ -17,6 +17,12 @@ export default defineConfig({
         isolate: true
       }
     },
+    // A fork worker that dies mid-file (libngspice aborting, the OS killing it)
+    // reaches vitest only as "Worker exited unexpectedly". These two name the
+    // file, test, exit status and last ngspice stderr lines instead (issue
+    // #155); see test/vitest/workerCrash.ts. They only observe.
+    globalSetup: ['test/vitest/workerCrashGlobalSetup.ts'],
+    setupFiles: ['test/vitest/workerCrashSetup.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html']

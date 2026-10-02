@@ -28,6 +28,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { traceNgspiceExit, traceNgspiceOutput } from './outputTrace'
+
 import type {
   EngineEvent,
   EngineEventListener,
@@ -395,6 +397,7 @@ export class NgspiceFfiEngine implements SpiceEngine {
       this.emit({ type: 'char', text: String(output ?? '') })
       // Classify into a log event with a coarse level for the UI.
       const text = String(output ?? '')
+      traceNgspiceOutput(text)
       const level: 'info' | 'warn' | 'error' = /error/i.test(text)
         ? 'error'
         : /warning|warn/i.test(text)
@@ -411,6 +414,7 @@ export class NgspiceFfiEngine implements SpiceEngine {
 
     const cbControlledExit = koffi.register(
       (exitStatus: number, immediate: boolean, quitOnExit: boolean) => {
+        traceNgspiceExit(exitStatus, !!immediate, !!quitOnExit)
         this.emit({
           type: 'controlledExit',
           status: exitStatus,
