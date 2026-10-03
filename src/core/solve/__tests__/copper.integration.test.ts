@@ -46,6 +46,38 @@ export function resistorBoard() {
 }
 
 describe.skipIf(!ffi.ngspiceResourcesAvailable())('copper-aware operating point', () => {
+  it('leaves an unavailable digital model unknown instead of reporting zero power', async () => {
+    const f = resistorBoard()
+    const part = f.circuit.parts.find((p) => p.ref === 'R1')!
+    f.resolutions = f.resolutions.map((r) => r.ref === 'R1' ? {
+      ...r, status: 'ok' as const, tier: 3 as const, model: {
+        kind: 'xspice-digital' as const, templateId: 'CD40106', pinMap: { '1': 'VCC', '2': 'GND' },
+      },
+    } : r)
+    part.value = 'CD40106'
+    const inputs = buildSolveInputs(f.board, f.circuit, f.resolutions, [
+      { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.001 },
+    ], 2, { copperAware: true })
+    const result = await withEngine((engine) => runSolvePlan(inputs, engine))
+    expect(result.deck.join('\n')).toContain('template text unavailable')
+    expect(result.copper!.partPower.R1).toBeUndefined()
+    expect(deriveSolvedCurrents(inputs, result).unresolvedRefs).toContain('R1')
+  }, 90_000)
+
+  it('leaves a skipped incomplete primitive unknown instead of reporting zero power', async () => {
+    const f = resistorBoard()
+    f.resolutions = f.resolutions.map((r) => r.ref === 'R1' ? {
+      ...r, model: { kind: 'primitive' as const, card: 'r_r1 vcc 0' },
+    } : r)
+    const inputs = buildSolveInputs(f.board, f.circuit, f.resolutions, [
+      { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.001 },
+    ], 2, { copperAware: true })
+    const result = await withEngine((engine) => runSolvePlan(inputs, engine))
+    expect(result.deck.join('\n')).toContain('skipped incomplete primitive card')
+    expect(result.copper!.partPower.R1).toBeUndefined()
+    expect(deriveSolvedCurrents(inputs, result).unresolvedRefs).toContain('R1')
+  }, 90_000)
+
   it('leaves unpowered resolved parts unknown and thermal not assessed', async () => {
     const f = resistorBoard()
     f.board.tracks = []

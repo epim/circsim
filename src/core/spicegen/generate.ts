@@ -1888,7 +1888,18 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
     }
 
     const model = res.model
-    if (opts.copperNetwork && part.padNodes && model.kind !== 'stub') {
+    const digitalTemplateFile = model.kind === 'xspice-digital' && haveModelTexts
+      ? findDigitalTemplateFile(modelIndex, model.templateId)
+      : undefined
+    // A meter only describes terminal power when its model actually runs.
+    // Placeholder comments and skipped cards otherwise look like powered,
+    // zero-current parts and turn an unknown dissipation into a false zero.
+    const emitsModel = model.kind === 'primitive'
+      ? incompleteCardReason(model.card) === undefined
+      : model.kind === 'xspice-digital'
+        ? digitalTemplateFile !== undefined
+        : model.kind !== 'stub'
+    if (opts.copperNetwork && part.padNodes && model.kind !== 'stub' && emitsModel) {
       const modeledPads = model.kind === 'primitive' ? [...part.padNet.keys()] : Object.keys(model.pinMap)
       for (const pad of modeledPads) {
         const netId = part.padNet.get(pad)
@@ -2082,11 +2093,8 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
       // library ships one file per family (logic74hc.json at 5 V, logic4000.json
       // at 12 V) because vHigh is a per-file constant — so pick the file that
       // actually CONTAINS this templateId (never hard-prefer one family file).
-      const templateFile = haveModelTexts
-        ? findDigitalTemplateFile(modelIndex, model.templateId)
-        : undefined
       const xspice = expandXspiceDigital(
-        res.ref, model, part, netIdToNode, modelIndex, templateFile, instruments,
+        res.ref, model, part, netIdToNode, modelIndex, digitalTemplateFile, instruments,
         opts.railOverrides, opts.measuredRailVHigh,
       )
       lines.push(...xspice.lines)
