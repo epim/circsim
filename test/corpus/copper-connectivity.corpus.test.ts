@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { buildCopperNetwork } from '../../src/core/copper'
@@ -26,7 +26,11 @@ let checkedNets = 0
 let expectedGapCount = 0
 
 afterAll(() => {
-  if (process.env.CIRCSIM_CHECK_COPPER === '1') writeFileSync('w2.2-connectivity-data.log', JSON.stringify(measurements, null, 2))
+  if (process.env.CIRCSIM_CHECK_COPPER === '1') {
+    const dir = join(process.cwd(), 'test-results/corpus')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'copper-connectivity-data.json'), JSON.stringify(measurements, null, 2))
+  }
   console.log(`COPPER CONNECTIVITY boards=${inputs.length} checkedNets=${checkedNets} singlePadNetsSkipped=${skippedSinglePadNets} KiCadConfirmedGaps=${expectedGapCount}`)
   expect(Object.keys(baseline.boards).every(name => inputs.some(input => input.name === name))).toBe(true)
 })

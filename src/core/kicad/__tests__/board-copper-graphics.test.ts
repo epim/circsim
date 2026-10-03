@@ -7,6 +7,18 @@ const board = (graphics: string) => `(kicad_pcb (version 20240108) (generator pc
   (net 0 "") (net 1 "VCC") ${graphics})`
 
 describe('netted copper graphics', () => {
+  it('tessellates an arc in a filled copper polygon, including its resistive stroke', () => {
+    const model = parseBoard(board(`(gr_poly (pts (xy 0 0)
+      (arc (start 0 0) (mid 5 -5) (end 10 0)) (xy 10 4) (xy 0 4))
+      (stroke (width 0.2) (type solid)) (fill yes) (layer "F.Cu") (net 1))`))
+    const polygon = model.copperGraphics!.zones[0].polygon[0]
+    expect(polygon.some(pos => pos.y < -4.9)).toBe(true)
+    expect(polygon).toContainEqual({ x: 10, y: 0 })
+    const tracks = model.copperGraphics!.tracks
+    expect(tracks.some(track => track.start.y < -4.9 || track.end.y < -4.9)).toBe(true)
+    expect(tracks.every(track => track.netId === 1 && track.widthMm === 0.2)).toBe(true)
+  })
+
   it.each([
     ['gr_rect', '(start 0 0) (end 10 2)', 4],
     ['gr_poly', '(pts (xy 0 0) (xy 10 0) (xy 10 2) (xy 0 2))', 4],

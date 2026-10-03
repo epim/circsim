@@ -14,6 +14,7 @@ import { nativeBuildContext as buildContext } from './nativeCopper'
 import { solveRail, viaResistanceOhms } from '../railGraph'
 import { nativeRunCritic as runCritic } from './nativeCopper'
 import { DEFAULT_CRITIC_OPTIONS, type OpResult } from '../types'
+import { buildCopperNetwork, emitCopperCards } from '../../copper'
 
 const SHEET = 1.68e-8 / 34.8e-6
 
@@ -207,13 +208,13 @@ describe.skipIf(!haveNativeCopper)('via resistance', () => {
   })
 })
 
-describe.skipIf(!haveNativeCopper)('scale', () => {
+describe('copper graph construction scale (pure TypeScript)', () => {
   /**
    * An N x N grid of VCC tracks plus a pour over the whole board, with `loads`
-   * 50 mA loads: the council's perf-scale board in miniature (N = 40 is 3280
-   * segments, about 1950 graph nodes with the pour mesh).
+   * pad terminals: the council's perf-scale board in miniature. N = 40 has
+   * 3280 segments and more than 1950 copper nodes after bonding.
    */
-  async function scaleBoard(N: number, loads: number) {
+  function scaleBoard(N: number, loads: number) {
     const segs: string[] = []
     const step = 2.5
     for (let i = 0; i <= N; i++) {
@@ -224,46 +225,45 @@ describe.skipIf(!haveNativeCopper)('scale', () => {
     }
     const extent = 15 + N * step
     const parts = [fp('J1', 10, 10)]
-    const loadMap: Record<string, number> = {}
     for (let k = 0; k < loads; k++) {
       const ref = `U${k + 1}`
       parts.push(fp(ref, 10 + (k % 10) * (N / 4), 10 + Math.floor(k / 10) * (N * 0.375)))
-      loadMap[ref] = 0.05
     }
-    return (await ctxFor(`${parts.join(' ')} ${segs.join(' ')} ${zone('F.Cu', rect(5, 5, extent, extent))}`, loadMap))
+    const board = parseBoard(pcb(`${parts.join(' ')} ${segs.join(' ')} ${zone('F.Cu', rect(5, 5, extent, extent))}`))
+    return { board, circuit: extract(board) }
   }
 
-  /** Best-of-N wall time (ms) for one rail solve, plus the last result. */
-  async function timeSolve(N: number, loads: number, reps: number) {
+  /** Best-of-N graph construction plus card emission, excluding board parsing. */
+  function timeBuild(N: number, loads: number, reps: number) {
+    const { board, circuit } = scaleBoard(N, loads)
     let best = Infinity
-    let sol: ReturnType<typeof solveRail> = null
+    let network: ReturnType<typeof buildCopperNetwork> | undefined
+    let cards: string[] = []
     for (let r = 0; r < reps; r++) {
-      // solveRail memoises per context, so every repetition gets a fresh one.
       const t0 = performance.now()
-      const { circuit, ctx } = (await scaleBoard(N, loads))
-      const net = netId(circuit, 'VCC')
-      sol = solveRail(ctx, net, false)
+      network = buildCopperNetwork(board, circuit)
+      cards = emitCopperCards(network)
       best = Math.min(best, performance.now() - t0)
     }
-    return { best, sol }
+    return { best, network: network!, cards }
   }
 
-  it('solves a 1950-node track rail with a pour in time that does not grow cubically', async () => {
-    (await timeSolve(10, 4, 1)) // warm the JIT so the small run is not the cold one
-    // Best of 5 and 3: the small solve is already several milliseconds (above
+  it('builds and emits a large track rail with a pour without cubic growth', () => {
+    timeBuild(10, 4, 1) // warm the JIT so the small run is not the cold one
+    // Best of 5 and 3: the small build is already several milliseconds (above
     // timer noise), and best-of-N on both sides discards scheduler hiccups.
-    const small = (await timeSolve(20, 15, 5))
-    const big = (await timeSolve(40, 60, 3))
-    expect(small.sol).not.toBeNull()
-    expect(big.sol).not.toBeNull()
-    expect(big.sol!.loads.length).toBeGreaterThanOrEqual(55)
+    const small = timeBuild(20, 15, 5)
+    const big = timeBuild(40, 60, 3)
+    expect(big.network.nodes.length).toBeGreaterThan(1950)
+    expect(big.network.rails.get(1)!.graph.pads).toHaveLength(61)
+    expect(big.cards.length).toBeGreaterThan(small.cards.length)
 
     // Intent: meshing a pour into the graph must not bring back the cubic
     // blow-up of the dense solver (320 ms there at this size). No absolute
     // millisecond bound: CI runners are up to 5x slower than a dev machine, so
     // compare two sizes on the same machine. Going from a 20 x 20 to a 40 x 40
-    // grid quadruples the node count: the sparse solve costs a small multiple of
-    // 4x to 8x (measured 4 to 6 locally), dense elimination would cost 4^3 = 64x.
+    // grid quadruples the node count: construction and emission should cost a
+    // small multiple of 4x to 8x, cubic-in-nodes work would cost 4^3 = 64x.
     // The bound of 40 is 5x the expected ratio of 8, so a loaded runner does not
     // trip it, and it still fails on cubic-in-nodes growth (about 64).
     const ratio = big.best / small.best

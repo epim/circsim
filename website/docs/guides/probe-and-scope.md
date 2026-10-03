@@ -23,6 +23,8 @@ The transient starts from the circuit's initial state rather than a pre-solved D
 
 ## Copper-aware runs
 
+The bench's copper-aware control arrives with PR #162; this network reduction is implemented in PR #165.
+
 With copper-aware solving enabled, the transient includes resistance on signal, supply and return nets. It uses a reduced copper network that retains pad terminals and eliminates internal mesh nodes. The operating-point audit keeps the full network. Missing routes remain disconnected, so an unrouted sample can behave differently from its ideal-net simulation; the bundled 555 has this limitation. Reduction lowers the cost of a large copper mesh, but physical mode can still run below real time. See the measured costs and geometry limits in [Fidelity](../concepts/fidelity#copper-resistance-and-remaining-parasitics).
 
 ## Frame the waveform

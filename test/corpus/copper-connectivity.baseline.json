@@ -1,6 +1,6 @@
 {
   "command": "kicad-cli pcb drc --format json --severity-all -o report.json board.kicad_pcb",
-  "tool": "KiCad 10.0",
+  "tool": "KiCad 10.0.3",
   "boards": {
     "k8-tiny-tapeout": [
       {
@@ -188,12 +188,12 @@
               "uuid": "81af14c1-5a17-4c0d-8e00-000000000011"
             },
             {
-              "description": "Pad 1 [MID] of R2 on F.Cu",
+              "description": "Track [MID] on F.Cu, length 9.0554 mm",
               "pos": {
-                "x": 119,
-                "y": 110
+                "x": 110,
+                "y": 109
               },
-              "uuid": "cc623a9b-5a17-4c0d-8e00-00000000000b"
+              "uuid": "36fbeee7-5a17-4c0d-8e00-000000000017"
             }
           ]
         }
@@ -300,12 +300,12 @@
               "uuid": "81af14c1-5a17-4c0d-8e00-000000000011"
             },
             {
-              "description": "Pad 1 [MID] of R2 on F.Cu",
+              "description": "Track [MID] on F.Cu, length 9.0554 mm",
               "pos": {
-                "x": 119,
-                "y": 110
+                "x": 110,
+                "y": 109
               },
-              "uuid": "cc623a9b-5a17-4c0d-8e00-00000000000b"
+              "uuid": "36fbeee7-5a17-4c0d-8e00-000000000017"
             }
           ]
         }
@@ -338,5 +338,7 @@
         }
       }
     ]
-  }
+  },
+  "evidence": "The stable evidence is the named net and disconnected island. Ratsnest endpoint item pairs are one valid DRC output and can vary between runs.",
+  "dialectRegeneration": "KiCad 8 and 10 entries regenerated on unmodified standalone scratch board copies, without project rules or a zone refill, using the command above and default DRC settings."
 }
