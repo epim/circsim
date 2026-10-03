@@ -13,6 +13,7 @@ import type { Circuit } from '../netlist/extract'
 import type { Instrument } from '../spicegen/instruments'
 import type { OpSolveMethod } from '../../simhost/protocol'
 import type { LatchedOpAmp } from './bistable'
+import type { CopperNetwork, CopperOptions, CopperOp } from '../copper'
 
 // ─── engine ───────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,8 @@ export interface UserModelText {
  * All optional: a headless caller with no bench state passes nothing.
  */
 export interface SolveOverrides {
+  copperAware?: boolean
+  copperOptions?: CopperOptions
   /** Deck title (the first comment line), e.g. the board file name. */
   title?: string
   /** Bundled model-library texts, file name to contents. */
@@ -86,6 +89,8 @@ export interface SolveOverrides {
  * the transient run, crash replay, and a headless caller cannot drift apart.
  */
 export interface SolveInputs {
+  copperAware?: boolean
+  copperNetwork?: CopperNetwork
   /**
    * The routed board. The ideal-net deck does not read it; it is carried so the
    * copper-aware deck (#20) builds from the same snapshot. null when there is
@@ -131,6 +136,8 @@ export interface UndrivenNet {
 
 /** What a two-pass solve produced, and which deck produced it. */
 export interface SolveResult {
+  /** Physical pad voltages, terminal currents, and segment currents from this op. */
+  copper?: CopperOp
   /** The op to commit: pass 2's when it ran and landed, else pass 1's. */
   op: OpResult
   /** `op` mapped onto net ids (ground nets read 0 V). */

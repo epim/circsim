@@ -6,7 +6,7 @@
  * Skipped when the bundled ngspice resources for this platform are missing.
  */
 
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -52,11 +52,13 @@ describe.skipIf(!haveNgspice)('circsim CLI against real ngspice', () => {
     expect(report.schemaVersion).toBe(1)
     expect(report.solve.ran).toBe(true)
     expect(Array.isArray(report.critic.findings)).toBe(true)
-    // The solve's branch currents reached the copper checks: ir-drop either ran
-    // or, on this sparse fixture (no copper on GND), reported what it could not
-    // assess ("partly assessed"), never the "no operating point" skip.
+    // The supplied fixture is unrouted. A physical audit must name its missing
+    // contacts rather than passing ideal connectivity off as routed copper.
     const irDrop = report.critic.skipped.find((s: { check: string }) => s.check === 'ir-drop')
-    if (!report.critic.ranBy.includes('ir-drop')) expect(irDrop?.reason).toMatch(/partly assessed/)
+    expect(report.critic.ranBy).not.toContain('ir-drop')
+    expect(irDrop?.reason).toContain('no modelled copper touches pads')
+    expect(irDrop?.reason).not.toContain('ideal-net')
+    expect(report.critic.findings.some((f: { id: string }) => f.id.startsWith('floating:copper-gap:'))).toBe(true)
     // The 555 sample has real clearance errors (run-critic guide): the gate must trip.
     expect(report.critic.summary.error).toBeGreaterThan(0)
     expect(code).toBe(1)
@@ -72,6 +74,38 @@ describe.skipIf(!haveNgspice)('circsim CLI against real ngspice', () => {
     expect(vcc.volts).toBeCloseTo(5, 1)
     const gnd = op.nets.find((n: { name: string }) => n.name === 'GND')
     expect(gnd.volts).toBe(0)
+    expect(op.copper).toBeUndefined()
+  }, T)
+
+  it('op --copper exposes per-pad readings and routing gaps', async () => {
+    const c = capture()
+    expect(await runCli(['op', BOARD, '--schematic', '--copper', '--json'], c.io)).toBe(0)
+    const op = JSON.parse(c.out())
+    expect(op.copper.padVoltages).toBeDefined()
+    expect(op.copper.unreachedPads.length).toBeGreaterThan(0)
+  }, T)
+
+  it('audit assesses copper checks on a routed divider and meters resistor power', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'circsim-cli-copper-'))
+    tmpDirs.push(dir)
+    const board = join(dir, 'divider.kicad_pcb')
+    const rc = readFileSync(join(process.cwd(), 'fixtures', 'fixture-rc.kicad_pcb'), 'utf8')
+    writeFileSync(board, rc.replace(/\)\s*$/, `
+      (segment (start 5 10) (end 9.0875 10) (width 0.5) (layer "F.Cu") (net 1))
+      (segment (start 20.9125 10) (end 25 10) (width 0.5) (layer "F.Cu") (net 3))
+    )`))
+    const c = capture()
+    await runCli(['audit', board, '--supply', 'VIN=5', '--json'], c.io)
+    const report = JSON.parse(c.out())
+    expect(report.solve.ran).toBe(true)
+    expect(report.critic.ranBy).toEqual(expect.arrayContaining(['ampacity', 'ir-drop', 'thermal']))
+    expect(report.critic.findings.filter((f: { id: string }) => f.id.startsWith('floating:copper-gap:'))).toEqual([])
+    const op = capture()
+    expect(await runCli(['op', board, '--supply', 'VIN=5', '--copper', '--json'], op.io)).toBe(0)
+    const result = JSON.parse(op.out())
+    expect(result.copper.unreachedPads).toEqual([])
+    expect(result.copper.padVoltages.R1['1']).toBeCloseTo(5, 3)
+    expect(result.copper.padVoltages.R2['1']).toBeCloseTo(2.5, 3)
   }, T)
 
   it('CIRCSIM_NGSPICE_DIR points the engine at an explicit ngspice base dir', async () => {

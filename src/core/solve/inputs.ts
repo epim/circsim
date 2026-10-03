@@ -14,6 +14,7 @@ import type { Circuit } from '../netlist/extract'
 import { generateDeckWithDiagnostics, type GenerateOptions } from '../spicegen/generate'
 import { wiredInstruments, type Instrument } from '../spicegen/instruments'
 import type { SolveInputs, SolveOverrides, UndrivenNet, UserModelText } from './types'
+import { buildCopperNetwork } from '../copper'
 
 /**
  * Snapshot every deck input. Rail overrides are resolved against this circuit,
@@ -29,7 +30,14 @@ export function buildSolveInputs(
   groundNetId: number,
   overrides: SolveOverrides = {},
 ): SolveInputs {
+  if (overrides.copperAware && !board) throw new Error('copperAware requires routed board geometry')
   return {
+    copperAware: overrides.copperAware,
+    copperNetwork: overrides.copperAware && board ? buildCopperNetwork(board, circuit, {
+      ...overrides.copperOptions,
+      groundNetId,
+      netIds: [...(overrides.copperOptions?.netIds ?? []), ...instruments.flatMap((i) => i.kind === 'dc-supply' ? [i.netId] : [])],
+    }) : undefined,
     board,
     circuit,
     resolutions,
@@ -89,6 +97,7 @@ export function undrivenNetsOf(islands: readonly (readonly string[])[], circuit:
 
 function generateOptions(inputs: SolveInputs): GenerateOptions {
   return {
+    copperNetwork: inputs.copperAware ? inputs.copperNetwork : undefined,
     circuit: inputs.circuit,
     resolutions: inputs.resolutions,
     instruments: inputs.instruments,

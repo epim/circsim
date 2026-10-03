@@ -1,3 +1,4 @@
+import { haveNativeCopper } from './nativeCopper'
 /**
  * core/critic/__tests__/irDrop.supplyEntry.test.ts
  *
@@ -15,7 +16,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseBoard } from '../../kicad/board'
 import { extract } from '../../netlist/extract'
-import { runCritic } from '../run'
+import { nativeRunCritic as runCritic } from './nativeCopper'
 import type { OpResult } from '../types'
 
 function feed(ref: string, x: number): string {
@@ -44,7 +45,7 @@ function makeBoard(farRef: string, nearRef: string) {
   )`)
 }
 
-function run(farRef: string, nearRef: string, supplyEntries?: OpResult['supplyEntries']) {
+async function run(farRef: string, nearRef: string, supplyEntries?: OpResult['supplyEntries']) {
   const board = makeBoard(farRef, nearRef)
   const circuit = extract(board)
   const vcc = circuit.nets.find((n) => n.kicadName === 'VCC')!
@@ -53,7 +54,7 @@ function run(farRef: string, nearRef: string, supplyEntries?: OpResult['supplyEn
     partCurrents: { U1: 1 },
     ...(supplyEntries ? { supplyEntries } : {}),
   }
-  const report = runCritic(board, circuit, op)
+  const report = (await runCritic(board, circuit, op))
   return {
     findings: report.findings.filter((f) => f.check === 'ir-drop'),
     skipped: report.skipped.filter((s) => s.check === 'ir-drop'),
@@ -62,9 +63,9 @@ function run(farRef: string, nearRef: string, supplyEntries?: OpResult['supplyEn
 
 const VCC = 1
 
-describe('IR-drop supply entry from the bench lead (issue #47)', () => {
-  it('baseline: with no lead position the heuristic picks the far connector J1 and says it guessed', () => {
-    const { findings } = run('J1', 'J2')
+describe.skipIf(!haveNativeCopper)('IR-drop supply entry from the bench lead (issue #47)', () => {
+  it('baseline: with no lead position the heuristic picks the far connector J1 and says it guessed', async () => {
+    const { findings } = (await run('J1', 'J2'))
     expect(findings).toHaveLength(1)
     expect(findings[0].metrics!.sagPct).toBeCloseTo(3.86, 1)
     expect(findings[0].assumption).toMatch(/no bench supply lead/i)
@@ -72,15 +73,15 @@ describe('IR-drop supply entry from the bench lead (issue #47)', () => {
     expect(findings[0].assumption).toContain('J1')
   })
 
-  it('Case A: the lead clipped at the near connector J2 wins over the J1 guess, so no warning for an unused path', () => {
-    const { findings } = run('J1', 'J2', [{ netId: VCC, pos: { x: 114, y: 10 } }])
+  it('Case A: the lead clipped at the near connector J2 wins over the J1 guess, so no warning for an unused path', async () => {
+    const { findings } = (await run('J1', 'J2', [{ netId: VCC, pos: { x: 114, y: 10 } }]))
     expect(findings).toHaveLength(0)
   })
 
-  it('Case B: a battery BT1 clipped as the supply is assessed (the guess picked J1 and reported nothing)', () => {
+  it('Case B: a battery BT1 clipped as the supply is assessed (the guess picked J1 and reported nothing)', async () => {
     // Guess alone: J1 is the near connector, the true feed BT1 is not a connector ref.
-    expect(run('BT1', 'J1').findings).toHaveLength(0)
-    const { findings } = run('BT1', 'J1', [{ netId: VCC, pos: { x: 10, y: 10 } }])
+    expect((await run('BT1', 'J1')).findings).toHaveLength(0)
+    const { findings } = (await run('BT1', 'J1', [{ netId: VCC, pos: { x: 10, y: 10 } }]))
     expect(findings).toHaveLength(1)
     expect(findings[0].metrics!.sagPct).toBeCloseTo(3.86, 1)
     expect(findings[0].detail).toContain('BT1 pad 1')
@@ -89,29 +90,29 @@ describe('IR-drop supply entry from the bench lead (issue #47)', () => {
     expect(findings[0].assumption).not.toMatch(/guess/i)
   })
 
-  it('Case C: a barrel jack DC1 clipped as the supply is assessed', () => {
-    expect(run('DC1', 'J1').findings).toHaveLength(0)
-    const { findings } = run('DC1', 'J1', [{ netId: VCC, pos: { x: 10, y: 10 } }])
+  it('Case C: a barrel jack DC1 clipped as the supply is assessed', async () => {
+    expect((await run('DC1', 'J1')).findings).toHaveLength(0)
+    const { findings } = (await run('DC1', 'J1', [{ netId: VCC, pos: { x: 10, y: 10 } }]))
     expect(findings).toHaveLength(1)
     expect(findings[0].detail).toContain('DC1 pad 1')
   })
 
-  it('snaps an off-pad lead to the nearest pad on the net and reports the snap distance', () => {
-    const { findings } = run('BT1', 'J1', [{ netId: VCC, pos: { x: 12, y: 10 } }])
+  it('snaps an off-pad lead to the nearest pad on the net and reports the snap distance', async () => {
+    const { findings } = (await run('BT1', 'J1', [{ netId: VCC, pos: { x: 12, y: 10 } }]))
     expect(findings).toHaveLength(1)
     expect(findings[0].detail).toContain('BT1 pad 1')
     expect(findings[0].assumption).toMatch(/2(\.0)? mm/)
   })
 
-  it('a supply attached with no recorded position says so, and still falls back to the guess', () => {
-    const { findings } = run('J1', 'J2', [{ netId: VCC }])
+  it('a supply attached with no recorded position says so, and still falls back to the guess', async () => {
+    const { findings } = (await run('J1', 'J2', [{ netId: VCC }]))
     expect(findings).toHaveLength(1)
     expect(findings[0].assumption).toMatch(/no recorded (lead )?position/i)
     expect(findings[0].assumption).toMatch(/guess/i)
   })
 
-  it('an entry for a different net does not steer this rail', () => {
-    const { findings } = run('J1', 'J2', [{ netId: 99, pos: { x: 114, y: 10 } }])
+  it('an entry for a different net does not steer this rail', async () => {
+    const { findings } = (await run('J1', 'J2', [{ netId: 99, pos: { x: 114, y: 10 } }]))
     expect(findings).toHaveLength(1)
     expect(findings[0].assumption).toMatch(/guess/i)
   })

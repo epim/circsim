@@ -21,6 +21,7 @@ import { ngspiceResourcesAvailable, resolveNgspicePaths } from '../simhost/ngspi
 import { createInProcessSolveEngine } from '../simhost/solveEngine'
 import { HELP_TEXT, parseArgs, type CliOptions } from './args'
 import { buildCriticOpFromSolve } from './criticOp'
+import { withCopperFindings } from './copperFindings'
 import { findPackageRoot, loadModelLibrary, resolveModelsDir } from './modelLibrary'
 import {
   auditJson,
@@ -93,15 +94,16 @@ async function audit(opts: CliOptions, session: Session, io: CliIo): Promise<num
     solve = solveSummary(session, r.solved, r.error, r.ngspiceErrors)
   }
 
-  const critic: CriticReport = runCritic(
+  const critic: CriticReport = withCopperFindings(runCritic(
     session.board,
     session.circuit,
     solved ? buildCriticOpFromSolve(session.circuit, session.resolutions, solved) : undefined,
-  )
+  ), session.board, solved?.copper)
 
   // A gate must not pass clean when the simulation it asked for did not run.
   let code = EXIT_OK
-  if (critic.summary.error > 0) code = EXIT_FINDINGS
+  if (solved?.op.method === 'failed') code = EXIT_SIM
+  else if (critic.summary.error > 0) code = EXIT_FINDINGS
   else if (!solve.ran && !opts.noOp) code = EXIT_SIM
 
   if (opts.json) io.stdout(JSON.stringify(auditJson(session, solve, critic, code), null, 2) + '\n')
@@ -127,7 +129,7 @@ async function op(opts: CliOptions, session: Session, io: CliIo): Promise<number
     return EXIT_SIM
   }
   io.stdout(opts.json ? JSON.stringify(opJson(session, solve, r.solved), null, 2) + '\n' : opText(session, solve, r.solved))
-  return EXIT_OK
+  return solve.ran ? EXIT_OK : EXIT_SIM
 }
 
 async function deck(opts: CliOptions, session: Session, io: CliIo): Promise<number> {

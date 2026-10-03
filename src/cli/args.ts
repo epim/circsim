@@ -26,6 +26,8 @@ export interface CliOptions {
   supplies: SupplySpec[]
   /** `audit --no-op`: run only the static checks, no simulation. */
   noOp: boolean
+  /** Physical copper for op/deck; audit always uses physical copper. */
+  copper: boolean
   /** `deck --out DIR`. */
   outDir?: string
   /** `deck --pass1-only`: build the family-default deck without running ngspice. */
@@ -60,6 +62,7 @@ const BOOL_FLAGS: Record<string, Command[] | '*'> = {
   '--verbose': '*',
   '--no-op': ['audit'],
   '--pass1-only': ['deck'],
+  '--copper': ['op', 'deck'],
 }
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -79,6 +82,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     json: false,
     supplies: [],
     noOp: false,
+    copper: false,
     pass1Only: false,
     verbose: false,
   }
@@ -119,6 +123,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       else if (flag === '--verbose') opts.verbose = true
       else if (flag === '--no-op') opts.noOp = true
       else if (flag === '--pass1-only') opts.pass1Only = true
+      else if (flag === '--copper') opts.copper = true
       continue
     }
 
@@ -185,6 +190,7 @@ Options:
   --ground NET           Ground net (default: the GND/VSS/AGND name heuristic)
   --supply NET=VOLTS     Attach a DC supply; repeatable (default: 5 V on the top suggested rail)
   --no-op                audit: static checks only, no simulation
+  --copper               op/deck: include routed power and ground resistance (audit always does)
   --out DIR              deck: output directory (default: current directory)
   --pass1-only           deck: build the family-default deck without running ngspice
   --ngspice-dir DIR      Base dir holding <platform>/ngspice (env: CIRCSIM_NGSPICE_DIR)

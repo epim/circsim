@@ -42,15 +42,15 @@ The checks split into two groups by what they need.
 - **IR-drop / rail sag**: how much voltage does the copper's own resistance drop between the supply entry and the load, counting copper pours and the ground return?
 - **Thermal proximity**: a first-order relative look at where heat concentrates.
 
-Before you energize, these appear in the panel as *"needs simulation"* so you know what an operating-point solve would add. Press [Energize](../guides/energize) and they run against the branch currents of the solve: LEDs, resistors and bench sources are measured, and every other part gets the current Kirchhoff's current law leaves on its pads. If the solve cannot work out a part's current, or the copper model cannot reach a pad that carries current, the panel says so (*"not assessed"* or *"partly assessed"*) instead of reporting a clean pass.
+Before you energize, these appear as *needs simulation*. After Power On or Energize, the Critic always solves physical power and ground copper, regardless of the bench toggle. Ampacity, IR-drop and thermal use physical pad voltages, segment currents and terminal power. Missing current or power remains not assessed. Pads without copper contact or a path to the entry appear as located routing-gap findings, even at zero current.
 
 ::: info A note on the thermal check
-The thermal check is a *relative* heat-spread proxy in arbitrary units. It tells you which parts sit at the hot end and which hot parts crowd each other, **never an absolute temperature in °C**. It doesn't model copper pour, layer stack, airflow, or thermal vias. In this version it also needs per-part power data that circsim doesn't compute yet, so **it does not run**: the Critic panel lists it as "thermal: not assessed" rather than counting it as checked. Treat the other six as the working set today. Once power data is available and it does fire, read it strictly as "these are relatively hotter," not "this reaches N degrees."
+The thermal check runs when solved terminal voltages and currents supply per-part power. Its heat-spread proxy uses arbitrary units: it compares where heat concentrates and which hot parts crowd each other, **never an absolute temperature in °C**. It does not model copper pour, layer stack, airflow, or thermal vias. Parts without assessed power are named as not assessed. Read placement findings as relative concerns; an explicit `PowerRating` board field also lets the check flag dissipation above that rating.
 :::
 
 Two limits are worth knowing before you lean on the copper-carrying checks:
 
-- **Copper weight is assumed to be 1 oz** everywhere. It's a fixed default, not read from your board. Ampacity and IR-drop are computed against that, so they're conservative on heavier copper and optimistic on lighter.
+- **Copper weight defaults to 1 oz** and is not read from your board. The physical solve options can change it; the Critic uses the same network weight. The choice changes resistance and trace capacity.
 - **Loop area can't run without ground copper**. It measures distance to a ground plane. On a board with high-speed nets but no ground plane at all, rather than silently reporting nothing (which would read as "clean"), the panel shows an explicit *"loop area: not assessed (no ground copper)"* line, so you know it couldn't check the return path.
 
 The [checks reference](../reference/critic-checks) states every threshold and assumption in full.

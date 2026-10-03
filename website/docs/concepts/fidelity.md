@@ -47,11 +47,17 @@ To play the part of the firmware, choose **Interactive pins** in the [Model Doct
 
 It is *not* enough to check timing relationships between firmware-driven signals and analog peripherals.
 
-### No parasitics
+### Copper resistance and remaining parasitics
 
-circsim does not model:
+The solve API has an opt-in physical copper mode (`copperAware: true`). Power and ground tracks, vias and pours become resistor networks in the same ngspice circuit as the parts. Each pad has its own solved voltage; signal nets retain ideal connectivity. The [Board Critic](./board-critic) does estimate copper resistance through that shared network. The bench starts with ideal nets. Enable **Copper-aware** in its header to rerun the operating point with physical pad voltages and ground lift. After a direct ideal Power On or Energize solve, the bench readings appear first and the Critic assesses physical copper afterward, regardless of the toggle. If the ideal solve fails or needs a convergence fallback, electrical copper checks remain unassessed and routing-gap findings remain available. CLI `audit` also uses physical copper by default; `op` and `deck` opt in with `--copper`.
 
-- **Trace resistance and inductance**: a 5 cm, 0.25 mm trace on 1 oz copper is about 0.1 Ω, negligible at DC but real at RF. *(Note: the [Board Critic](./board-critic) does estimate copper resistance for its IR-drop check, including copper pours and the ground return, but the SPICE simulation itself treats nets as ideal nodes; the critic reads each part's current from that ideal-net solve and then solves the copper with those currents.)*
+Track resistance uses length, width, and an assumed 1 oz copper weight (35 µm), configurable through the solve options. A 5 cm, 0.25 mm trace on 1 oz copper is about 0.1 Ω. Via resistance assumes 20 µm barrel plating. Pours use an approximately 2 mm sheet-resistance mesh of their outlines; thermal-relief spokes, fill clearance islands, and keepouts are not extracted. Missing copper leaves pads disconnected, and a lead position selects its nearest physical pad; without a position the source pad is guessed.
+
+The network and solve result expose pads without copper contacts or a path from the supply entry, and the Critic names them even at zero current. A failed solve retains that geometry but supplies no electrical readings. A transient-fallback result is labelled as a bias snapshot rather than a converged DC operating point. Connected idle parts can have known zero dissipation; missing model terminals or physically unpowered parts remain not assessed for power.
+
+circsim still does not model:
+
+- **Trace inductance and signal-net resistance**: these matter for RF and fast edges.
 - **Via inductance**: ~0.5 to 1 nH each, invisible to the simulation.
 - **Pad and lead-frame capacitance**: picofarads that matter for high-speed signals.
 - **Coupling between traces**: crosstalk, EMI pickup, differential-pair imbalance.
@@ -107,7 +113,7 @@ Every number on this page is held by a test that fails when the model drifts fro
 - **DC operating point and RC waveforms.** `op.integration.test.ts` (a divider reads 2.5 V to 5 mV) and `transient.integration.test.ts` (an RC charge curve within 2 percent).
 - **Undriven nets.** `generate.test.ts` (the 1 GΩ tie), `floating-supply-pin.integration.test.ts`, and `WarningsBar.test.tsx` (the "Undriven nets held at 0 V" note).
 - **Fixed 27 °C.** `fidelity-claims.test.ts` checks that no generated deck carries a temperature card or sweep.
-- **Trace resistance figure.** `geom.test.ts` (100 mm by 0.5 mm on 1 oz copper is 0.0966 Ω, the same 200 squares as the 5 cm by 0.25 mm trace quoted above) and `irDrop.test.ts` for the critic's copper solve.
+- **Trace resistance figure.** `geom.test.ts` (100 mm by 0.5 mm on 1 oz copper is 0.0966 Ω, the same 200 squares as the 5 cm by 0.25 mm trace quoted above) and `copper.integration.test.ts` for the shared physical solve. The pour-only corpus assertion checks that the fixture's pad voltages agree with Critic IR-drop.
 - **Stubs and the fidelity banner.** `resolve.test.ts` (which parts are stubbed) and `WarningsBar.test.tsx` (the banner, its minimized badge, and its re-expansion when the affected set changes).
 - **Convergence fallbacks.** `library-op-convergence.integration.test.ts`.
 

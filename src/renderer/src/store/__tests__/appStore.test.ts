@@ -19,7 +19,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { createAppStore, resolutionSummary, parseAlterCommand, AUTO_SUPPLY_ID } from '../appStore'
-import { createMockSimClient } from '../../ipc/simClient'
+import { createBenchMockSimClient } from './benchMock'
 import type { SymbolSimInfo } from '../../../../core/kicad/schematic'
 
 const fixturesDir = join(__dirname, '../../../../../fixtures')
@@ -32,7 +32,7 @@ describe('appStore — open flow (fixture-rc)', () => {
   let store: ReturnType<typeof createAppStore>
 
   beforeEach(() => {
-    store = createAppStore({ simClient: createMockSimClient() })
+    store = createAppStore({ simClient: createBenchMockSimClient() })
   })
 
   it('loads fixture-rc text → 2 parts, both tier-2 resolved, 0 unresolved', () => {
@@ -88,7 +88,7 @@ describe('appStore — auto-attaches a DC supply on open (Spec §4 "60 seconds")
   let store: ReturnType<typeof createAppStore>
 
   beforeEach(() => {
-    store = createAppStore({ simClient: createMockSimClient() })
+    store = createAppStore({ simClient: createBenchMockSimClient() })
   })
 
   it('attaches a 5 V / 0.1 Ω dc-supply on the top suggested supply net (fixture-555 VCC)', () => {
@@ -229,7 +229,7 @@ describe('appStore — Model Doctor stub action flips counts + sets deckDirty', 
   let store: ReturnType<typeof createAppStore>
 
   beforeEach(() => {
-    store = createAppStore({ simClient: createMockSimClient() })
+    store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
   })
 
@@ -280,7 +280,7 @@ describe('appStore — pin-map edit re-resolves and sets deckDirty', () => {
   let store: ReturnType<typeof createAppStore>
 
   beforeEach(() => {
-    store = createAppStore({ simClient: createMockSimClient() })
+    store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
   })
 
@@ -302,7 +302,7 @@ describe('appStore — pin-map override reaches the resolved model (M4)', () => 
 
   function storeWithLibrary(): ReturnType<typeof createAppStore> {
     const entries = JSON.parse(readFileSync(join(modelsDir, 'index.json'), 'utf-8')).entries
-    const store = createAppStore({ simClient: createMockSimClient(), library: entries })
+    const store = createAppStore({ simClient: createBenchMockSimClient(), library: entries })
     store
       .getState()
       .openBoardFromText(readFileSync(join(sampleDir, 'first-light.kicad_pcb'), 'utf-8'), 'first-light.kicad_pcb')
@@ -365,10 +365,10 @@ describe('appStore — pin-map override reaches the resolved model (M4)', () => 
 
 describe('appStore — sim orchestration with mock simClient', () => {
   let store: ReturnType<typeof createAppStore>
-  let mock: ReturnType<typeof createMockSimClient>
+  let mock: ReturnType<typeof createBenchMockSimClient>
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     // attach a 5V supply on VIN so the op produces a meaningful result
@@ -424,11 +424,11 @@ describe('appStore — sim orchestration with mock simClient', () => {
 
 describe('appStore — alter routing (alter-safe vs reload)', () => {
   let store: ReturnType<typeof createAppStore>
-  let mock: ReturnType<typeof createMockSimClient>
+  let mock: ReturnType<typeof createBenchMockSimClient>
   let vinId: number
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
@@ -493,7 +493,7 @@ describe('appStore — attachSchematicFromPath (M3 manual schematic attach)', ()
   let store: ReturnType<typeof createAppStore>
 
   beforeEach(() => {
-    store = createAppStore({ simClient: createMockSimClient() })
+    store = createAppStore({ simClient: createBenchMockSimClient() })
   })
 
   it('attaches a .kicad_sch by path → schematicSimData populated + reResolve ran (deckDirty)', async () => {
@@ -584,7 +584,7 @@ describe('M7 review fix — revealInDoctor', () => {
   let store: ReturnType<typeof createAppStore>
 
   beforeEach(() => {
-    store = createAppStore({ simClient: createMockSimClient() })
+    store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
   })
 

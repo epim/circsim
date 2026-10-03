@@ -1,3 +1,4 @@
+import { haveNativeCopper } from './nativeCopper'
 /**
  * core/critic/__tests__/irDrop.test.ts
  *
@@ -17,7 +18,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseBoard } from '../../kicad/board'
 import { extract, type Circuit } from '../../netlist/extract'
-import { runCritic } from '../run'
+import { nativeRunCritic as runCritic } from './nativeCopper'
 import type { OpResult } from '../types'
 
 // VCC = net 1, GND = net 2. J1 (a connector → preferred supply entry) sits at
@@ -50,16 +51,16 @@ function opFor(circuit: Circuit, currents: Record<string, number>, volts = 5): O
 
 const LONG_THIN = `(segment (start 10 10) (end 110 10) (width 0.25) (layer "F.Cu") (net 1))`
 
-function irFindings(board: ReturnType<typeof makeBoard>, op?: OpResult) {
+async function irFindings(board: ReturnType<typeof makeBoard>, op?: OpResult) {
   const circuit = extract(board)
-  return runCritic(board, circuit, op).findings.filter((f) => f.check === 'ir-drop')
+  return (await runCritic(board, circuit, op)).findings.filter((f) => f.check === 'ir-drop')
 }
 
-describe('checkIrDrop', () => {
-  it('warns when a 100mm × 0.25mm VCC trace at 1 A sags ~3.9% (drop ≈ 0.193 V)', () => {
+describe.skipIf(!haveNativeCopper)('checkIrDrop', () => {
+  it('warns when a 100mm × 0.25mm VCC trace at 1 A sags ~3.9% (drop ≈ 0.193 V)', async () => {
     const b = makeBoard(LONG_THIN)
     const c = extract(b)
-    const findings = runCritic(b, c, opFor(c, { U1: 1 })).findings.filter(
+    const findings = (await runCritic(b, c, opFor(c, { U1: 1 }))).findings.filter(
       (f) => f.check === 'ir-drop',
     )
     expect(findings).toHaveLength(1)
@@ -80,23 +81,23 @@ describe('checkIrDrop', () => {
     expect(f.assumption).toBeDefined()
   })
 
-  it('escalates to error at 2 A (~7.7% sag)', () => {
+  it('escalates to error at 2 A (~7.7% sag)', async () => {
     const b = makeBoard(LONG_THIN)
     const c = extract(b)
-    const [f] = runCritic(b, c, opFor(c, { U1: 2 })).findings.filter((f) => f.check === 'ir-drop')
+    const [f] = (await runCritic(b, c, opFor(c, { U1: 2 }))).findings.filter((f) => f.check === 'ir-drop')
     expect(f).toBeDefined()
     expect(f.severity).toBe('error')
     expect(f.metrics!.dropV).toBeCloseTo(0.3862, 3)
   })
 
-  it('stays quiet on a wide trace (4 mm → ~0.24% sag)', () => {
+  it('stays quiet on a wide trace (4 mm → ~0.24% sag)', async () => {
     const b = makeBoard(`(segment (start 10 10) (end 110 10) (width 4) (layer "F.Cu") (net 1))`)
     const c = extract(b)
-    expect(runCritic(b, c, opFor(c, { U1: 1 })).findings.filter((f) => f.check === 'ir-drop'))
+    expect((await runCritic(b, c, opFor(c, { U1: 1 }))).findings.filter((f) => f.check === 'ir-drop'))
       .toHaveLength(0)
   })
 
-  it('stitches layers through a via (two 50mm halves + a 1.4 mΩ barrel)', () => {
+  it('stitches layers through a via (two 50mm halves + a 1.4 mΩ barrel)', async () => {
     const b = makeBoard(
       `(segment (start 10 10) (end 60 10) (width 0.25) (layer "F.Cu") (net 1))
        (via (at 60 10) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1))
@@ -104,112 +105,112 @@ describe('checkIrDrop', () => {
       'B.Cu',
     )
     const c = extract(b)
-    const [f] = runCritic(b, c, opFor(c, { U1: 1 })).findings.filter((f) => f.check === 'ir-drop')
+    const [f] = (await runCritic(b, c, opFor(c, { U1: 1 }))).findings.filter((f) => f.check === 'ir-drop')
     expect(f).toBeDefined()
     expect(f.severity).toBe('warn')
     // 0.09655 + 0.00143 (0.3 mm drill, 20 um plating, 1.6 mm board) + 0.09655 = 0.19453 V at 1 A
     expect(f.metrics!.dropV).toBeCloseTo(0.1945, 3)
   })
 
-  it("does not count the source part's own current as a sink", () => {
+  it("does not count the source part's own current as a sink", async () => {
     const b = makeBoard(LONG_THIN)
     const c = extract(b)
     // J1 is the supply entry; its 1 A must not be injected as a second load.
-    const [f] = runCritic(b, c, opFor(c, { U1: 1, J1: 1 })).findings.filter(
+    const [f] = (await runCritic(b, c, opFor(c, { U1: 1, J1: 1 }))).findings.filter(
       (f) => f.check === 'ir-drop',
     )
     expect(f).toBeDefined()
     expect(f.metrics!.dropV).toBeCloseTo(0.1931, 3)
   })
 
-  it('emits no finding when the load current is zero', () => {
+  it('emits no finding when the load current is zero', async () => {
     const b = makeBoard(LONG_THIN)
     const c = extract(b)
-    expect(runCritic(b, c, opFor(c, { U1: 0 })).findings.filter((f) => f.check === 'ir-drop'))
+    expect((await runCritic(b, c, opFor(c, { U1: 0 }))).findings.filter((f) => f.check === 'ir-drop'))
       .toHaveLength(0)
   })
 
-  it('reports not assessed, not clean, when the op result carries no branch currents', () => {
+  it('reports not assessed, not clean, when the op result carries no branch currents', async () => {
     const b = makeBoard(LONG_THIN)
     const c = extract(b)
     const vcc = c.nets.find((n) => n.kicadName === 'VCC')!
     const op: OpResult = { nodeVoltages: { [vcc.spiceNode]: 5 } }
-    const report = runCritic(b, c, op)
+    const report = (await runCritic(b, c, op))
     expect(report.findings.filter((f) => f.check === 'ir-drop')).toHaveLength(0)
     expect(report.ranBy).not.toContain('ir-drop')
     expect(report.skipped.some((s) => s.check === 'ir-drop')).toBe(true)
   })
 
-  it("emits no finding when the rail's nominal voltage is unknown", () => {
+  it("emits no finding when the rail's nominal voltage is unknown", async () => {
     const b = makeBoard(LONG_THIN)
     const c = extract(b)
     const op: OpResult = { nodeVoltages: {}, partCurrents: { U1: 1 } }
-    expect(runCritic(b, c, op).findings.filter((f) => f.check === 'ir-drop')).toHaveLength(0)
+    expect((await runCritic(b, c, op)).findings.filter((f) => f.check === 'ir-drop')).toHaveLength(0)
   })
 
-  it('is skipped when no operating-point sim is provided', () => {
+  it('is skipped when no operating-point sim is provided', async () => {
     const b = makeBoard(LONG_THIN)
-    const report = runCritic(b, extract(b))
+    const report = (await runCritic(b, extract(b)))
     expect(report.ranBy).not.toContain('ir-drop')
     expect(report.skipped.some((s) => s.check === 'ir-drop')).toBe(true)
   })
 
-  it('does not throw on degenerate copper (zero-length segment, disconnected sink)', () => {
+  it('does not throw on degenerate copper (zero-length segment, disconnected sink)', async () => {
     // The only VCC copper is a zero-length stub at the source; U1 is stranded.
     const b = makeBoard(`(segment (start 10 10) (end 10 10) (width 0.25) (layer "F.Cu") (net 1))`)
     const c = extract(b)
-    expect(() => runCritic(b, c, opFor(c, { U1: 1 }))).not.toThrow()
-    expect(irFindings(b, opFor(c, { U1: 1 }))).toHaveLength(0)
+    await expect(runCritic(b, c, opFor(c, { U1: 1 }))).resolves.toBeDefined()
+    expect((await irFindings(b, opFor(c, { U1: 1 })))).toHaveLength(0)
   })
 
-  it('does not throw on a board with no tracks at all', () => {
+  it('does not throw on a board with no tracks at all', async () => {
     const b = makeBoard('')
     const c = extract(b)
-    expect(() => runCritic(b, c, opFor(c, { U1: 1 }))).not.toThrow()
+    await expect(runCritic(b, c, opFor(c, { U1: 1 }))).resolves.toBeDefined()
   })
 
   // Copper-weight scaling (issue #69). R = rho L / (w t), t = oz x 34.8 um.
   // The 100mm x 0.25mm trace is 0.1931 ohm at 1 oz, 0.0966 at 2 oz, 0.3862 at 0.5 oz.
-  describe('copper weight', () => {
-    function irAt(oz: number, amps: number) {
+  describe.skipIf(!haveNativeCopper)('copper weight', () => {
+    async function irAt(oz: number, amps: number) {
       const b = makeBoard(LONG_THIN)
       const c = extract(b)
-      return runCritic(b, c, opFor(c, { U1: amps }), { copperOz: oz }).findings.find(
+      return (await runCritic(b, c, opFor(c, { U1: amps }), { copperOz: oz })).findings.find(
         (f) => f.check === 'ir-drop',
       )
     }
 
-    it('2 oz halves the drop: 2 A over 100mm x 0.25mm sags 0.1931 V (same as 1 A at 1 oz)', () => {
-      const f = irAt(2, 2)
+    it('2 oz halves the drop: 2 A over 100mm x 0.25mm sags 0.1931 V (same as 1 A at 1 oz)', async () => {
+      const f = (await irAt(2, 2))
       expect(f).toBeDefined()
       expect(f!.metrics!.dropV).toBeCloseTo(0.1931, 3)
       expect(f!.metrics!.sagPct).toBeCloseTo(3.86, 1)
       expect(f!.severity).toBe('warn')
     })
 
-    it('0.5 oz doubles the drop: 0.5 A over 100mm x 0.25mm sags 0.1931 V', () => {
-      const f = irAt(0.5, 0.5)
+    it('0.5 oz doubles the drop: 0.5 A over 100mm x 0.25mm sags 0.1931 V', async () => {
+      const f = (await irAt(0.5, 0.5))
       expect(f).toBeDefined()
       expect(f!.metrics!.dropV).toBeCloseTo(0.1931, 3)
       expect(f!.severity).toBe('warn')
     })
 
-    it('the same 1 A load warns at 1 oz but clean at 2 oz (0.0966 V, 1.9%)', () => {
-      expect(irAt(1, 1)!.metrics!.dropV).toBeCloseTo(0.1931, 3)
+    it('the same 1 A load warns at 1 oz but clean at 2 oz (0.0966 V, 1.9%)', async () => {
+      expect((await irAt(1, 1))!.metrics!.dropV).toBeCloseTo(0.1931, 3)
       // 1.93% is under the 2% warn threshold, so heavier copper clears the finding.
-      expect(irAt(2, 1)).toBeUndefined()
+      expect((await irAt(2, 1))).toBeUndefined()
     })
 
-    it('0.5 oz at 1 A escalates to error (0.3862 V, 7.7%)', () => {
-      const f = irAt(0.5, 1)
+    it('0.5 oz at 1 A escalates to error (0.3862 V, 7.7%)', async () => {
+      const f = (await irAt(0.5, 1))
       expect(f).toBeDefined()
       expect(f!.severity).toBe('error')
       expect(f!.metrics!.dropV).toBeCloseTo(0.3862, 3)
     })
 
-    it('states the copper weight used in the assumption text', () => {
-      expect(irAt(2, 2)!.assumption).toContain('2 oz copper')
-      expect(irAt(0.5, 0.5)!.assumption).toContain('0.5 oz copper')
+    it('states the copper weight used in the assumption text', async () => {
+      expect((await irAt(2, 2))!.assumption).toContain('2 oz copper')
+      expect((await irAt(0.5, 0.5))!.assumption).toContain('0.5 oz copper')
     })
   })
 })

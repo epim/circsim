@@ -132,6 +132,7 @@ export function openSession(opts: CliOptions, library: ModelLibrary, cwd: string
       ? buildSolveInputs(board, circuit, resolutions, instruments, groundNetId, {
           title: basename(boardPath),
           modelTexts: library.texts,
+          copperAware: (opts.command === 'audit' && !opts.noOp) || opts.copper,
         })
       : null
 
@@ -168,4 +169,3 @@ export function findNet(nets: CircuitNet[], name: string, flag: string): Circuit
   }
   throw new InputError(`${flag} ${name}: no such net (nets: ${nets.map((n) => n.kicadName).join(', ')})`)
 }
-

@@ -16,7 +16,7 @@ The schematic is an optional input, and it makes the result better. Keep the `.k
 
 ### Where the copper fits
 
-The Board Critic reads the copper directly: tracks, vias, pours, and part placement. The live bench does not. The simulation treats every net as a single ideal node, so a thin track never sags the rail in the simulated voltages. The Critic estimates copper resistance for its IR-drop check and compares track width with current for its ampacity check, and those estimates stay in the Critic. Putting the routed copper into the simulation itself is planned, not shipped.
+The Board Critic reads tracks, vias, pours and part placement. Power and ground copper share an ngspice circuit with the parts: supply pads sag, return pads shift, and each track is rated against its solved current. Each signal net retains one ideal node. The bench starts with ideal nets and offers a **Copper-aware** toggle. After Power On, the Critic always receives a physical operating point, even when the bench stays ideal. Routing gaps become located findings; unavailable current or power remains explicitly not assessed.
 
 ## Two complementary jobs
 
@@ -55,7 +55,7 @@ A validator you can't trust is worse than no validator, because it converts "I d
 To keep the promise sharp, circsim deliberately does **not**:
 
 - edit schematics or boards, route, or run DRC;
-- do signal-integrity, EM, or crosstalk analysis, or model trace parasitics in the simulation (each net is one ideal node);
+- do signal-integrity, EM, or crosstalk analysis, or extract inductance and capacitance from the layout (signal nets remain ideal; the solve API can model power and ground resistance);
 - run MCU firmware (microcontrollers are [supply-load stubs, or interactive pins](./models#stubs-and-interactive-pins) if you choose);
 - import Altium, IPC-2581, or Gerbers (KiCad only, for now);
 - talk to the cloud: it is fully offline, and the "ask your LLM" helper is copy-and-paste, not an API call.

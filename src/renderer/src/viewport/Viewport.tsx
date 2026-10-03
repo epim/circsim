@@ -22,6 +22,7 @@ import { formatVolts } from './markers'
 import type { PickEvent } from './picking'
 import type { OverlayMode } from './overlay'
 import type { BoardModel } from '../../../core/kicad/types'
+import type { CopperOp } from '../../../core/copper'
 
 interface ViewportProps {
   /** Board to display. When undefined the viewport shows an empty scene. */
@@ -34,6 +35,7 @@ interface ViewportProps {
   overlay?: OverlayMode
   /** Per-net voltages for the voltage overlay + op annotations. */
   netVoltages?: Map<number, number>
+  copper?: CopperOp | null
   /** Min/max voltage for the overlay legend. */
   voltageRange?: { min: number; max: number } | null
   /**
@@ -58,6 +60,7 @@ export default function Viewport({
   onPick,
   overlay,
   netVoltages,
+  copper,
   voltageRange,
   onSceneReady,
   onRender,
@@ -131,7 +134,7 @@ export default function Viewport({
     if (overlay && sceneRef.current) {
       sceneRef.current.setOverlay(overlay)
     }
-  }, [overlay])
+  }, [overlay, board])
 
   // Net voltages → tint + annotations
   useEffect(() => {
@@ -140,7 +143,8 @@ export default function Viewport({
     const range = voltageRange ?? { min: 0, max: 5 }
     scene.applyNetVoltages(netVoltages, range.min, range.max)
     scene.showOpAnnotations(netVoltages)
-  }, [netVoltages, voltageRange])
+    scene.applyPadVoltages(copper ?? null, voltageRange ?? null)
+  }, [netVoltages, voltageRange, copper, board])
 
   return (
     <div
@@ -207,6 +211,13 @@ export default function Viewport({
               {formatVolts(volts)}
             </span>
           ))}
+          {copper && Object.entries(copper.padVoltages).flatMap(([ref, pads]) =>
+            Object.entries(pads).filter(([, volts]) => Number.isFinite(volts)).map(([pad, volts]) => (
+              <span key={`${ref}.${pad}`} data-testid="pad-op-annotation" data-ref={ref} data-pad={pad}>
+                {ref}.{pad}: {formatVolts(volts)}
+              </span>
+            )),
+          )}
         </div>
       )}
     </div>

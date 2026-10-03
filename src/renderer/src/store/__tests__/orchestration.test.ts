@@ -34,7 +34,8 @@ import {
   mapOpResultToCurrents,
   type AppStore,
 } from '../appStore'
-import { createMockSimClient, type MockSimClient } from '../../ipc/simClient'
+import type { MockSimClient } from '../../ipc/simClient'
+import { createBenchMockSimClient } from './benchMock'
 import type { Resolution } from '../../../../core/models/types'
 import type { Instrument } from '../../../../core/spicegen/instruments'
 import { BENCH_TSTEP_MAX_SECONDS, type SimCommand } from '../../../../simhost/protocol'
@@ -73,7 +74,7 @@ describe('orchestration — powerOn applies op annotations + tint (fixture-rc)',
   let board: ReturnType<typeof makeBoardHooks>
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     board = makeBoardHooks()
     store = createAppStore({ simClient: mock })
     store.getState().setBoardHooks(board.hooks)
@@ -110,7 +111,7 @@ describe('orchestration — run / pause / resume / pace (fixture-rc)', () => {
   let vinId: number
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
@@ -208,7 +209,7 @@ describe('orchestration — samples feed per-probe ring buffers + live overlay',
   let outId: number
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     board = makeBoardHooks()
     store = createAppStore({ simClient: mock })
     store.getState().setBoardHooks(board.hooks)
@@ -254,7 +255,7 @@ describe('orchestration — samples feed per-probe ring buffers + live overlay',
 
 describe('orchestration — benchRestarted toast + sequential-logic caveat', () => {
   it('benchRestarted on an analog board sets a toast WITHOUT the digital caveat', () => {
-    const mock = createMockSimClient()
+    const mock = createBenchMockSimClient()
     const store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     mock.emit({ type: 'benchRestarted', reason: 'window-elapsed' })
@@ -265,7 +266,7 @@ describe('orchestration — benchRestarted toast + sequential-logic caveat', () 
   })
 
   it('benchRestarted with a digital part present adds the sequential-logic caveat', () => {
-    const mock = createMockSimClient()
+    const mock = createBenchMockSimClient()
     const store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     // Inject a fake digital resolution to flip the caveat.
@@ -283,7 +284,7 @@ describe('orchestration — benchRestarted toast + sequential-logic caveat', () 
 
 describe('orchestration — convergenceFailure card', () => {
   it('convergenceFailure event sets a plain-language card with the raw detail', () => {
-    const mock = createMockSimClient()
+    const mock = createBenchMockSimClient()
     const store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     store.setState({ simState: 'op' })
@@ -299,7 +300,7 @@ describe('orchestration — convergenceFailure card', () => {
 
 describe('orchestration — fidelity banner', () => {
   it('no banner when every resolution is ok', () => {
-    const mock = createMockSimClient()
+    const mock = createBenchMockSimClient()
     const store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     expect(fidelityBannerItems(store.getState().resolutions)).toEqual([])
@@ -326,7 +327,7 @@ describe('orchestration — SimHost crash replay', () => {
   let vinId: number
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
@@ -488,7 +489,7 @@ describe('orchestration: the scope probes are the watched vectors (issue #25)', 
     mock.sent.filter((c): c is Extract<SimCommand, { type: 'watch' }> => c.type === 'watch')
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     const nets = store.getState().circuit!.nets

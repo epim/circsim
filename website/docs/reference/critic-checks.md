@@ -12,14 +12,14 @@ Every finding is a **risk to check, not a verdict**, and every one carries an *"
 | Clearance | No | On board open |
 | Decoupling | No | On board open |
 | Loop area | No | On board open |
-| Ampacity | **Yes** (operating point) | After each solve |
-| IR-drop | **Yes** (operating point) | After each solve |
-| Thermal | **Yes** (operating point and per-part power, not yet computed) | Not active: listed as not assessed |
+| Ampacity | **Yes** (physical copper operating point) | After a copper-aware solve |
+| IR-drop | **Yes** (physical copper operating point) | After a copper-aware solve |
+| Thermal | **Yes** (operating point with solved terminal currents) | After a solve with complete per-part power |
 
 Before you energize, the three simulation-informed checks show as *"needs simulation"* in the panel.
 
-::: warning Two fixed assumptions worth knowing up front
-- **Copper weight is assumed to be 1 oz (35 µm) on every layer.** This is a fixed default: it is **not** read from your board's stackup and can't currently be changed. The ampacity and IR-drop numbers are computed against 1 oz. If your board is heavier (2 oz), those checks are conservative (they'll over-warn); if it's lighter (0.5 oz), they're optimistic. Trust them less.
+::: warning Copper and design-rule assumptions
+- **Copper weight defaults to 1 oz (35 µm) on every layer.** It is not read from your board's stackup. The physical solve options can change it, and ampacity and IR-drop use the same network weight. Check that assumption against your intended fabrication stackup.
 - **Design-rule numbers are circsim's defaults, not your project's.** The clearance minimum (0.2 mm) is a generic default, not your KiCad net-class rules. Treat the Critic as a second opinion, not a substitute for your CAD tool's own DRC.
 :::
 
@@ -71,19 +71,19 @@ The loop-area check measures distance *to ground copper*. If your board has **no
 
 ## Ampacity *(needs operating point)*
 
-Rates **each track against the current it actually carries**. The check shares the IR-drop solve (see below): the rail's copper is solved with the operating-point load currents injected at the load pads, every segment gets the current the solve puts through it, and a track is flagged when that current exceeds its IPC-2221 external-layer capacity at a 10 °C rise. A bypass-capacitor stub sees the milliamps it really carries, a thin track under a pour sees only its share of the pour's current, and a one-amp LED feed on a 0.15 mm track is rated against one amp (earlier versions estimated a lumped half of the rail's summed currents, which under-called exactly that case).
+Rates **each track against the current it actually carries**. The check shares the ngspice operating point with the parts and IR-drop check: power and ground copper are resistor networks in the circuit, every segment gets its solved current, and a track is flagged when that current exceeds its IPC-2221 external-layer capacity at a 10 °C rise. A bypass-capacitor stub sees the milliamps it really carries, a thin track under a pour sees only its share of the pour's current, and a one-amp LED feed on a 0.15 mm track is rated against one amp (earlier versions estimated a lumped half of the rail's summed currents, which under-called exactly that case).
 
 - **Undersized trace** *(warn, or error if current exceeds ~1.5× the rated capacity)*: narrow copper carrying more than it's rated for runs hot and can fuse. *Suggestion: widen the trace or add copper.*
 
-**Assumes:** 1 oz external copper, ΔT 10 °C, using the IPC-2221 charts method (the classic derating standard, coarser than the newer IPC-2152, and it doesn't distinguish inner from outer layers, so an inner-layer "pass" is optimistic). The supply entry is taken from your bench lead where one is attached, else guessed (see IR-drop). Copper pours are not rated: a pour is a sheet, and its current density is an IR-drop question.
+**Assumes:** the physical network's copper weight (default 1 oz), ΔT 10 °C, using the IPC-2221 external-layer charts method (the classic derating standard, coarser than the newer IPC-2152, and it doesn't distinguish inner from outer layers, so an inner-layer "pass" is optimistic). The supply entry is taken from your bench lead where one is attached, else guessed (see IR-drop). Copper pours are not rated: a pour is a sheet, and its current density is an IR-drop question.
 
-**Where the currents come from.** Branch currents come from the solve, not only from LEDs. LEDs are read from their sense ammeters, resistors from Ohm's law on the solved node voltages, capacitors carry nothing at DC, and bench sources are read at their series resistor. Every other part (ICs, regulators, transistors, digital chips) gets the current Kirchhoff's current law leaves on its pads: at each net the currents into all parts sum to zero, so when one unmeasured part is the only one left on a net its pad current is fixed, and that can fix the next. The currents are those of the simulation's ideal nets, that is, what each net would carry if its copper were perfect.
+**Where the currents come from.** The copper-aware deck measures every resolved model terminal with a series 0 V meter. Pad voltages and segment currents come from the same ngspice operating point as the components, including the ground return. The critic uses the copper weight and mesh pitch of that solve. Signal nets retain ideal connectivity.
 
-**Not assessed.** If the operating point carries no branch currents at all, the check is listed as *not assessed* instead of passing. If two unmeasured parts share every net they touch (two ICs on one rail with nothing measured between them), their currents cannot be separated: the check names them in its not-assessed line and does not count them as zero. The same line names any pad that carries current but that no modelled copper connects to the supply entry. A rail whose pads carry current but that could not be solved at all (no copper on the net, no pad touching any copper, or a solve that did not converge) is named there too, so it is never listed as assessed and clean.
+**Not assessed.** In ideal bench mode, the app critic starts its physical assessment after a directly converged primary operating point. CLI `audit` requests physical copper automatically. An ideal-only result supplied through the solve API cannot assess copper. If the operating point carries no branch currents at all, the check is listed as *not assessed* instead of passing. Parts with unresolved model currents are named in the not-assessed line. The same line names any pad that carries current but that no modelled copper connects to the supply entry. A rail whose pads carry current but that could not be solved at all (no copper on the net, no pad touching any copper, or a solve that did not converge) is named there too, so it is never listed as assessed and clean.
 
 ## IR-drop / rail sag *(needs operating point)*
 
-Builds a resistive model of each rail's copper, injects the operating-point load currents, solves it, and reports the worst supply→load voltage sag as a percentage of the nominal rail. The model contains:
+Reads physical pad voltages and segment currents from the copper-aware ngspice operating point and reports the worst supply-to-load sag as a percentage of the source-entry voltage. The model contains:
 
 - **Tracks** as resistors.
 - **Vias** as barrel resistors derived from the drill, 20 µm plating and the board thickness (about 1.4 mΩ for a 0.3 mm drill on a 1.6 mm board), joining every copper layer they span that the rail has copper on.
@@ -97,21 +97,22 @@ Builds a resistive model of each rail's copper, injects the operating-point load
 - **Rail sags** *(warn / error)*: copper resistance drops voltage between the supply entry and the load; sagging rails brown-out ICs and shift analog references. *Suggestion: for a path through a pour, widen its narrowest section, stitch it to a second layer or move the load closer to the entry; for a track path, widen or shorten the trace, add a copper pour or a second feed, or move the load.*
 - **Ground return rises or falls** *(warn / error)*: the same, for the ground net: it rises under a positive rail's loads and falls under a negative rail's.
 
-**Assumes:** 1 oz copper (a fixed default, not read from your stackup, see the callout above); the zone *outline* stands in for the fill, so thermal-relief spokes, clearance islands around other nets' pads and keepouts are not modelled and a pour reads slightly better here than KiCad's fill will be; a neck narrower than the mesh pitch can be lost (the loads behind it are then reported as not reached); a track that ends on the middle of another track's body is not treated as joined; the supply entry (your lead, or a guess when none is recorded); currents as described under Ampacity.
+**Assumes:** the physical network's copper weight (default 1 oz, not read from your stackup); the zone *outline* stands in for the fill, so thermal-relief spokes, clearance islands around other nets' pads and keepouts are not modelled and a pour reads slightly better here than KiCad's fill will be; a neck narrower than the mesh pitch can be lost (the loads behind it are then reported as not reached); a track that ends on the middle of another track's body is not treated as joined; the supply entry (your lead, or a guess when none is recorded); currents as described under Ampacity.
 
-**Not assessed.** With no branch currents in the operating point the check is listed as *not assessed*. Parts whose current the solve could not resolve, and pads the modelled copper does not connect to the supply entry, are named in the check's not-assessed line, and so is a rail that carries current but could not be solved at all, or whose only current feeds it; none of them is silently counted as zero or dropped.
+**Not assessed.** The app critic and CLI `audit` obtain physical pad voltages automatically; an ideal-only solve API result cannot assess physical sag. With no branch currents in the operating point the check is listed as *not assessed*. Parts whose current the solve could not resolve, and pads the modelled copper does not connect to the supply entry, are named in the check's not-assessed line, and so is a rail that carries current but could not be solved at all, or whose only current feeds it; none of them is silently counted as zero or dropped.
 
 ## Thermal *(needs operating point)*
 
 A **first-order, relative** heat-spread proxy, not absolute temperature. It relaxes a 2D heat map from each part's dissipation and reports where heat concentrates.
 
+- **Above explicit power rating** *(error)*: solved DC dissipation exceeds the part's `PowerRating` field.
 - **Warmest part** *(info)*: the part at the peak of the proxy. Value is in arbitrary units, **not °C**.
 - **Hot cluster** *(warn)*: two hot parts close together reinforce each other in the proxy. *Suggestion: spread high-power parts apart or add copper/thermal relief.*
 
 **Assumes:** a first-order 2D heat-spread proxy; relative units, not absolute °C.
 
-::: warning Thermal is not active today
-The thermal check needs per-part power dissipation, which this version doesn't compute yet, so it does not run: the Critic panel and the copied report list it as "thermal: not assessed (no per-part power data from the simulation yet)", and "No risks flagged" does not cover heat concentration. Ampacity and IR-drop run on branch currents from the operating-point solve (every part, not only LEDs) and are the working simulation-informed checks; the thermal check does not yet draw on those currents. Read any thermal finding strictly as a *relative* placement concern, never a temperature prediction.
+::: warning Thermal needs complete solved terminal data
+Power is derived from solved terminal voltages and signed currents: resistor dissipation agrees with I squared R; a two-terminal diode or LED uses its voltage drop times current; an IC uses the signed sum of terminal V times I, subtracting power delivered through its outputs. Copper-aware solves meter each terminal of a model actually emitted into the deck. Ideal solves can supply power when their currents are unambiguous. A model-less part has no circuit element and therefore zero modeled current and power; that is not a measurement of its real behavior. Parts with missing model meters, physically unpowered parts, unavailable digital templates, and skipped incomplete primitive cards have unknown power and are listed as not assessed. A board field `PowerRating` such as `0.25W` enables an error when solved dissipation exceeds that explicit rating; package ratings are not guessed. For example, a 50 ohm resistor at 5 V dissipates 0.5 W and exceeds a 0.25 W rating. Read thermal placement findings strictly as a relative concern, never a temperature prediction.
 :::
 
 ## Severity summary

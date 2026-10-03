@@ -279,6 +279,12 @@ contextBridge.exposeInMainWorld('circsim', {
     })
   },
 
+  /** Planned replacement of a suspect engine; the fresh port uses the normal handshake. */
+  restartSimhost: (): Promise<void> => {
+    latestPort = null
+    return ipcRenderer.invoke('circsim:restartSimhost') as Promise<void>
+  },
+
   /**
    * Register a callback that fires whenever SimHost exits (crash or clean exit).
    * The payload `{ willRespawn: boolean }` indicates whether Main will attempt

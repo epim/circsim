@@ -43,10 +43,12 @@ export default function CriticPanel(): React.ReactElement | null {
   const store = useAppStoreApi()
   const report = useApp(s => s.criticReport)
   const selectedFindingId = useApp(s => s.selectedFindingId)
+  const pending = useApp(s => s.criticPending)
   return (
     <CriticPanelView
       report={report}
       selectedFindingId={selectedFindingId}
+      pending={pending}
       onSelect={id => store.getState().selectFinding(id)}
     />
   )
@@ -57,10 +59,12 @@ export function CriticPanelView({
   report,
   selectedFindingId,
   onSelect,
+  pending = false,
 }: {
   report: CriticReport | null
   selectedFindingId: string | null
   onSelect: (id: string) => void
+  pending?: boolean
 }): React.ReactElement | null {
   const [copied, setCopied] = React.useState(false)
   // Issue #72: a group longer than CRITIC_GROUP_CAP shows its first rows and a
@@ -86,6 +90,9 @@ export function CriticPanelView({
 
   return (
     <div style={panelStyle} data-testid="critic-panel">
+      {pending && <div role="status" data-testid="critic-pending" style={{ color: TEXT_HINT }}>
+        Copper assessment updating. Electrical checks will follow the bench readings.
+      </div>}
       <div style={headerStyle}>
         <span style={{ fontWeight: 600 }}>Board Critic</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

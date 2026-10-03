@@ -671,6 +671,12 @@ app.whenReady().then(async () => {
   })
 
   // Start the first SimHost spawn.
+  ipcMain.handle('circsim:restartSimhost', event => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+      throw new Error('SimHost restart unavailable for this window')
+    }
+    supervisor.restart()
+  })
   supervisor.start()
 
   // Deliver port2 to the renderer when the page is ready.

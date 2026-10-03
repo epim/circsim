@@ -29,6 +29,14 @@ When the solve lands:
 
 The classic reassurance is a rail reading close to what you set ("5 V rail at 4.98 V") and an output where you expect it.
 
+## Choose ideal nets or physical pads
+
+The bench starts at **Ideal nets**. Enable **Copper-aware** in its header to include routed power and ground resistance. Changing the toggle after energizing reruns the operating point. The toggle is unavailable while a solve or transient is running or paused; use Power On to return to an idle bench.
+
+In physical mode, pads on the same rail can have different voltages, including ground lift. Tint and labels use those individual values. Expand **Operating point pad values** in the voltage legend to read the numeric snapshot. During Run, pad tint and labels follow the latest samples; the list keeps the operating-point snapshot. Tracks retain the net tint as context, so use the pads for local readings. Gray pads have no voltage reading; routing gaps appear in the Critic.
+
+The bundled 555 sample is unrouted in places. Physical mode exposes those gaps and may need a transient-fallback bias snapshot; that is not evidence that the board's copper is complete.
+
 ## Read it honestly
 
 circsim tells you *how* it solved, because that governs how much to trust the numbers. If the solve needed a **numerical fallback** (a *gentler solve*, called *gmin stepping*, or a *ramped solve*, called *source stepping*, two techniques the solver falls back on when a straight solve won't settle, or a transient assist), a **caveat** appears: *"Check these voltages. These voltages needed a workaround to solve; treat 0.000 V readings as unknown."* A fallback op can report a misleading 0.000 V on nets it couldn't resolve, so treat those numbers as suspect. A clean direct solve carries no caveat, and the bundled op-amp, 555, and regulator models are written to solve directly, so the bundled sample and ordinary boards built from them open without one. (You don't need to know how those techniques work, just that seeing the caveat means "double-check." The banner's **Details** disclosure names which workaround ran.)
@@ -47,7 +55,13 @@ While the board is energized, editing any bench instrument re-solves automatical
 
 ## What the operating point unlocks
 
-A solved operating point also feeds the simulation-informed [Board Critic](./run-critic) checks: **ampacity** and **IR-drop** run against the branch currents of the solve (every part, not only LEDs), through your tracks, vias and copper pours, so you find out whether your power copper is wide enough for the load you just measured. Anything the solve could not measure is named in the panel rather than counted as zero.
+After Power On or Energize, the [Board Critic](./run-critic) uses physical copper for its electrical checks, regardless of the bench toggle, when a suitable solve is available. Ampacity, IR-drop and terminal power use physical pad voltages and currents. Missing current, unknown power and routing gaps are named explicitly.
+
+In ideal mode, the bench readings appear as soon as their solve finishes; the physical critic assessment follows afterward. The Critic panel says **Copper assessment updating** while its electrical checks are pending. During a knob drag, bench readings update before one critic refresh for the final setting. If the bench solve fails or ngspice rejects its circuit, circsim retains routing-gap information and leaves electrical copper checks unassessed. A Run request waits for any active critic work to release the shared engine.
+
+The extra physical assessment runs after a direct ideal solve. If the ideal solve needed a fallback, the critic keeps geometry findings and leaves electrical copper checks unassessed. A physical critic solve that needs a fallback can still provide a bias snapshot, but circsim replaces its simulation host before restoring the ideal bench, to avoid reusing native transient state.
+
+Run and knob changes made while that assessment is pending are applied in order. Once a transient has started, a supply knob change uses the normal live update instead of replacing the run with another operating point. If the simulation host cannot restart, a recovery card explains that the app must be restarted before the bench can continue.
 
 ## Next
 

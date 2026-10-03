@@ -25,7 +25,8 @@ import {
   hasSupplyAttached,
   type AppStore,
 } from '../appStore'
-import { createMockSimClient, type MockSimClient } from '../../ipc/simClient'
+import type { MockSimClient } from '../../ipc/simClient'
+import { createBenchMockSimClient, benchOpCount } from './benchMock'
 import type { Circuit } from '../../../../core/netlist/extract'
 
 const sampleDir = join(__dirname, '../../../../../resources/sample')
@@ -164,7 +165,7 @@ describe('energize() — auto-rig + op solve lights the LED', () => {
   let mock: MockSimClient
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(firstLight, 'first-light.kicad_pcb')
   })
@@ -218,7 +219,7 @@ describe('re-op while energized — lowering the supply dims the LED', () => {
   let supplyId: string
 
   beforeEach(async () => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(firstLight, 'first-light.kicad_pcb')
 
@@ -233,14 +234,14 @@ describe('re-op while energized — lowering the supply dims the LED', () => {
   })
 
   it('updateInstrument while energized re-loads + re-runs the op with the lowered voltage', async () => {
-    const before = mock.sent.filter(c => c.type === 'runOp').length
+    const before = benchOpCount(mock)
     const supply = store.getState().instruments.find(
       i => 'id' in i && i.id === supplyId,
     )!
     store.getState().updateInstrument(supplyId, { ...supply, volts: 2 } as typeof supply)
 
     // A fresh op solve was kicked off by the energized re-op.
-    const after = mock.sent.filter(c => c.type === 'runOp').length
+    const after = benchOpCount(mock)
     expect(after).toBeGreaterThan(before)
 
     // BEHAVIOUR: the re-op deck reflects the lowered supply voltage (DC 2), not a
@@ -257,7 +258,7 @@ describe('re-op while energized — lowering the supply dims the LED', () => {
   })
 
   it('coalesces a knob-drag flood: bounded op solves, settles on the FINAL value', async () => {
-    const before = mock.sent.filter(c => c.type === 'runOp').length
+    const before = benchOpCount(mock)
     const supply = store.getState().instruments.find(
       i => 'id' in i && i.id === supplyId,
     )! as { id: string; kind: 'dc-supply'; netId: number; volts: number; seriesOhms: number }
@@ -271,20 +272,21 @@ describe('re-op while energized — lowering the supply dims the LED', () => {
 
     // (a) BOUNDED: not one full re-op per call. Only the FIRST drag value started
     // an op solve; the other three coalesced into the pending request.
-    const midRunOps = mock.sent.filter(c => c.type === 'runOp').length - before
+    const midRunOps = benchOpCount(mock) - before
     expect(midRunOps).toBe(1)
 
     // Resolve the in-flight op → the coalescer re-solves ONCE for the latest (1 V).
     mock.emit({ type: 'opResult', values: { [d1CurrentKey()]: 0.004, leda: 1.75, vin: 4 } })
     // Let the first op's continuation run + the trailing solve get issued (its
     // loadCircuit+runOp are sent and a fresh opResult listener is registered).
-    await flushMicrotasks()
+    for (let i = 0; i < 30 && benchOpCount(mock) < before + 2; i++) await flushMicrotasks()
+    expect(benchOpCount(mock)).toBe(before + 2)
     mock.emit({ type: 'opResult', values: { [d1CurrentKey()]: 0.001, leda: 1.6, vin: 1 } })
     await store.getState().whenReopSettled()
 
     // (b) The FINAL state reflects the LAST drag value (1 V), and the total op
     // solves stayed bounded (far fewer than one-per-call would have produced).
-    const totalRunOps = mock.sent.filter(c => c.type === 'runOp').length - before
+    const totalRunOps = benchOpCount(mock) - before
     expect(totalRunOps).toBe(2) // initial in-flight + one trailing re-solve
     expect(store.getState().instruments.find(i => 'id' in i && i.id === supply.id))
       .toMatchObject({ volts: 1 })
@@ -297,7 +299,7 @@ describe('re-op while energized — lowering the supply dims the LED', () => {
     const supply = store.getState().instruments.find(
       i => 'id' in i && i.id === supplyId,
     )! as { id: string; kind: 'dc-supply'; netId: number; volts: number; seriesOhms: number }
-    const before = mock.sent.filter(c => c.type === 'runOp').length
+    const before = benchOpCount(mock)
 
     // One change starts an op; a second change BACK to the in-flight value must not
     // trigger an extra trailing solve (no-op guard against an infinite loop).
@@ -306,14 +308,14 @@ describe('re-op while energized — lowering the supply dims the LED', () => {
     mock.emit({ type: 'opResult', values: { [d1CurrentKey()]: 0.003, leda: 1.7, vin: 3 } })
     await store.getState().whenReopSettled()
 
-    const totalRunOps = mock.sent.filter(c => c.type === 'runOp').length - before
+    const totalRunOps = benchOpCount(mock) - before
     expect(totalRunOps).toBe(1)
   })
 
   it('does NOT re-op when not energized (no op shown yet)', () => {
     // Fresh store: open board, attach a supply, but never run an op (opVoltages
     // null → not energized), so a knob nudge must not trigger an op solve.
-    const m2 = createMockSimClient()
+    const m2 = createBenchMockSimClient()
     const s2 = createAppStore({ simClient: m2 })
     s2.getState().openBoardFromText(firstLight, 'first-light.kicad_pcb')
     const vin = s2.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!
@@ -328,7 +330,7 @@ describe('re-op while energized — lowering the supply dims the LED', () => {
 
 describe('coach notes after an op', () => {
   it('no supply attached → "nothing is powering" note for the dark LED', () => {
-    const mock = createMockSimClient()
+    const mock = createBenchMockSimClient()
     const store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(firstLight, 'first-light.kicad_pcb')
     // Remove the auto supply so the board has a ground but no source.

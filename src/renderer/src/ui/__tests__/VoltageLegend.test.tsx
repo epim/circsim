@@ -12,6 +12,20 @@ import { VOLTAGE_RAMP_STOPS, voltageRampGradient, voltageRampRgb } from '../volt
 import { contrastRatio } from '../palette'
 
 describe('VoltageLegend', () => {
+  it('identifies per-pad readings, ground lift and fallback snapshots', () => {
+    const html = renderToStaticMarkup(<VoltageLegend min={0.3} max={4.8}
+      padVoltages={{ R1: { '1': 4.8, '2': 0.3 } }} method="tran-fallback" />)
+    expect(html).toContain('at pads')
+    expect(html).toContain('R1.1: 4.800 V')
+    expect(html).toContain('R1.2: 0.300 V')
+    expect(html).toContain('Settled transient snapshot')
+  })
+  it('does not invent a voltage scale when a physical solve has no readings', () => {
+    const html = renderToStaticMarkup(<VoltageLegend min={0} max={5} padVoltages={{}} method="failed" />)
+    expect(html).toContain('No physical pad readings available')
+    expect(html).not.toContain('voltage-legend-strip')
+    expect(html).not.toContain('voltage-legend-min')
+  })
   it('prints the min, middle and max voltage in text', () => {
     const html = renderToStaticMarkup(<VoltageLegend min={0} max={5} />)
     expect(html).toContain('data-testid="voltage-legend"')

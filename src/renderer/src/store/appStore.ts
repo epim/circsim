@@ -84,6 +84,10 @@ import {
 } from '../boardOpen/pipeline'
 import { createInlineRunner, type BoardOpenRunner } from '../boardOpen/runner'
 import { deriveSolvedCurrents, type SolvedCurrents } from '../../../core/critic/solvedCurrents'
+import type { CopperOp } from '../../../core/copper'
+import { copperResult } from '../../../core/solve/copperResult'
+import { padVoltageRange } from '../viewport/padVoltage'
+import { withCopperFindings } from './copperFindings'
 
 import {
   autosaveAllowed,
@@ -371,6 +375,8 @@ export interface BoardHooks {
   applyNetVoltages(voltages: Map<number, number>, minVolts: number, maxVolts: number): void
   /** Show floating net-voltage labels from an op result. */
   showOpAnnotations(voltages: Map<number, number>): void
+  /** Replace physical pad tint and labels; null clears the previous physical op. */
+  applyPadVoltages?(copper: CopperOp | null, range: { min: number; max: number } | null): void
   /**
    * Drive per-LED emissive glow from op-point device currents (ref → amps).
    * Additive over voltage tint/annotations; LEDs at ~0 current stay dark.
@@ -534,6 +540,11 @@ export interface AppState {
 
   // ── sim state ────────────────────────────────────────────────────────────────
   simState: SimRunState
+  /** Bench fidelity selection. The critic always solves physical copper. */
+  copperAware: boolean
+  copperOp: CopperOp | null
+  criticOp: OpResult | null
+  criticPending: boolean
   deckDirty: boolean
   /** Latest op-point node voltages, keyed by netId (for board annotations/tint). */
   opVoltages: Map<number, number> | null
@@ -852,6 +863,7 @@ export interface AppState {
    * wires these to the SceneManager; tests inject a spy. Optional + replaceable.
    */
   setBoardHooks(hooks: BoardHooks | null): void
+  setCopperAware(enabled: boolean): Promise<void>
 
   /** Generate deck → loadCircuit → runOp; resolves with the op voltages. */
   powerOn(): Promise<Map<number, number> | null>
@@ -985,6 +997,8 @@ export interface OpenOpts {
 
 export interface CreateAppStoreOptions {
   simClient: SimClient
+  /** Resolves after a fresh engine is attached and ready. Required to recover a critic fallback safely. */
+  restartSimhost?: () => Promise<void>
   /** Bundled library entries (tier-3). Optional; defaults to none. */
   library?: LibraryEntry[]
   /** Bundled model-library texts (filename → contents). Optional; defaults to none. */
@@ -1055,6 +1069,55 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
    * replayAfterCrash() ops still commit via ingestEvent normally.
    */
   let powerOnOpInFlight = false
+  let criticSolveInFlight = false
+  let primaryLoadFailed = false
+  let criticLoadFailed = false
+  let engineNeedsRestart = false
+  let pendingCriticRefresh: (() => Promise<void>) | null = null
+  let engineIdleResolvers: Array<() => void> = []
+  let runQueuedAfterCritic = false
+  const engineContinuations: Array<() => Promise<void> | void> = []
+  let continuationRunning = false
+
+  function enqueueEngineContinuation(continuation: () => Promise<void> | void): void {
+    engineContinuations.push(continuation)
+    drainEngineContinuations()
+  }
+
+  function drainEngineContinuations(): void {
+    if (powerOnOpInFlight || continuationRunning) return
+    const next = engineContinuations.shift()
+    if (!next) return
+    continuationRunning = true
+    // Invoke synchronously so the next continuation cannot race its engine claim.
+    let pending: Promise<void> | void
+    try {
+      pending = next()
+    } catch (error) {
+      store.setState(s => ({ logLines: [...s.logLines, {
+        level: 'error', text: `Queued bench action failed: ${error instanceof Error ? error.message : String(error)}`,
+      }] }))
+      continuationRunning = false
+      drainEngineContinuations()
+      return
+    }
+    void Promise.resolve(pending).finally(() => {
+      continuationRunning = false
+      drainEngineContinuations()
+    })
+  }
+
+  async function awaitEngineIdle(): Promise<void> {
+    while (powerOnOpInFlight) await new Promise<void>(resolve => engineIdleResolvers.push(resolve))
+  }
+
+  function releasePowerOnEngine(): void {
+    powerOnOpInFlight = false
+    drainEngineContinuations()
+    const resolvers = engineIdleResolvers
+    engineIdleResolvers = []
+    for (const resolve of resolvers) resolve()
+  }
   /**
    * True while validateSubckt's probe deck owns the engine. Same idea as
    * powerOnOpInFlight: the probe's opResult / convergenceFailure describe a
@@ -1078,29 +1141,56 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
    * solved — solve again. Coalesces a burst of changes into the minimum number of
    * op solves, always ending on the LATEST value. Re-entrancy-safe via reopInFlight.
    */
-  async function runCoalescedReop(): Promise<void> {
+  function runCoalescedReop(previousInstruments: Instrument[]): void {
     if (reopInFlight) {
       // An op is already running; mark that another solve is wanted and return.
       reopRequested = true
       return
     }
     reopInFlight = true
-    try {
-      do {
+    const token = openToken
+    enqueueEngineContinuation(async () => {
+      try {
+        do {
+          reopRequested = false
+          if (token !== openToken) break
+          const state = store.getState()
+          if (state.simState === 'running' || state.simState === 'paused') {
+            if (!state.deckDirty) for (const next of state.instruments) {
+              if (!('id' in next)) continue
+              const previous = previousInstruments.find(inst => 'id' in inst && inst.id === next.id)
+              if (!previous || previous === next) continue
+              const plan = alterPlan(previous, next, state.resolutions)
+              if (plan.kind === 'alter') for (const command of plan.commands) {
+                const parsed = parseAlterCommand(command)
+                if (parsed) simClient.send(parsed)
+              }
+            }
+            break
+          }
+          lastSolvedInstruments = store.getState().instruments
+          await store.getState().powerOn()
+          previousInstruments = lastSolvedInstruments
+          // Loop again only if a change arrived during the solve AND it left the
+          // instruments different from what we just solved (no-op guard).
+        } while (
+          reopRequested &&
+          !sameInstruments(lastSolvedInstruments, store.getState().instruments)
+        )
+      } finally {
+        reopInFlight = false
         reopRequested = false
-        lastSolvedInstruments = store.getState().instruments
-        await store.getState().powerOn()
-        // Loop again only if a change arrived during the solve AND it left the
-        // instruments different from what we just solved (no-op guard).
-      } while (
-        reopRequested &&
-        !sameInstruments(lastSolvedInstruments, store.getState().instruments)
-      )
-    } finally {
-      reopInFlight = false
-      reopRequested = false
-      flushReopSettled()
-    }
+        flushReopSettled()
+        // Knob steps await only their bench ops. Refresh the physical critic once
+        // for the final snapshot, after the burst, using the same serialized engine.
+        const refresh = pendingCriticRefresh
+        pendingCriticRefresh = null
+        if (refresh && token === openToken && store.getState().simState === 'idle') {
+          powerOnOpInFlight = true
+          try { await refresh() } finally { releasePowerOnEngine() }
+        }
+      }
+    })
   }
 
   /** Ensure a ring buffer exists for every current voltage-probe; prune the rest. */
@@ -1149,7 +1239,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
    * deck inputs (powerOn, run and replayAfterCrash all load a deck built from
    * it). null when there is no circuit or no ground to solve against.
    */
-  function currentSolveInputs(): SolveInputs | null {
+  function currentSolveInputs(copperAware = store.getState().copperAware): SolveInputs | null {
     const s = store.getState()
     if (!s.circuit || s.groundNetId === null) return null
     return buildSolveInputs(s.board, s.circuit, s.resolutions, s.instruments, s.groundNetId, {
@@ -1158,6 +1248,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       userModels: s.userModels.values(),
       railOverrides: s.railOverrides,
       measuredRails: s.measuredRails,
+      copperAware,
+      copperOptions: { supplyEntries: buildSupplyEntries(s.instruments, s.leadPositions, s.groundNetId) },
     })
   }
 
@@ -1198,6 +1290,9 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       parseError: null,
       viewerOnly: false,
       opVoltages: null,
+      copperOp: null,
+      criticOp: null,
+      criticPending: false,
       opVoltagesStale: false,
       voltageRange: null,
       currentsByRef: new Map(),
@@ -1431,6 +1526,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     autoAttachedSupplyId: null,
     guidedBlock: null,
     simState: 'idle',
+    copperAware: false,
+    copperOp: null,
+    criticOp: null,
+    criticPending: false,
     deckDirty: false,
     opVoltages: null,
     opVoltagesStale: false,
@@ -1719,7 +1818,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // Build the critic OpResult from the live op state ONLY when energized (an
       // op result is present). Without it runCritic SKIPS ampacity/thermal — which
       // is fine: opening re-audits no-sim checks, the post-op re-audit feeds reals.
-      const opResult = buildCriticOpResult(
+      const opResult = get().criticOp ?? buildCriticOpResult(
         circuit,
         opVoltages,
         currentsByRef,
@@ -1727,7 +1826,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         buildSupplyEntries(instruments, leadPositions, groundNetId),
       )
       auditEpoch++
-      applyCriticReport(runCritic(board, circuit, opResult))
+      applyCriticReport(withCopperFindings(runCritic(board, circuit, opResult), board, opResult?.copper))
     },
 
     selectFinding(id) {
@@ -1910,7 +2009,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // number of op solves and always ends on the FINAL value (runCoalescedReop):
       // if an op is in flight the latest value is queued and solved once it lands.
       if (energized) {
-        void runCoalescedReop()
+        runCoalescedReop(instruments)
       }
     },
 
@@ -1930,7 +2029,20 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       if (hooks && report) hooks.setCriticFindings?.(report.findings)
     },
 
+    async setCopperAware(enabled) {
+      const s = get()
+      if (s.copperAware === enabled || s.simState !== 'idle') return
+      set({ copperAware: enabled })
+      get().markDeckDirty()
+      if (s.opVoltages !== null) await get().powerOn()
+    },
+
     async powerOn() {
+      if (powerOnOpInFlight) {
+        if (!criticSolveInFlight) return null
+        await awaitEngineIdle()
+      }
+      if (engineNeedsRestart) return null
       const { circuit, resolutions, instruments, groundNetId } = get()
       if (!circuit) return null
       if (groundNetId === null) {
@@ -1956,6 +2068,10 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // an override mid-solve (FIX 3).
       const inputs = currentSolveInputs()
       if (!inputs) return null
+      const token = openToken
+      const supplyEntries = buildSupplyEntries(instruments, get().leadPositions, groundNetId)
+      // Capture both modes and the lead entry positions before either solve.
+      const physicalInputs = inputs.copperAware || !inputs.board ? inputs : currentSolveInputs(true)!
 
       // Retained voltages from a previous run are STALE until the new solve
       // lands — readouts dim/caption them instead of presenting them as truth
@@ -1965,6 +2081,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         convergenceCard: null,
         opCaveat: null,
         opVoltagesStale: get().opVoltages !== null,
+        criticOp: null,
+        criticPending: false,
       })
 
       // powerOn owns every commit for its own op(s): suppress the ingestEvent
@@ -1973,6 +2091,8 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // (FIX 2). The finally covers all exits: success, pass-1 timeout, pass-2
       // timeout.
       powerOnOpInFlight = true
+      primaryLoadFailed = false
+      if (reopInFlight) pendingCriticRefresh = null
       try {
         // The two-pass op with tier-3 rail sensing (src/core/solve/plan.ts). Pass
         // 1's load and op go out synchronously, inside this gate; pass 2 runs
@@ -2005,6 +2125,16 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           throw err
         }
         const { op, netVoltages: opVoltages } = solved
+        if (token !== openToken) return null
+
+        // Geometry is available while the physical assessment is pending or
+        // unavailable. It must never borrow the ideal bench's electrical values.
+        const unavailableCritic: SolveResult = physicalInputs === inputs ? solved : {
+          ...solved, op: { values: {}, method: 'failed' }, netVoltages: new Map(),
+          copper: copperResult(physicalInputs, { values: {}, method: 'failed' }, buildDeck(physicalInputs)),
+        }
+        const criticSolved = physicalInputs === inputs ? solved : unavailableCritic
+        const canRefreshCritic = physicalInputs !== inputs && (op.method === undefined || op.method === 'direct') && !primaryLoadFailed
 
         set({
           measuredRails: solved.measuredRails,
@@ -2020,9 +2150,15 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         })
         const railNotes: RailNote[] = solved.gatedOff.map(g => ({ ref: g.ref, kicadName: g.kicadName }))
 
-        const voltageRange = computeVoltageRange(opVoltages)
+        const copperOp = solved.copper ?? null
+        const voltageRange = copperOp ? padVoltageRange(copperOp.padVoltages) : computeVoltageRange(opVoltages)
         const currentsByRef = applyOpCurrents(boardHooks, op.values, resolutions, circuit)
-        const criticCurrents = deriveCriticCurrents(inputs, solved)
+        const criticCurrents = deriveCriticCurrents(physicalInputs, criticSolved)
+        const criticLedCurrents = mapOpResultToCurrents(criticSolved.op.values, buildLedSpiceNames(resolutions, circuit))
+        const criticOp = buildCriticOpResult(circuit, criticSolved.netVoltages, criticLedCurrents, criticCurrents,
+          physicalInputs.copperNetwork ? supplyEntries : undefined,
+          criticSolved.copper,
+        ) ?? null
 
         // Coach: explain any dark LEDs in plain language (First Light, L3).
         const coachNotes = diagnoseDarkLeds(
@@ -2041,6 +2177,9 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           voltageRange,
           currentsByRef,
           criticCurrents,
+          copperOp,
+          criticOp,
+          criticPending: canRefreshCritic,
           coachNotes,
           railNotes,
           undrivenNets: solved.undrivenNets,
@@ -2056,15 +2195,69 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         })
 
         // Push onto the 3D board: floating voltage labels + copper voltage tint.
-        applyOpToBoard(boardHooks, opVoltages, voltageRange)
+        applyOpToBoard(boardHooks, opVoltages, voltageRange, copperOp)
 
         // Re-run the critic with the fresh op result so the sim-dependent checks
         // (ampacity / thermal) now run with real node voltages + currents (Spec §7).
         get().runCriticAudit()
+        if (canRefreshCritic) {
+          const refreshCritic = async (): Promise<void> => {
+            if (token !== openToken || !sameInstruments(instruments, get().instruments) || get().copperAware !== inputs.copperAware) return
+            let physicalSolved = unavailableCritic
+            criticSolveInFlight = true
+            criticLoadFailed = false
+            try {
+              physicalSolved = await runSolvePlan(physicalInputs, solveEngine)
+            } catch {
+              // Keep geometry without electrical claims when the critic fails.
+            } finally {
+              try {
+                const direct = !criticLoadFailed && (physicalSolved.op.method === undefined || physicalSolved.op.method === 'direct')
+                if (!direct) {
+                  // A fallback can leave native transient state unsafe for the
+                  // next load (#163). Never restore onto that engine.
+                  engineNeedsRestart = true
+                  if (options.restartSimhost) {
+                    try {
+                      await options.restartSimhost()
+                      engineNeedsRestart = false
+                    } catch (error) {
+                      set(s => ({
+                        logLines: [...s.logLines, { level: 'error', text: 'SimHost restart failed; the bench requires a fresh engine.' }],
+                        convergenceCard: {
+                          plainLanguage: 'The simulator could not restart after the copper assessment. Restart the app to continue using the bench.',
+                          retryLadderNote: 'The previous engine was left unavailable to prevent an unsafe circuit reload.',
+                          rawDetail: error instanceof Error ? error.message : String(error),
+                          culprit: null, at: Date.now(),
+                        },
+                      }))
+                    }
+                  }
+                }
+                if (token === openToken && !engineNeedsRestart) await solveEngine.loadCircuit(solved.deck)
+                if (engineNeedsRestart) set({ deckDirty: true })
+              } finally {
+                criticSolveInFlight = false
+                if (token === openToken) set({ criticPending: false })
+              }
+            }
+            if (token !== openToken || !sameInstruments(instruments, get().instruments) || get().copperAware !== inputs.copperAware) return
+            const physicalCurrents = deriveCriticCurrents(physicalInputs, physicalSolved)
+            const ledCurrents = mapOpResultToCurrents(physicalSolved.op.values, buildLedSpiceNames(resolutions, circuit))
+            set({
+              criticCurrents: physicalCurrents,
+              criticOp: buildCriticOpResult(circuit, physicalSolved.netVoltages, ledCurrents, physicalCurrents,
+                supplyEntries, physicalSolved.copper) ?? null,
+            })
+            get().runCriticAudit()
+          }
+          if (reopInFlight) pendingCriticRefresh = refreshCritic
+          else await refreshCritic()
+        }
         return opVoltages
       } finally {
         // Release ingestEvent to commit ordinary (run/replay) ops again.
-        powerOnOpInFlight = false
+        releasePowerOnEngine()
       }
     },
 
@@ -2114,6 +2307,18 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     },
 
     run() {
+      if (powerOnOpInFlight) {
+        if (criticSolveInFlight && !runQueuedAfterCritic) {
+          runQueuedAfterCritic = true
+          const token = openToken
+          enqueueEngineContinuation(() => {
+            runQueuedAfterCritic = false
+            if (token === openToken && get().simState === 'idle') get().run()
+          })
+        }
+        return
+      }
+      if (engineNeedsRestart) return
       const { circuit, instruments, groundNetId, simState, deckDirty } = get()
       if (!circuit) return
       if (groundNetId === null) {
@@ -2164,6 +2369,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     },
 
     pause() {
+      if (powerOnOpInFlight) return
       // user-owner halt (Spec §7.4.3): only the user resume clears it.
       simClient.send({ type: 'halt' })
       set({ simState: 'paused' })
@@ -2250,6 +2456,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     },
 
     replayAfterCrash() {
+      engineNeedsRestart = false
       const { instruments, simState, paceFactor } = get()
       const inputs = currentSolveInputs()
       if (!inputs) return
@@ -2392,6 +2599,11 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           set({ ngspiceVersion: event.ngspiceVersion })
           break
         case 'log': {
+          if (powerOnOpInFlight && event.level === 'error'
+            && /unknown subckt|circuit not parsed|no circuit loaded|cannot load|error loading/i.test(event.text)) {
+            if (criticSolveInFlight) criticLoadFailed = true
+            else primaryLoadFailed = true
+          }
           set(s => ({
             logLines: [...s.logLines, { level: event.level, text: event.text }].slice(-2000),
           }))
@@ -2421,13 +2633,16 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           const { circuit, resolutions, instruments, groundNetId } = get()
           if (!circuit) break
           const opVoltages = mapOpResultToNetVoltages(event.values, circuit)
-          const voltageRange = computeVoltageRange(opVoltages)
           const currentsByRef = applyOpCurrents(boardHooks, event.values, resolutions, circuit)
           // The deck only supplies element names for the current derivation (LED
           // sense lines, bench resistors), which do not depend on measured rails.
           const replayInputs = currentSolveInputs()
+          const deck = replayInputs ? buildDeck(replayInputs) : []
+          const op = { values: event.values, method: event.method }
+          const copperOp = replayInputs ? copperResult(replayInputs, op, deck) ?? null : null
+          const voltageRange = copperOp ? padVoltageRange(copperOp.padVoltages) : computeVoltageRange(opVoltages)
           const criticCurrents = replayInputs
-            ? deriveCriticCurrents(replayInputs, { op: { values: event.values }, deck: buildDeck(replayInputs) })
+            ? deriveCriticCurrents(replayInputs, { op, deck, copper: copperOp ?? undefined })
             : null
           // Coach: rebuild the plain-language dark-LED notes for this op too.
           const coachNotes = diagnoseDarkLeds(
@@ -2448,9 +2663,13 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
               ? { method: event.method, at: Date.now() }
               : null
           // A fresh result also retires any staleness flag (M7 review fix).
-          set({ opVoltages, opVoltagesStale: false, voltageRange, currentsByRef, criticCurrents, coachNotes, opCaveat })
+          const criticOp = copperOp
+            ? buildCriticOpResult(circuit, opVoltages, currentsByRef, criticCurrents,
+              buildSupplyEntries(instruments, get().leadPositions, groundNetId), copperOp) ?? null
+            : get().criticOp
+          set({ opVoltages, opVoltagesStale: false, voltageRange, currentsByRef, criticCurrents, copperOp, criticOp, coachNotes, opCaveat })
           // Keep the board in sync after a replayed/standalone op too.
-          applyOpToBoard(boardHooks, opVoltages, voltageRange)
+          applyOpToBoard(boardHooks, opVoltages, voltageRange, copperOp)
           // Re-audit with the fresh op result (ampacity/thermal get real data).
           get().runCriticAudit()
           break
@@ -2459,6 +2678,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           set({ vectorNames: event.names })
           break
         case 'samples': {
+          if (criticSolveInFlight) break
           // Feed each probed net's samples into its ring buffer (the scope reads
           // these), forward the raw batch to the scope emitter, drive the live
           // copper overlay off the LATEST sample per probed net (Spec §4 step 5),
@@ -2477,7 +2697,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           })
           break
         case 'convergenceFailure':
-          if (subcktProbeInFlight) break
+          if (subcktProbeInFlight || criticSolveInFlight) break
           set({
             simState: 'idle',
             convergenceCard: {
@@ -2504,6 +2724,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
           })
           break
         case 'status':
+          if (criticSolveInFlight) break
           set({
             achievedRealtimeFactor: event.realtimeFactor,
             simTimeSeconds: event.simTimeSeconds,
@@ -2648,10 +2869,8 @@ export function mapVectorNameToLedRef(name: string): string | null {
  * in spice-node space), translated from the store's netId→volts map via the
  * circuit's net.spiceNode. `partCurrents` (ref → amps) comes straight from
  * currentsByRef, or from the solve's branch currents when they were derived.
- * `partPower` is left undefined on both paths: circsim does not yet derive
- * per-part power (not even from the solved pad currents), and the thermal check
- * does NOT estimate it on its own, so it reports "not assessed" in the Critic
- * panel until a producer exists (#46).
+ * Terminal power and unknown-power refs come from the solve's current producer.
+ * Physical copper is retained on failed solves to surface geometry gaps.
  *
  * Exported for unit testing.
  */
@@ -2661,14 +2880,15 @@ export function buildCriticOpResult(
   currentsByRef: Map<string, number>,
   solvedCurrents?: SolvedCurrents | null,
   supplyEntries?: SupplyEntry[],
+  copper?: CopperOp,
 ): OpResult | undefined {
-  if (!opVoltages || opVoltages.size === 0) return undefined
+  if ((!opVoltages || opVoltages.size === 0) && !copper) return undefined
 
   const netToNode = new Map<number, string>()
   for (const net of circuit.nets) netToNode.set(net.id, net.spiceNode)
 
   const nodeVoltages: Record<string, number> = {}
-  for (const [netId, volts] of opVoltages) {
+  for (const [netId, volts] of opVoltages ?? []) {
     const node = netToNode.get(netId)
     if (node !== undefined) nodeVoltages[node] = volts
   }
@@ -2681,6 +2901,9 @@ export function buildCriticOpResult(
       partCurrents: solvedCurrents.partCurrents,
       padCurrents: solvedCurrents.padCurrents,
       unresolvedRefs: solvedCurrents.unresolvedRefs,
+      partPower: solvedCurrents.partPower,
+      unknownPowerRefs: solvedCurrents.unknownPowerRefs,
+      copper,
       ...(supplyEntries ? { supplyEntries } : {}),
     }
   }
@@ -2690,6 +2913,7 @@ export function buildCriticOpResult(
 
   return {
     nodeVoltages,
+    copper,
     partCurrents: Object.keys(partCurrents).length > 0 ? partCurrents : undefined,
     ...(supplyEntries ? { supplyEntries } : {}),
   }
@@ -2893,10 +3117,12 @@ function applyOpToBoard(
   hooks: BoardHooks | null,
   voltages: Map<number, number>,
   range: { min: number; max: number } | null,
+  copper: CopperOp | null = null,
 ): void {
   if (!hooks) return
   hooks.showOpAnnotations(voltages)
   if (range) hooks.applyNetVoltages(voltages, range.min, range.max)
+  hooks.applyPadVoltages?.(copper, range)
 }
 
 /**
@@ -2923,13 +3149,34 @@ function applyOpCurrents(
  */
 function deriveCriticCurrents(
   inputs: SolveInputs,
-  solve: Pick<SolveResult, 'op' | 'deck'>,
+  solve: Pick<SolveResult, 'op' | 'deck' | 'copper'>,
 ): SolvedCurrents | null {
   try {
     return deriveSolvedCurrents(inputs, solve)
   } catch {
     return null
   }
+}
+
+const copperPadNodeCache = new WeakMap<CopperOp, Map<string, Map<string, string>>>()
+function copperPadNodes(copper: CopperOp, circuit: Circuit): Map<string, Map<string, string>> {
+  let nodes = copperPadNodeCache.get(copper)
+  if (!nodes) {
+    nodes = new Map()
+    const parts = new Map(circuit.parts.map(part => [part.ref, part]))
+    const nets = new Map(circuit.nets.map(net => [net.id, net.spiceNode]))
+    for (const [ref, pads] of Object.entries(copper.padVoltages)) {
+      const padNodes = new Map<string, string>()
+      for (const pad of Object.keys(pads)) {
+        const netId = parts.get(ref)?.padNet.get(pad)
+        const node = copper.network.padNode(ref, pad) ?? (netId !== undefined ? nets.get(netId) : undefined)
+        if (node) padNodes.set(pad, node.toLowerCase())
+      }
+      nodes.set(ref, padNodes)
+    }
+    copperPadNodeCache.set(copper, nodes)
+  }
+  return nodes
 }
 
 /**
@@ -2982,6 +3229,7 @@ export function ingestSamples(
   // Start from the op tint so un-probed nets keep their op voltage, then overlay
   // the latest probed-net samples on top.
   const liveVoltages = new Map<number, number>(state.opVoltages ?? [])
+  const latestNodes = new Map<string, number>()
 
   // Live LED currents, lazily copied from the current map so LEDs absent from
   // this batch keep their last-known current. Stays null when the batch carries
@@ -2997,6 +3245,7 @@ export function ingestSamples(
     for (let i = 0; i < vectorNames.length; i++) {
       const v = values[i]
       if (!Number.isFinite(v)) continue
+      latestNodes.set(normalizeVectorKey(vectorNames[i]), v)
       const ledRef = mapVectorNameToLedRef(vectorNames[i])
       if (ledRef !== null) {
         ledCurrents ??= new Map(state.currentsByRef)
@@ -3012,6 +3261,9 @@ export function ingestSamples(
     const vecName = event.vectorNames[ci]
     const column = event.columns[ci]
     if (!column) continue
+    if (column.length > 0 && Number.isFinite(column[column.length - 1])) {
+      latestNodes.set(normalizeVectorKey(vecName), column[column.length - 1])
+    }
 
     // LED sense-ammeter column? (RAW transient name, e.g. "vsense_d1#branch" —
     // see the docstring gotcha.) Newest timepoint wins; magnitude, matching
@@ -3048,8 +3300,23 @@ export function ingestSamples(
 
   // Live copper tint off the latest samples.
   if (hooks && liveVoltages.size > 0) {
-    const range = computeVoltageRange(liveVoltages)
+    const range = state.copperOp ? state.voltageRange : computeVoltageRange(liveVoltages)
     if (range) hooks.applyNetVoltages(liveVoltages, range.min, range.max)
+    if (state.copperOp) {
+      const padNodes = copperPadNodes(state.copperOp, circuit)
+      const padVoltages = Object.fromEntries(Object.entries(state.copperOp.padVoltages).map(([ref, pads]) => {
+        const values = { ...pads }
+        for (const pad of Object.keys(pads)) {
+          const node = padNodes.get(ref)?.get(pad)
+          const volts = node ? latestNodes.get(node) : undefined
+          if (volts !== undefined) values[pad] = volts
+        }
+        return [ref, values]
+      }))
+      // Keep the legend's numeric list as the operating-point snapshot. Scene
+      // tint and labels follow display-rate samples using that same fixed scale.
+      hooks.applyPadVoltages?.({ ...state.copperOp, padVoltages }, range)
+    }
   }
 
   // Live LED glow off the newest sense-ammeter samples — the same store field +

@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { createAppStore, AUTO_SUPPLY_ID, PROBE_COLORS, nextProbeColor } from '../appStore'
-import { createMockSimClient } from '../../ipc/simClient'
+import { createBenchMockSimClient } from './benchMock'
 
 const fixturesDir = join(__dirname, '../../../../../fixtures')
 
@@ -25,7 +25,7 @@ function readFixture(name: string): string {
 
 describe('Task22 — GroundSetup: ground suggestion on load', () => {
   it('suggestGround heuristic auto-selects GND on fixture-rc', () => {
-    const store = createAppStore({ simClient: createMockSimClient() })
+    const store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     const s = store.getState()
     expect(s.groundNetId).not.toBeNull()
@@ -34,7 +34,7 @@ describe('Task22 — GroundSetup: ground suggestion on load', () => {
   })
 
   it('suggestedSupplyNetIds is an array (may be empty for fixture-rc VIN)', () => {
-    const store = createAppStore({ simClient: createMockSimClient() })
+    const store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     const s = store.getState()
     // suggestedSupplyNetIds is always an array (could be empty if no standard supply name)
@@ -44,14 +44,14 @@ describe('Task22 — GroundSetup: ground suggestion on load', () => {
   })
 
   it('setGround(null) clears ground (Run disabled)', () => {
-    const store = createAppStore({ simClient: createMockSimClient() })
+    const store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     store.getState().setGround(null)
     expect(store.getState().groundNetId).toBeNull()
   })
 
   it('setGround(id) switches ground to a different net', () => {
-    const store = createAppStore({ simClient: createMockSimClient() })
+    const store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     const vinNet = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!
     store.getState().setGround(vinNet.id)
@@ -62,7 +62,7 @@ describe('Task22 — GroundSetup: ground suggestion on load', () => {
   })
 
   it('powerOn returns null (no-op) when groundNetId is null', async () => {
-    const mock = createMockSimClient()
+    const mock = createBenchMockSimClient()
     const store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     store.getState().setGround(null)
@@ -81,7 +81,7 @@ describe('Task22 — addInstrument / removeInstrument', () => {
   let outId: number
 
   beforeEach(() => {
-    store = createAppStore({ simClient: createMockSimClient() })
+    store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
     outId = store.getState().circuit!.nets.find(n => n.kicadName === 'OUT')!.id
@@ -158,11 +158,11 @@ describe('Task22 — addInstrument / removeInstrument', () => {
 
 describe('Task22 — updateInstrument alter-vs-reload routing', () => {
   let store: ReturnType<typeof createAppStore>
-  let mock: ReturnType<typeof createMockSimClient>
+  let mock: ReturnType<typeof createBenchMockSimClient>
   let vinId: number
 
   beforeEach(async () => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
@@ -244,7 +244,7 @@ describe('Task22 — updateInstrument alter-vs-reload routing', () => {
 
 describe('Task22 — MCU interactive-pins instrument', () => {
   it('stubbing a part as interactive-pins + adding per-pin logic-inputs', () => {
-    const mock = createMockSimClient()
+    const mock = createBenchMockSimClient()
     const store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
 
@@ -307,7 +307,7 @@ describe('Milestone2 — attachSupplyToNet', () => {
   let store: ReturnType<typeof createAppStore>
 
   beforeEach(() => {
-    store = createAppStore({ simClient: createMockSimClient() })
+    store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
   })
 
@@ -413,7 +413,7 @@ describe('M7 F7 — autoAttachedSupplyId (announce the silent auto-attach)', () 
   let store: ReturnType<typeof createAppStore>
 
   beforeEach(() => {
-    store = createAppStore({ simClient: createMockSimClient() })
+    store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
   })
 
@@ -472,7 +472,7 @@ describe('M7 F7 — autoAttachedSupplyId (announce the silent auto-attach)', () 
   })
 
   it('energize() flags the supply it auto-attaches', async () => {
-    const mock = createMockSimClient()
+    const mock = createBenchMockSimClient()
     const st = createAppStore({ simClient: mock })
     st.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     // Drop the open-time auto supply so energize has to rig its own.
@@ -494,7 +494,7 @@ describe('M7 F6 — attachProbeToNet (drag-free probing)', () => {
   let outId: number
 
   beforeEach(() => {
-    store = createAppStore({ simClient: createMockSimClient() })
+    store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     outId = store.getState().circuit!.nets.find(n => n.kicadName === 'OUT')!.id
   })
@@ -546,7 +546,7 @@ describe('M7 review fix — shared probe trace-color allocation', () => {
   let gndId: number
 
   beforeEach(() => {
-    store = createAppStore({ simClient: createMockSimClient() })
+    store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     const nets = store.getState().circuit!.nets
     vinId = nets.find(n => n.kicadName === 'VIN')!.id
@@ -602,7 +602,7 @@ describe('M7 review fix — shared probe trace-color allocation', () => {
 
 describe('Task22 — multiple instruments produce valid deck via powerOn', () => {
   it('deck contains both dc-supply and voltage-probe save entries', async () => {
-    const mock = createMockSimClient()
+    const mock = createBenchMockSimClient()
     const store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     const vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id

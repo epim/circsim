@@ -59,6 +59,7 @@ function Shell(): React.ReactElement {
   const selectedRef = useApp(s => s.selectedRef)
   const opVoltages = useApp(s => s.opVoltages)
   const voltageRange = useApp(s => s.voltageRange)
+  const copperOp = useApp(s => s.copperOp)
   const parseError = useApp(s => s.parseError)
   const opening = useApp(s => s.openProgress !== null)
   const viewerOnly = useApp(s => s.viewerOnly)
@@ -394,6 +395,7 @@ function Shell(): React.ReactElement {
                   onRender={() => benchRef.current?.notifyFrame()}
                   netVoltages={opVoltages ?? undefined}
                   voltageRange={voltageRange}
+                  copper={copperOp}
                   overlay={overlay}
                 />
               ) : opening ? null : (
@@ -414,6 +416,9 @@ function Shell(): React.ReactElement {
                 <VoltageLegend
                   min={(voltageRange ?? { min: 0, max: 5 }).min}
                   max={(voltageRange ?? { min: 0, max: 5 }).max}
+                  padVoltages={copperOp?.padVoltages}
+                  unreachedPads={copperOp?.unreachedPads}
+                  method={copperOp?.method}
                 />
               )}
               {/* Plain-language dark-LED coach (non-blocking overlay). */}

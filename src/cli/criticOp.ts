@@ -28,7 +28,7 @@ export function buildCriticOpFromSolve(
   resolutions: Resolution[],
   solved: SolveResult,
 ): CriticOpResult | undefined {
-  if (solved.netVoltages.size === 0) return undefined
+  if (solved.netVoltages.size === 0 && !solved.copper) return undefined
 
   const netToNode = new Map<number, string>()
   for (const net of circuit.nets) netToNode.set(net.id, net.spiceNode)
@@ -45,6 +45,9 @@ export function buildCriticOpFromSolve(
       partCurrents: currents.partCurrents,
       padCurrents: currents.padCurrents,
       unresolvedRefs: currents.unresolvedRefs,
+      partPower: currents.partPower,
+      unknownPowerRefs: currents.unknownPowerRefs,
+      copper: solved.copper,
     }
   } catch {
     // A derivation failure leaves the critic on LED currents only, as the store does.
@@ -66,6 +69,7 @@ export function buildCriticOpFromSolve(
 
   return {
     nodeVoltages,
+    copper: solved.copper,
     partCurrents: Object.keys(partCurrents).length > 0 ? partCurrents : undefined,
   }
 }
