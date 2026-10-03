@@ -18,7 +18,7 @@ circsim op    <board.kicad_pcb> [options]
 
 ### audit
 
-Runs the Board Critic. By default it first solves an ideal-net operating point, as **Energize** does in the app. Thermal can run from solved terminal power. Ampacity and IR-drop remain not assessed because they require a physical copper solve. The solve API supports `copperAware: true`; bench and CLI controls for that mode are still being added. Findings print grouped by severity, each with its detail, assumption, and suggestion.
+Runs the Board Critic. By default it first solves a physical copper operating point. Power and ground tracks, vias and pours share the ngspice circuit with the parts. Ampacity and IR-drop use segment currents and pad voltages; thermal uses solved terminal power. Pads without copper contact or a path to the supply or return entry become located `floating:copper-gap:` findings. Missing electrical data remains not assessed. Findings print grouped by severity, each with its detail, assumption and suggestion.
 
 ```
 circsim audit board.kicad_pcb --schematic
@@ -42,7 +42,10 @@ Solves the operating point and prints every net's voltage and how the solve conv
 
 ```
 circsim op board.kicad_pcb --supply VIN=12
+circsim op board.kicad_pcb --supply VIN=12 --copper --json
 ```
+
+`op` keeps ideal nets by default. With `--copper`, output adds per-pad voltages and routing gaps. JSON adds `copper.method`, `copper.padVoltages` and `copper.unreachedPads`. Net voltages remain representative entry readings, not every pad's voltage. A failed physical solve provides no electrical pad readings.
 
 ### deck
 
@@ -62,6 +65,7 @@ circsim deck board.kicad_pcb --pass1-only     # no ngspice needed
 | `--ground NET` | all | Ground net. Default: the GND, AGND, DGND, VSS, 0V name heuristic. |
 | `--supply NET=VOLTS` | all | Attach a DC supply (0.1 ohm series, as in the app). Repeatable. Default: 5 V on the top suggested supply rail, like the app's open-time default. |
 | `--no-op` | audit | Static checks only; no simulation. |
+| `--copper` | op, deck | Include physical power and ground resistance. `audit` always does. |
 | `--out DIR` | deck | Output directory. |
 | `--pass1-only` | deck | Build the family-default deck without running ngspice. |
 | `--ngspice-dir DIR` | all | Base directory holding `<platform>/` ngspice resources. |

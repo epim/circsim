@@ -96,6 +96,8 @@ export interface MarkerController {
 
   /** Remove all annotation labels. */
   clearOpAnnotations(): void
+  /** Replace labels with identified physical pads, retaining zoom decluttering. */
+  showPadAnnotations(labels: AnnotationLabel[]): void
 
   /** Return all annotation labels (before declutter). */
   getAnnotationLabels(): AnnotationLabel[]
@@ -213,6 +215,10 @@ export function createMarkerController(): MarkerController {
 
     clearOpAnnotations(): void {
       annotationLabels = []
+    },
+
+    showPadAnnotations(labels: AnnotationLabel[]): void {
+      annotationLabels = labels
     },
 
     getAnnotationLabels(): AnnotationLabel[] {

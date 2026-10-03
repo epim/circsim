@@ -7,7 +7,7 @@ The [Board Critic](../concepts/board-critic) is circsim's read-only, pre-fabrica
 You don't press a "run critic" button. The Critic audits automatically:
 
 - **When you open a board**: the static checks run immediately: floating/dangling nets, copper clearance, decoupling proximity, and loop area.
-- **After each [operating-point solve](./energize)**: thermal can run from solved terminal power. The bench currently solves ideal nets, so ampacity and IR-drop remain not assessed. They require a physical copper solve, supported by the solve API with `copperAware: true`; bench and CLI controls are still being added.
+- **After each [operating-point solve](./energize)**: the Critic uses a copper-aware solve for ampacity, IR-drop and terminal power, regardless of the bench toggle. Pads without copper contact or a path to the entry appear as located findings. Unknown current or power remains not assessed.
 
 Open the board for static findings, then **Energize** to add the available thermal assessment. The panel names checks and parts it could not assess.
 

@@ -16,7 +16,7 @@ The schematic is an optional input, and it makes the result better. Keep the `.k
 
 ### Where the copper fits
 
-The Board Critic reads tracks, vias, pours, and part placement. The solve API can include power and ground copper as resistor networks with `copperAware: true`. Parts and the Critic then share one ngspice result: the simulated supply pads sag, return pads shift, and each track is rated against its solved current. Each signal net retains one ideal node. The live bench still uses ideal nets while its physical-mode controls are being added; its copper IR-drop and ampacity checks remain explicitly not assessed.
+The Board Critic reads tracks, vias, pours and part placement. Power and ground copper share an ngspice circuit with the parts: supply pads sag, return pads shift, and each track is rated against its solved current. Each signal net retains one ideal node. The bench starts with ideal nets and offers a **Copper-aware** toggle. After Power On, the Critic always receives a physical operating point, even when the bench stays ideal. Routing gaps become located findings; unavailable current or power remains explicitly not assessed.
 
 ## Two complementary jobs
 

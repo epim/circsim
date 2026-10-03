@@ -18,14 +18,15 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { createAppStore } from '../appStore'
-import { createMockSimClient, type MockSimClient } from '../../ipc/simClient'
+import type { MockSimClient } from '../../ipc/simClient'
+import { createBenchMockSimClient } from './benchMock'
 import { UNWIRED } from '../../../../core/spicegen/instruments'
 import { GROUND_INST_ID } from '../../bench/leads'
 
 const fixturesDir = join(__dirname, '../../../../../fixtures')
 
 function openedStore(): { store: ReturnType<typeof createAppStore>; mock: MockSimClient } {
-  const mock = createMockSimClient()
+  const mock = createBenchMockSimClient()
   const store = createAppStore({ simClient: mock })
   store.getState().openBoardFromText(
     readFileSync(join(fixturesDir, 'fixture-rc.kicad_pcb'), 'utf-8'),

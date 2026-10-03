@@ -27,7 +27,8 @@ import {
   statusBadge,
   type AppStore,
 } from '../appStore'
-import { createMockSimClient, type MockSimClient } from '../../ipc/simClient'
+import type { MockSimClient } from '../../ipc/simClient'
+import { createBenchMockSimClient } from './benchMock'
 import type { Resolution } from '../../../../core/models/types'
 
 const fixturesDir = join(__dirname, '../../../../../fixtures')
@@ -43,7 +44,7 @@ describe('Spec §12 — parse error card with line/col + viewer-only mode', () =
   let mock: MockSimClient
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
   })
 
@@ -106,7 +107,7 @@ describe('Spec §12 — no-ground guided empty state', () => {
   let vinId: number
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     vinId = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!.id
@@ -145,7 +146,7 @@ describe('Spec §12 — no-source guided empty state', () => {
   let mock: MockSimClient
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     // Ground is auto-suggested; fixture-rc's VIN is now recognised as a supply, so
@@ -200,7 +201,7 @@ describe('Spec §12 — convergence-failure card wording', () => {
   let mock: MockSimClient
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
   })
@@ -257,7 +258,7 @@ describe('F1 — opResult.method drives the op fallback caveat', () => {
   let mock: MockSimClient
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
   })
@@ -339,7 +340,7 @@ describe('M7 review fix — opVoltagesStale (retained voltages are not truth)', 
   let mock: MockSimClient
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     // fixture-rc auto-attaches a supply on VIN, so powerOn is live immediately.
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
@@ -528,7 +529,7 @@ describe('Spec §12 — fidelity banner is non-dismissable and lists refs', () =
   })
 
   it('the store does NOT expose any action to dismiss the fidelity banner (it is non-dismissable)', () => {
-    const mock = createMockSimClient()
+    const mock = createBenchMockSimClient()
     const store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     store.getState().stubPart('R1', 'open')
@@ -549,7 +550,7 @@ describe('Spec §12 — SimHost crash toast', () => {
   let mock: MockSimClient
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
   })

@@ -30,6 +30,8 @@ export default function BenchShelf({ jackHandlers }: { jackHandlers?: JackHandle
   const groundNetId = useApp(s => s.groundNetId)
   const circuit = useApp(s => s.circuit)
   const selectedNetId = useApp(s => s.selectedNetId)
+  const copperAware = useApp(s => s.copperAware)
+  const simState = useApp(s => s.simState)
   const [paletteOpen, setPaletteOpen] = useState(false)
   // Collapse to the header strip to give the board the whole column (issue #33).
   const [collapsed, setCollapsed] = useCollapsed('shelf')
@@ -67,6 +69,17 @@ export default function BenchShelf({ jackHandlers }: { jackHandlers?: JackHandle
     <div style={shelfStyle} data-testid="bench-shelf">
       <div style={shelfHeaderStyle}>
         <span style={{ fontWeight: 600 }}>Bench</span>
+        <label title="Include routed power and ground resistance in the bench. The critic always checks copper after Power On.">
+          <input
+            type="checkbox"
+            data-testid="copper-aware-toggle"
+            checked={copperAware}
+            disabled={simState !== 'idle'}
+            onChange={event => { void store.getState().setCopperAware(event.target.checked) }}
+          />
+          Copper-aware
+        </label>
+        <span style={{ color: TEXT_HINT }}>{copperAware ? 'Physical pads' : 'Ideal nets'}</span>
         {selectedNet && (
           <span style={probeRowStyle}>
             <span style={{ color: '#888' }}>Net:</span>

@@ -173,6 +173,10 @@ export function createOverlayController(
       legend = buildLegend(minVolts, maxVolts)
 
       if (mode !== 'voltage') return
+      if (voltages.size === 0) {
+        restoreCopper()
+        return
+      }
 
       // Avoid division by zero when min === max
       const range = maxVolts - minVolts

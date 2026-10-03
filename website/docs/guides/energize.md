@@ -29,6 +29,14 @@ When the solve lands:
 
 The classic reassurance is a rail reading close to what you set ("5 V rail at 4.98 V") and an output where you expect it.
 
+## Choose ideal nets or physical pads
+
+The bench starts at **Ideal nets**. Enable **Copper-aware** in its header to include routed power and ground resistance. Changing the toggle after energizing reruns the operating point. The toggle is unavailable while a solve or transient is running or paused; use Power On to return to an idle bench.
+
+In physical mode, pads on the same rail can have different voltages, including ground lift. Tint and labels use those individual values. Expand **Operating point pad values** in the voltage legend to read the numeric snapshot. During Run, pad tint and labels follow the latest samples; the list keeps the operating-point snapshot. Tracks retain the net tint as context, so use the pads for local readings. Gray pads have no voltage reading; routing gaps appear in the Critic.
+
+The bundled 555 sample is unrouted in places. Physical mode exposes those gaps and may need a transient-fallback bias snapshot; that is not evidence that the board's copper is complete.
+
 ## Read it honestly
 
 circsim tells you *how* it solved, because that governs how much to trust the numbers. If the solve needed a **numerical fallback** (a *gentler solve*, called *gmin stepping*, or a *ramped solve*, called *source stepping*, two techniques the solver falls back on when a straight solve won't settle, or a transient assist), a **caveat** appears: *"Check these voltages. These voltages needed a workaround to solve; treat 0.000 V readings as unknown."* A fallback op can report a misleading 0.000 V on nets it couldn't resolve, so treat those numbers as suspect. A clean direct solve carries no caveat, and the bundled op-amp, 555, and regulator models are written to solve directly, so the bundled sample and ordinary boards built from them open without one. (You don't need to know how those techniques work, just that seeing the caveat means "double-check." The banner's **Details** disclosure names which workaround ran.)
@@ -47,7 +55,7 @@ While the board is energized, editing any bench instrument re-solves automatical
 
 ## What the operating point unlocks
 
-A solved operating point also feeds the simulation-informed [Board Critic](./run-critic). **Thermal** can run from solved terminal power. Energize currently uses ideal nets, so **ampacity** and **IR-drop** are not assessed. Those checks require a physical copper solve, supported by the solve API with `copperAware: true`; bench controls for that mode are still being added. Missing current or power data is named in the panel rather than counted as assessed.
+After Power On or Energize, the [Board Critic](./run-critic) always uses a copper-aware operating point, regardless of the bench toggle. Ampacity, IR-drop and terminal power use physical pad voltages and currents. Missing current, unknown power and routing gaps are named explicitly.
 
 ## Next
 

@@ -37,6 +37,10 @@ import { createLedGlowController, ledColorFor, ledIntensity, type LedGlowControl
 import { createCriticOverlayController, MARKER_Z_LIFT, type CriticOverlayController } from './criticOverlay'
 import type { Finding } from '../../../core/critic/types'
 import { projectAnchorSet, type Pt } from '../bench/leadGeometry'
+import type { CopperOp } from '../../../core/copper'
+import { padWorldPos } from '../../../core/critic/geom'
+import { createPadVoltageOverlay, type PadVoltageOverlay, type VoltageRange } from './padVoltage'
+import { formatVolts } from './markers'
 
 // ─── E2E LED-glow hook (First Light, L5) ─────────────────────────────────────────
 
@@ -146,6 +150,7 @@ export interface SceneManager {
    * Call after a runOp result or live transient samples.
    */
   applyNetVoltages(voltages: Map<number, number>, minVolts: number, maxVolts: number): void
+  applyPadVoltages(copper: CopperOp | null, range: VoltageRange | null): void
 
   /**
    * Return legend data for UI display, or null when not in voltage mode.
@@ -285,6 +290,8 @@ export function createSceneManager(): SceneManager {
 
   // Scene objects (can be replaced on board reload)
   let assembled: AssembledBoard | null = null
+  let padOverlay: PadVoltageOverlay | null = null
+  let loadedBoard: BoardModel | null = null
   let silkscreenGroup: THREE.Group | null = null
 
   // ── Task 20: Overlay + markers ──────────────────────────────────────────────
@@ -469,6 +476,8 @@ export function createSceneManager(): SceneManager {
       }
       picker.clear()
       criticOverlay.dispose()
+      padOverlay?.dispose()
+      padOverlay = null
       camTween = null
       renderer?.dispose()
       renderer = null
@@ -489,6 +498,9 @@ export function createSceneManager(): SceneManager {
 
     loadBoard(board: BoardModel): void {
       if (!scene) return
+      loadedBoard = board
+      padOverlay?.dispose()
+      padOverlay = null
 
       // Clear picking registrations before rebuilding geometry
       picker.clear()
@@ -521,6 +533,9 @@ export function createSceneManager(): SceneManager {
       netPositionsMap = built.netPositions
       componentAnchorByRef = built.componentAnchors
       const { x: cx, y: cy } = built.center
+      padOverlay = createPadVoltageOverlay(board)
+      padOverlay.group.position.set(-cx, -cy, 0)
+      scene.add(padOverlay.group)
       const bb = built.bounds
 
       // Fresh LED-glow controller for this board, anchored to the component group.
@@ -632,6 +647,7 @@ export function createSceneManager(): SceneManager {
 
     setOverlay(mode: OverlayMode): void {
       overlayController.setOverlay(mode)
+      padOverlay?.setVisible(mode === 'voltage')
       dirty = true
     },
 
@@ -641,6 +657,28 @@ export function createSceneManager(): SceneManager {
 
     applyNetVoltages(voltages: Map<number, number>, minVolts: number, maxVolts: number): void {
       overlayController.applyNetVoltages(voltages, minVolts, maxVolts)
+      dirty = true
+    },
+
+    applyPadVoltages(copper: CopperOp | null, range: VoltageRange | null): void {
+      if (copper && !range) overlayController.applyNetVoltages(new Map(), 0, 0)
+      padOverlay?.setVoltages(copper?.padVoltages ?? null, range)
+      padOverlay?.setVisible(overlayController.getMode() === 'voltage')
+      if (copper && loadedBoard) {
+        const labels: AnnotationLabel[] = []
+        for (const fp of loadedBoard.footprints) for (const pad of fp.pads) {
+          const volts = copper.padVoltages[fp.ref]?.[pad.number]
+          if (volts === undefined || !Number.isFinite(volts)) continue
+          const pos = padWorldPos(fp, pad)
+          const world = kicadToWorld(pos.x, pos.y)
+          labels.push({
+            netId: pad.netId ?? 0,
+            worldPos: new THREE.Vector3(world.x - boardCenter.x, world.y - boardCenter.y, loadedBoard.boardThicknessMm),
+            text: `${fp.ref}.${pad.number}: ${formatVolts(volts)}`,
+          })
+        }
+        markerController.showPadAnnotations(labels)
+      }
       dirty = true
     },
 

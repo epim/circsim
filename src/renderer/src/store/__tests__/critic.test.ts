@@ -18,7 +18,7 @@ import {
   buildCriticOpResult,
   type BoardHooks,
 } from '../appStore'
-import { createMockSimClient } from '../../ipc/simClient'
+import { createBenchMockSimClient } from './benchMock'
 import { extract } from '../../../../core/netlist/extract'
 import { parseBoard } from '../../../../core/kicad/board'
 
@@ -31,7 +31,7 @@ describe('appStore — critic auto-trigger on board open', () => {
   let store: ReturnType<typeof createAppStore>
 
   beforeEach(() => {
-    store = createAppStore({ simClient: createMockSimClient() })
+    store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
   })
 
@@ -62,10 +62,10 @@ describe('appStore — critic auto-trigger on board open', () => {
 
 describe('appStore — critic re-audits after an operating-point solve', () => {
   let store: ReturnType<typeof createAppStore>
-  let mock: ReturnType<typeof createMockSimClient>
+  let mock: ReturnType<typeof createBenchMockSimClient>
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
     // Attach a 5V supply on VIN so the op produces a meaningful result.
@@ -73,7 +73,7 @@ describe('appStore — critic re-audits after an operating-point solve', () => {
     store.getState().addInstrument({ kind: 'dc-supply', id: 'psu1', netId: vin.id, volts: 5, seriesOhms: 0.1 })
   })
 
-  it('derives thermal power from an ideal op and keeps copper ampacity not assessed', async () => {
+  it('uses physical copper for the critic while the bench stays ideal, naming routing gaps', async () => {
     // sanity: skipped before the solve
     expect(store.getState().criticReport!.skipped.map(s => s.check)).toContain('ampacity')
 
@@ -82,12 +82,31 @@ describe('appStore — critic re-audits after an operating-point solve', () => {
     await p
 
     const report = store.getState().criticReport!
+    expect(store.getState().copperAware).toBe(false)
+    expect(store.getState().criticOp?.copper).toBeDefined()
     expect(report.ranBy).not.toContain('ampacity')
     expect(report.ranBy).toContain('thermal')
     const skippedChecks = report.skipped.map(s => s.check)
     expect(skippedChecks).toContain('ampacity')
     expect(skippedChecks).not.toContain('thermal')
-    expect(report.skipped.find(s => s.check === 'ampacity')!.reason).toContain('copper-aware')
+    expect(report.skipped.find(s => s.check === 'ampacity')!.reason).toContain('no modelled copper touches pads')
+    expect(report.skipped.find(s => s.check === 'ampacity')!.reason).not.toContain('ideal-net')
+  })
+
+  it('assesses ampacity, IR drop and thermal on a board with routed supply and return contacts', async () => {
+    const board = store.getState().board!
+    store.setState({ board: { ...board, tracks: [...board.tracks,
+      { kind: 'segment', start: { x: 5, y: 10 }, end: { x: 9.0875, y: 10 }, widthMm: 0.5, layer: 'F.Cu', netId: 1 },
+      { kind: 'segment', start: { x: 20.9125, y: 10 }, end: { x: 25, y: 10 }, widthMm: 0.5, layer: 'F.Cu', netId: 3 },
+    ] } })
+    const p = store.getState().powerOn()
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+    await p
+    expect(store.getState().criticOp!.copper!.unreachedPads).toEqual([])
+    const report = store.getState().criticReport!
+    expect(report.ranBy).toContain('ampacity')
+    expect(report.ranBy).toContain('ir-drop')
+    expect(report.ranBy).toContain('thermal')
   })
 })
 
@@ -101,7 +120,7 @@ describe('appStore — selectFinding forwards to the viewport hooks', () => {
       setCriticFindings(findings) { setCalls.push(findings.length) },
       focusFinding(f) { focused.push(f.id) },
     }
-    const store = createAppStore({ simClient: createMockSimClient() })
+    const store = createAppStore({ simClient: createBenchMockSimClient() })
     store.getState().setBoardHooks(hooks)
     store.getState().openBoardFromText(readFixture('fixture-rc.kicad_pcb'), 'fixture-rc.kicad_pcb')
 

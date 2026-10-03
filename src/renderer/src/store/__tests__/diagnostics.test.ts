@@ -8,7 +8,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { createAppStore, type AppStore } from '../appStore'
-import { createMockSimClient, type MockSimClient } from '../../ipc/simClient'
+import type { MockSimClient } from '../../ipc/simClient'
+import { createBenchMockSimClient } from './benchMock'
 import { collectDiagnosticsFiles, saveDiagnostics } from '../../diagnostics/saveDiagnostics'
 import { sha256Hex } from '../../../../core/report/diagnostics'
 
@@ -26,7 +27,7 @@ describe('diagnostics bundle (issue #26)', () => {
   let mock: MockSimClient
 
   beforeEach(() => {
-    mock = createMockSimClient()
+    mock = createBenchMockSimClient()
     store = createAppStore({ simClient: mock })
     store.getState().openBoardFromText(boardText, 'fixture-rc.kicad_pcb')
     const vin = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!

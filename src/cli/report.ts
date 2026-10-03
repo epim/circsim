@@ -32,10 +32,11 @@ export function solveSummary(
   reason?: string,
   ngspiceErrors: string[] = [],
 ): SolveSummary {
-  if (!solved) {
+  if (!solved || solved.op.method === 'failed') {
     return {
       ran: false,
-      reason,
+      reason: reason ?? (solved ? 'operating point did not converge' : undefined),
+      ...(solved ? { method: 'failed' } : {}),
       ...(ngspiceErrors.length > 0 ? { ngspiceErrors: ngspiceErrors.slice(-5) } : {}),
     }
   }
@@ -96,7 +97,14 @@ export function opJson(session: Session, solve: SolveSummary, solved: SolveResul
     const v = solved?.netVoltages.get(n.id)
     return { id: n.id, name: n.kicadName, spiceNode: n.spiceNode, volts: v !== undefined && Number.isFinite(v) ? v : null }
   })
-  return { schemaVersion: SCHEMA_VERSION, command: 'op', ...header(session), solve, nets }
+  return {
+    schemaVersion: SCHEMA_VERSION, command: 'op', ...header(session), solve, nets,
+    ...(solved?.copper ? { copper: {
+      method: solved.copper.method,
+      padVoltages: solved.copper.padVoltages,
+      unreachedPads: solved.copper.unreachedPads,
+    } } : {}),
+  }
 }
 
 export function deckJson(session: Session, solve: SolveSummary, files: string[]) {
@@ -175,5 +183,15 @@ export function opText(session: Session, solve: SolveSummary, solved: SolveResul
   })
   const width = Math.max(3, ...rows.map((r) => r.name.length))
   for (const r of rows) lines.push(`${r.name.padEnd(width)}  ${r.volts}`)
+  if (solved.copper) {
+    lines.push('', 'physical pad voltages (power and ground):')
+    for (const [ref, pads] of Object.entries(solved.copper.padVoltages)) {
+      for (const [pad, volts] of Object.entries(pads)) lines.push(`  ${ref}.${pad}  ${formatVolts(volts)} V`)
+    }
+    if (solved.copper.unreachedPads.length > 0) {
+      lines.push('routing gaps (no copper contact or no path to the supply entry):')
+      for (const p of solved.copper.unreachedPads) lines.push(`  ${p.ref}.${p.padNumber}`)
+    }
+  }
   return lines.join('\n') + '\n'
 }
