@@ -1,5 +1,10 @@
 import { parseValue } from '../values/parseValue'
 
+// RC estimates below the former 10 us bench cap leave fast poles to native
+// LTE and breakpoints. This limits mandatory quiet-region work to 100k points
+// per simulated second; explicit steps and source-period bounds may be finer.
+const RC_STEP_FLOOR_SECONDS = 10e-6
+
 /** SPICE suffixes are case insensitive: M is milli, while MEG is mega. */
 function spiceValue(token: string): number | undefined {
   const normalized = token.toLowerCase().replace(/[gt](?=[a-z]*$)/g, suffix => suffix.toUpperCase())
@@ -9,14 +14,17 @@ function spiceValue(token: string): number | undefined {
 /**
  * Bound quiet-region work by source periods and explicit capacitor dynamics.
  * For each identified timing/feedback capacitor terminal, attached conductances
- * give an RC estimate; use 10 steps per time constant, calibrated against a
- * 1 us reference for timer period and feedback-loop settling. Copper is
+ * give an RC estimate; use RC/10 with a 10 us floor, calibrated against a
+ * 1 us reference for timer period and feedback-loop settling. A floating
+ * capacitor uses the sum of the two terminal resistances. Copper is
  * grouped as wire for this estimate, not used as a tiny timing resistor. Ideal
  * voltage-source terminals are grouped too. Model power pins and generated
  * digital ICC rails identify bypasses, which remain under native LTE control.
  * Pure passive RC decks use all their unforced capacitors. This is not model
  * pole extraction: unknown port roles, model-local capacitors and parameter
  * expressions cannot supply a bound, and need an explicitly finer request.
+ * Q/M/J terminals are recognised, but nonlinear oscillator periods are not
+ * calibrated by this estimate and still need an explicitly finer comparison.
  * ngspice still inserts breakpoints and refines below the resulting ceiling.
  */
 export function transientMaxStep(requested: number, deck: readonly string[]): number {
@@ -63,6 +71,11 @@ export function transientMaxStep(requested: number, deck: readonly string[]): nu
     if (subcircuitDepth !== 0) continue
     const tokens = line.toLowerCase().split(/\s+/)
     if (/^[abdegjmqszx]\S*\s+/i.test(line)) activeCircuit = true
+    if (/^[qmj]\S*\s+/i.test(line)) {
+      // BJT and JFET cards have three terminals; MOSFETs have four. Include
+      // output terminals too: coupling caps can drive another device's input.
+      for (const node of tokens.slice(1, tokens[0][0] === 'm' ? 5 : 4)) signalNodes.add(node)
+    }
     if (/^x\S*\s+/i.test(line)) {
       const modelPorts = ports.get(tokens.at(-1)!)
       modelPorts?.forEach((port, i) => {
@@ -119,8 +132,13 @@ export function transientMaxStep(requested: number, deck: readonly string[]): nu
     if (aa === bb) continue
     if (power.has(aa) && power.has(bb)) continue
     if (activeCircuit && ![aa, bb].some(node => signals.has(node) && !power.has(node))) continue
-    const g = (aa === ground ? 0 : conductance.get(aa) ?? 0) + (bb === ground ? 0 : conductance.get(bb) ?? 0)
-    if (g > 0) step = Math.min(step, value / g / 10)
+    // Ground and recognised supply rails are AC ground for this estimate.
+    // A floating cap sees its terminal resistances in series, not parallel.
+    const resistance = (node: string): number => node === ground || power.has(node)
+      ? 0
+      : 1 / (conductance.get(node) ?? 0)
+    const tau = value * (resistance(aa) + resistance(bb))
+    if (Number.isFinite(tau) && tau > 0) step = Math.min(step, Math.max(RC_STEP_FLOOR_SECONDS, tau / 10))
   }
   return step
 }

@@ -106,9 +106,10 @@ function makeBench(boardText: string, supplyNet: string, probeNet: string, mode:
     title: 'realtime-bench',
     modelTexts
   })
-  // The shared routed fixture is resistive. Add distributed supply bypasses
-  // here, in the simulation test deck, to exercise the step rule without
-  // changing the shared geometry or any of its copper counts.
+  // The shared routed fixture is resistive. These distributed caps span
+  // resistor pads, not rail-to-ground nodes; they exercise the active-deck
+  // skip path, without changing shared geometry or copper counts. Separate
+  // transientMaxStep tests cover actual rail-to-ground supply bypasses.
   const bypasses = supplyNet === 'VCC' && !bundled555
     ? ['R1', 'R24', 'R48'].map((ref, i) => `c_bypass_${i} ${inputs.copperNetwork!.padNode(ref, '1')} ${inputs.copperNetwork!.padNode(ref, '2')} 100n`)
     : []
@@ -239,8 +240,8 @@ async function measure(bench: Bench, pace: number | 'max', warmMs: number, measu
  */
 async function measureBare(bench: Bench, t1: number, t2: number, tstep = BENCH_TSTEP_MAX_SECONDS): Promise<{ cpuFactor: number; factor: number }> {
   // Keep the two native runs' point counts comparable when the circuit needs
-  // a much finer step. The ideal feedback loop now uses 100 us;
-  // retaining its old 10/30 s stops would need near-budget plots and minutes.
+  // a much finer step. Use longer ideal stops below to reduce CPU-ratio noise;
+  // a one-second live window still bounds retained plots.
   const stepScale = transientMaxStep(tstep, bench.deck) / tstep
   t1 *= stepScale
   t2 *= stepScale
@@ -311,6 +312,13 @@ describe.skipIf(!haveNgspice)('live bench sample channel cost (real libngspice, 
   const lantern = haveNgspice ? makeBench(generateBoard(lanternShape(10)), '/PACK+', '/LED1_K') : null
   const routedFull = haveNgspice ? makeBench(lanternBoard(), 'VCC', 'VCC', 'full') : null
   const routedReduced = haveNgspice ? makeBench(lanternBoard(), 'VCC', 'VCC', 'reduced') : null
+
+  it.skipIf(process.env.CIRCSIM_PROFILE_REALTIME !== '1')('profiles the bundled sensor-node timing cost', async () => {
+    const sensor = makeBench(readFileSync('resources/sample/sensor-node.kicad_pcb', 'utf8'), '+5V', 'NTC_SENSE')
+    sensor.label = 'sensor-node/ideal'
+    const live = await measure(sensor, 'max', 1000, 3000)
+    console.log(`[realtime] sensor-node ideal, effective tstep=${sensor.effectiveStep}: live pace max ${live.factor.toFixed(2)}x, CPU factor ${live.cpuFactor.toFixed(2)}x`)
+  }, 90_000)
   /** Wall-clock factor the lantern-class deck reached at pace max in this process. */
   let lanternMax: number | null = null
 
@@ -426,7 +434,7 @@ describe.skipIf(!haveNgspice)('live bench sample channel cost (real libngspice, 
   }, 90_000)
 
   it('a lantern-class deck: the live channel costs little next to the solve', async () => {
-    const bare = await measureBare(lantern!, 10, 30)
+    const bare = await measureBare(lantern!, 50, 150)
     const live = await measure(lantern!, 'max', 1000, 3000)
     lanternMax = live.factor
     const ratio = live.cpuFactor / bare.cpuFactor

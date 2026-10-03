@@ -17,6 +17,7 @@ describe.skipIf(!ngspiceResourcesAvailable())('reload after native failure (issu
       const failure = events.find(event => event.type === 'loadFailed')
       console.log(`[reload] multiline parse failure: ${JSON.stringify(failure)}`)
       expect(failure).toEqual(expect.objectContaining({ detail: expect.stringMatching(/unknown parameter/i) }))
+      expect(failure).toEqual(expect.objectContaining({ detail: expect.stringMatching(/^Error\b/i) }))
     } finally { await host.dispose() }
   })
 

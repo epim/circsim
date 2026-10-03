@@ -5,6 +5,56 @@ import { NgspiceFfiEngine, ngspiceResourcesAvailable } from '../ngspiceFfi'
 import { BENCH_TSTEP_MAX_SECONDS } from '../protocol'
 
 describe.skipIf(!ngspiceResourcesAvailable())('bandwidth-derived native step control', () => {
+  it('prevents a discrete BJT astable flat line by recognising its timing caps', async () => {
+    const engine = new NgspiceFfiEngine()
+    const host = new SimHost({ engine, emit: () => {}, disableWatchdog: true })
+    try {
+      await host.start()
+      // A 1 percent base-resistor asymmetry selects the astable mode instead
+      // of relying on numerical startup noise in the perfectly symmetric deck.
+      // Claude approved this deterministic variant in R2's fixture follow-up.
+      await host.loadCircuit([
+        '* discrete astable', 'v1 vcc 0 5', 'rc1 vcc c1 1k', 'rc2 vcc c2 1k',
+        'rb1 vcc b1 47k', 'rb2 vcc b2 47.5k', 'cx1 c1 b2 100n', 'cx2 c2 b1 100n',
+        'q1 c1 b1 0 NPNX', 'q2 c2 b2 0 NPNX',
+        '.model NPNX NPN(IS=1e-14 BF=200 VAF=100 RB=10 RC=1 CJE=20p CJC=8p TF=0.3n)',
+        '.save v(c1)', '.end',
+      ])
+      const period = (time: ArrayLike<number>, values: ArrayLike<number>): number => {
+        const edges: number[] = []
+        let armed = false
+        for (let i = 1; i < time.length; i++) {
+          if (values[i] < 1) armed = true
+          if (time[i] > 0.05 && armed && values[i - 1] < 4 && values[i] >= 4) {
+            const fraction = (4 - values[i - 1]) / (values[i] - values[i - 1])
+            edges.push(time[i - 1] + fraction * (time[i] - time[i - 1]))
+            armed = false
+          }
+        }
+        expect(edges.length).toBeGreaterThan(25)
+        return (edges.at(-1)! - edges[0]) / (edges.length - 1)
+      }
+      await engine.command('tran 1u 0.3 0 1u uic', true)
+      const reference = period(engine.vectorData('time')!, engine.vectorData('c1')!)
+      if (process.env.CIRCSIM_PROFILE_REALTIME === '1') {
+        for (const step of [480e-6, 240e-6, 96e-6, 48e-6, 24e-6, 10e-6]) {
+          await engine.command(`tran ${step} 0.3 0 ${step} uic`, true)
+          const candidate = period(engine.vectorData('time')!, engine.vectorData('c1')!)
+          console.log(`[step-calibration] BJT astable: step=${step}s, period=${candidate}s, error=${100 * Math.abs(candidate - reference) / reference}%`)
+        }
+      }
+      const bench = await host.runTran(BENCH_TSTEP_MAX_SECONDS, 0.3)
+      const actual = period(bench.time, bench.vectors.c1)
+      console.log(`[step-control] BJT astable: 1 us period=${reference}s, bench period=${actual}s`)
+      // Recognition prevents the former flat line, but this nonlinear deck's
+      // period is not calibrated by RC/10. Claude explicitly deferred that
+      // fidelity issue; the documentation requires a 1 us comparison.
+      for (let i = 1; i < bench.time.length; i++) {
+        expect(bench.time[i] - bench.time[i - 1]).toBeLessThanOrEqual(480e-6 * 1.00001)
+      }
+    } finally { await host.dispose() }
+  }, 60_000)
+
   it('preserves a fast self-oscillating 555 period without a periodic source', async () => {
     const engine = new NgspiceFfiEngine()
     const host = new SimHost({ engine, emit: () => {}, disableWatchdog: true })

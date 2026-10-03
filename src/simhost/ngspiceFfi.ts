@@ -528,7 +528,13 @@ export class NgspiceFfiEngine implements SpiceEngine {
       this.loading = false
     }
     if (this.loadFailure !== null || rc !== 0) {
-      throw new Error(this.loadStderr.length > 0 ? this.loadStderr.join('\n') : this.loadFailure ?? `ngSpice_Circ returned ${rc}`)
+      // Lead with the error and its continuations, retaining earlier warnings
+      // afterward so consumers do not mistake a warning for the failure.
+      const errorIndex = this.loadStderr.findIndex(line => /^(?:error|fatal)\b/i.test(line))
+      const lines = errorIndex > 0
+        ? [...this.loadStderr.slice(errorIndex), ...this.loadStderr.slice(0, errorIndex)]
+        : this.loadStderr
+      throw new Error(lines.length > 0 ? lines.join('\n') : this.loadFailure ?? `ngSpice_Circ returned ${rc}`)
     }
   }
 
