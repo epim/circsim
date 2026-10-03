@@ -53,6 +53,8 @@ The solve API has an opt-in physical copper mode (`copperAware: true`). Power an
 
 Track resistance uses length, width, and an assumed 1 oz copper weight (35 µm), configurable through the solve options. A 5 cm, 0.25 mm trace on 1 oz copper is about 0.1 Ω. Via resistance assumes 20 µm barrel plating. Pours use an approximately 2 mm sheet-resistance mesh of their outlines; thermal-relief spokes, fill clearance islands, and keepouts are not extracted. Missing copper leaves pads disconnected, and a lead position selects its nearest physical pad; without a position the source pad is guessed.
 
+The network and solve result expose pads without copper contacts or a path from the supply entry, and the Critic names them even at zero current. A failed solve retains that geometry but supplies no electrical readings. A transient-fallback result is labelled as a bias snapshot rather than a converged DC operating point. Connected idle parts can have known zero dissipation; missing model terminals or physically unpowered parts remain not assessed for power.
+
 circsim still does not model:
 
 - **Trace inductance and signal-net resistance**: these matter for RF and fast edges.

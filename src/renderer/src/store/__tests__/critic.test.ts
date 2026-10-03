@@ -4,8 +4,8 @@
  * Verifies the auto-trigger wiring (no live ngspice — injected mock simClient):
  *   - opening a board populates criticReport with the no-sim findings and SKIPS
  *     the sim-dependent checks (ampacity / thermal)
- *   - after an operating-point solve ampacity runs with the real op result;
- *     thermal stays not-assessed (no per-part power producer yet, #46)
+ *   - an ideal operating point supplies thermal power; copper ampacity remains
+ *     not assessed until the store passes a copper-aware solve
  *   - selectFinding stores the id and forwards focusFinding to the board hooks
  *   - buildCriticOpResult maps netId voltages → spiceNode + ref currents
  */

@@ -60,7 +60,7 @@ const solutionCache = new WeakMap<CriticContext, Map<number, RailOutcome>>()
 /** Whether the op carries any branch currents at all. */
 export function hasBranchCurrents(ctx: CriticContext): boolean {
   const op = ctx.opResult
-  return !!op && (op.padCurrents !== undefined || op.partCurrents !== undefined)
+  return !!op && (op.copper !== undefined || op.padCurrents !== undefined || op.partCurrents !== undefined)
 }
 
 function outcomeOf(ctx: CriticContext, netId: number, isGround: boolean): RailOutcome {
@@ -102,12 +102,17 @@ export function padList(pads: RailLoad[]): string {
 export function railGapNotes(ctx: CriticContext, netId: number, isGround: boolean, name: string): string[] {
   const { sol, gap } = outcomeOf(ctx, netId, isGround)
   const notes: string[] = []
+  const native = ctx.opResult?.copper
+  const unreached = native?.unreachedPads.filter((p) => p.netId === netId) ?? []
+  const bare = unreached.filter((p) => !p.hasCopper)
+  const disconnected = unreached.filter((p) => p.hasCopper && !p.connectedToSource)
+  const names = (pads: typeof unreached): string => pads.map((p) => `${p.ref}.${p.padNumber}`).join(', ')
+  if (bare.length > 0) notes.push(`${name}: no modelled copper touches pads ${names(bare)}`)
+  if (disconnected.length > 0) notes.push(`${name}: ${names(disconnected)} have no modelled copper path from the supply entry`)
+  if (native?.method === 'tran-fallback') notes.push(`${name}: assessed from a transient-fallback bias snapshot, not a converged DC operating point`)
   if (!sol) {
     if (gap) notes.push(`${name}: ${gap}`)
     return notes
-  }
-  if (sol.stranded.length > 0) {
-    notes.push(`${name}: ${padList(sol.stranded)} carry current but no modelled copper reaches them from the supply entry`)
   }
   if (sol.unresolved.length > 0) {
     notes.push(`${name}: the solve could not resolve the current of ${sol.unresolved.join(', ')}`)
@@ -136,6 +141,7 @@ function padDraw(ctx: CriticContext, ref: string, padNumber: string, sign: 1 | -
   const op = ctx.opResult
   if (!op) return undefined
   if (op.padCurrents) return op.padCurrents[ref]?.[padNumber]
+  if (op.partCurrents?.[ref] === undefined) return op.copper?.padCurrents[ref]?.[padNumber]
   const amps = Math.abs(op.partCurrents?.[ref] ?? NaN)
   if (!Number.isFinite(amps)) return undefined
   return (sign * amps) / Math.max(1, padsOnRail)
@@ -145,6 +151,7 @@ function computeRail(ctx: CriticContext, netId: number, isGround: boolean): Rail
   if (!hasBranchCurrents(ctx)) return { sol: null }
   const native = ctx.opResult?.copper
   if (!native) return { sol: null, gap: 'requires a copper-aware ngspice operating point' }
+  if (native.method === 'failed') return { sol: null, gap: 'the native operating point did not converge; no solved copper voltages or currents are available' }
   const rail = native.network.rails.get(netId)
   if (!rail) return { sol: null, gap: 'this net was not included in the copper-aware operating point' }
   const graph = rail.graph
@@ -165,15 +172,15 @@ function computeRail(ctx: CriticContext, netId: number, isGround: boolean): Rail
       if (amps !== undefined && Number.isFinite(amps) && Math.abs(amps) >= MIN_LOAD_A) carriers.push({ pad, amps })
     }
   }
-  const unsolved = (why: string): RailOutcome =>
-    carriers.length > 0 && padsByRef.size >= 2
-      ? { sol: null, gap: `${padList(carriers)} carry current but ${why}` }
-      : { sol: null }
+  const unsolved = (why: string): RailOutcome => ({ sol: null, gap:
+    carriers.length > 0 && padsByRef.size >= 2 ? `${padList(carriers)} carry current but ${why}` : why })
 
   if (!graph.hasCopper) return unsolved('the board has no copper on this net to solve')
   if (graph.pads.length === 0) return { sol: null }
   const chosen = rail.source && rail.source.contacts.length > 0 ? { source: rail.source, entry: rail.entry } : undefined
-  if (!chosen) return unsolved('no modelled copper touches any pad on the rail')
+  if (!chosen) return { sol: null, gap: rail.source
+    ? `supply-entry pad ${rail.source.ref}.${rail.source.padNumber} has no modelled copper contact`
+    : 'the rail has no supply-entry pad' }
 
   const { source, entry } = chosen
   const nNodes = graph.nodePos.length
@@ -206,8 +213,8 @@ function computeRail(ctx: CriticContext, netId: number, isGround: boolean): Rail
     if (ref === source.ref) continue
     for (const pad of pads) {
       const amps = padDraw(ctx, ref, pad.padNumber, sign, pads.length)
-      if (amps === undefined || !Number.isFinite(amps) || Math.abs(amps) < MIN_LOAD_A) continue
-      ;(inComp[pad.node] ? loads : stranded).push({ pad, amps })
+      if (!inComp[pad.node]) stranded.push({ pad, amps: amps ?? NaN })
+      else if (amps !== undefined && Number.isFinite(amps) && Math.abs(amps) >= MIN_LOAD_A) loads.push({ pad, amps })
     }
   }
   const loadAmps = loads.reduce((s, l) => s + Math.max(0, sign * l.amps), 0)

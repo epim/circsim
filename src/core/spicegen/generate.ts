@@ -105,6 +105,22 @@ interface SubcktDef {
   lines: string[]
 }
 
+/** ngspice treats a literal gnd node as global 0, even in a subcircuit port. */
+function copperSubcktLines(def: SubcktDef): string[] {
+  if (!def.terminals.includes('gnd')) return def.lines
+  let localReturn = 'circsim_return'
+  const text = def.lines.join('\n').toLowerCase()
+  while (text.includes(localReturn)) localReturn += '_'
+  const rename = (line: string): string => line.replace(/(^|[\s(,])gnd(?=$|[\s),])/gi, '$1' + localReturn)
+  return def.lines.map((line, i) => {
+    if (line.trimStart().startsWith('*') || /^\s*\.ends\b/i.test(line)) return line
+    if (i === 0) {
+      return line.replace(/^(\s*\.subckt\s+\S+\s+)(.*)$/i, (_, prefix: string, ports: string) => prefix + rename(ports))
+    }
+    return rename(line)
+  })
+}
+
 /**
  * Index every `.subckt NAME t1 t2 … .ends` block in a lib text, keyed by the
  * lowercased subckt name. Subckt names can collide across files but we index per
@@ -1697,7 +1713,7 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
     if (!def) return
     const key = `subckt:${file}:${name.toLowerCase()}`
     if (emittedDefKeys.has(key)) return
-    queueDef(key, def.lines)
+    queueDef(key, opts.copperNetwork ? copperSubcktLines(def) : def.lines)
     for (const dep of extractSubcktRefs(def.lines)) queueSubcktWithDeps(file, dep)
   }
 
@@ -1880,8 +1896,6 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
     const part = opts.copperNetwork
       ? { ...originalPart, padNodes: new Map<string, string>() }
       : { ...originalPart, padNodes: undefined }
-    if (!part) continue
-
     if (!res.model) {
       lines.push(`* ${res.ref}: unresolved — no model found`)
       continue

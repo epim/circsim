@@ -52,11 +52,11 @@ describe.skipIf(!haveNgspice)('circsim CLI against real ngspice', () => {
     expect(report.schemaVersion).toBe(1)
     expect(report.solve.ran).toBe(true)
     expect(Array.isArray(report.critic.findings)).toBe(true)
-    // The solve's branch currents reached the copper checks: ir-drop either ran
-    // or, on this sparse fixture (no copper on GND), reported what it could not
-    // assess ("partly assessed"), never the "no operating point" skip.
+    // CLI audits currently run an ideal-net solve. Copper checks name that
+    // limitation and the physical solve option, instead of claiming assessment.
     const irDrop = report.critic.skipped.find((s: { check: string }) => s.check === 'ir-drop')
-    if (!report.critic.ranBy.includes('ir-drop')) expect(irDrop?.reason).toMatch(/partly assessed/)
+    expect(report.critic.ranBy).not.toContain('ir-drop')
+    expect(irDrop?.reason).toMatch(/ideal-net operating point.*copperAware: true/)
     // The 555 sample has real clearance errors (run-critic guide): the gate must trip.
     expect(report.critic.summary.error).toBeGreaterThan(0)
     expect(code).toBe(1)

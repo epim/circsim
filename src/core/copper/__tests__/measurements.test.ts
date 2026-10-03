@@ -7,6 +7,7 @@ import { extract, suggestGround, suggestSupplies } from '../../netlist/extract'
 import { resolveAll } from '../../models/resolve'
 import type { LibraryEntry } from '../../models/types'
 import { buildDeck, buildSolveInputs } from '../../solve/inputs'
+import { runSolvePlan } from '../../solve/plan'
 import type { SolveEngine } from '../../solve/types'
 
 const SIMHOST = '../../../simhost/'
@@ -64,6 +65,8 @@ it.skipIf(process.env.CIRCSIM_MEASURE_COPPER !== '1')('measures ideal and physic
           { netId: vcc.id, pos: { x: 32.34, y: 21.905 } },
           { netId: gnd.id, pos: { x: 27.66, y: 21.905 } },
         ] } : undefined })
+        const fresh = await runSolvePlan(inputs, engine)
+        console.log(`COPPER PLAN ${name} copperAware=${copperAware} method=${fresh.op.method ?? 'unknown'}`)
         await engine.loadCircuit(buildDeck(inputs))
         for (let i = 0; i < 3; i++) await engine.runOp()
         const times: number[] = []

@@ -47,6 +47,8 @@ import { ledSenseName } from '../spicegen/generate'
 
 export interface SolvedCurrents {
   partPower?: Record<string, number>
+  /** Parts without assessed power, even when their terminal currents are known. */
+  unknownPowerRefs?: string[]
   /** ref to pad number to signed amps drawn from the pad's net into the part. */
   padCurrents: Record<string, Record<string, number>>
   /** ref to the part's through current: the largest pad current magnitude. */
@@ -92,11 +94,20 @@ export function deriveSolvedCurrents(
 ): SolvedCurrents {
   if (solve.copper) {
     const padCurrents = solve.copper.padCurrents
+    const parts = new Map(inputs.circuit.parts.map((p) => [p.ref, p]))
+    const modeled = inputs.resolutions.filter((r) => r.status !== 'documented-open' && r.model?.kind !== 'stub')
     return {
       padCurrents,
       partCurrents: Object.fromEntries(Object.entries(padCurrents).map(([ref, pads]) => [ref, Math.max(0, ...Object.values(pads).map(Math.abs))])),
       partPower: Object.keys(solve.copper.partPower).length > 0 ? solve.copper.partPower : undefined,
-      unresolvedRefs: inputs.resolutions.filter((r) => r.status !== 'documented-open' && r.model?.kind !== 'stub' && solve.copper!.partPower[r.ref] === undefined).map((r) => r.ref).sort(),
+      unknownPowerRefs: modeled.filter((r) => solve.copper!.partPower[r.ref] === undefined).map((r) => r.ref).sort(),
+      unresolvedRefs: modeled.filter((r) => {
+        const part = parts.get(r.ref)
+        const model = r.model
+        if (!part || !model || model.kind === 'stub') return true
+        const pads = model.kind === 'primitive' ? [...part.padNet.keys()] : Object.keys(model.pinMap).filter((p) => part.padNet.has(p))
+        return pads.length === 0 || pads.some((p) => !Number.isFinite(padCurrents[r.ref]?.[p]))
+      }).map((r) => r.ref).sort(),
     }
   }
   const { circuit, resolutions } = inputs

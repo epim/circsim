@@ -158,6 +158,8 @@ export interface OpResult {
    * zero-current.
    */
   unresolvedRefs?: string[]
+  /** Parts whose power remains unknown independently of measured pad currents. */
+  unknownPowerRefs?: string[]
   /**
    * Bench supply entries (and the ground clip), one per attached lead. The
    * IR-drop and ampacity solves enter a rail at the pad nearest the lead's

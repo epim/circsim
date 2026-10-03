@@ -41,7 +41,8 @@ export async function nativeCopperOp(board: BoardModel, circuit: Circuit, op: Op
     const result = await loadAndRunOp(engine, deck)
     const nodeVoltages = { ...result.values, '0': 0 }
     const copper: CopperOp = {
-      network, nodeVoltages, padCurrents: op.padCurrents ?? {}, padVoltages: {}, partPower: {},
+      network, method: result.method, unreachedPads: network.unreachedPads,
+      nodeVoltages, padCurrents: op.padCurrents ?? {}, padVoltages: {}, partPower: {},
       edgeCurrents: network.edges.map((e) => (nodeVoltages[network.nodes[e.a].name] - nodeVoltages[network.nodes[e.b].name]) / e.ohms),
     }
     return { ...op, copper }

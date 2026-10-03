@@ -6,6 +6,7 @@ import { deriveSolvedCurrents } from '../../critic/solvedCurrents'
 import { runCritic } from '../../critic/run'
 import { buildDeck, buildSolveInputs } from '../inputs'
 import { runSolvePlan } from '../plan'
+import { copperResult } from '../copperResult'
 import type { SolveEngine } from '../types'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -46,6 +47,51 @@ export function resistorBoard() {
 }
 
 describe.skipIf(!ffi.ngspiceResourcesAvailable())('copper-aware operating point', () => {
+  it('keeps gnd ports local through nested subcircuits and behavioral expressions', async () => {
+    const f = resistorBoard()
+    f.resolutions = f.resolutions.map((r) => r.ref === 'R1' ? {
+      ...r, model: {
+        kind: 'subckt' as const, libFile: 'return.lib', subcktName: 'COPPER_LOAD',
+        pinMap: { '1': 'vcc', '2': 'gnd' },
+      },
+    } : r)
+    const inputs = buildSolveInputs(f.board, f.circuit, f.resolutions, [
+      { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.001 },
+    ], 2, { copperAware: true, modelTexts: { 'return.lib': [
+      '.subckt COPPER_LOAD vcc gnd', 'xload vcc gnd RETURN_LOAD', '.ends COPPER_LOAD',
+      '.subckt RETURN_LOAD vcc gnd', 'rload vcc gnd 50',
+      'bload vcc gnd i = v(vcc,gnd)/50', '.ends RETURN_LOAD',
+    ].join('\n') } })
+    const result = await withEngine((engine) => runSolvePlan(inputs, engine))
+    const copper = result.copper!
+    const expectedA = 5 / (25 + 2 * 0.193103448276 + 0.001)
+    expect(copper.padCurrents.R1['1']).toBeCloseTo(expectedA, 8)
+    expect(copper.padCurrents.R1['2']).toBeCloseTo(-expectedA, 8)
+    expect(copper.padVoltages.R1['2']).toBeCloseTo(expectedA * 0.193103448276, 8)
+    expect(copper.partPower.R1).toBeCloseTo(expectedA ** 2 * 25, 8)
+  }, 90_000)
+
+  it('assesses zero power for a connected idle pulldown without skipping the active load', async () => {
+    const f = resistorBoard()
+    const fp = f.board.footprints.find((p) => p.ref === 'R1')!
+    f.board.netById.set(3, { id: 3, name: 'SIG' })
+    f.board.footprints.push({ ...fp, ref: 'R2', value: '10k', pads: fp.pads.map((p) => ({
+      ...p, netId: p.number === '1' ? 3 : 2,
+    })) })
+    const circuit = extract(f.board, { groundNetId: 2 })
+    const inputs = buildSolveInputs(f.board, circuit, resolveAll(circuit), [
+      { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.001 },
+    ], 2, { copperAware: true })
+    const result = await withEngine((engine) => runSolvePlan(inputs, engine))
+    expect(result.copper!.partPower.R2).toBe(0)
+    const currents = deriveSolvedCurrents(inputs, result)
+    expect(currents.unresolvedRefs).not.toContain('R2')
+    const report = runCritic(f.board, circuit, { nodeVoltages: result.op.values, copper: result.copper, ...currents })
+    for (const check of ['ir-drop', 'ampacity', 'thermal']) {
+      expect(report.skipped.some((s) => s.check === check)).toBe(false)
+    }
+  }, 90_000)
+
   it('leaves an unavailable digital model unknown instead of reporting zero power', async () => {
     const f = resistorBoard()
     const part = f.circuit.parts.find((p) => p.ref === 'R1')!
@@ -80,14 +126,69 @@ describe.skipIf(!ffi.ngspiceResourcesAvailable())('copper-aware operating point'
 
   it('leaves unpowered resolved parts unknown and thermal not assessed', async () => {
     const f = resistorBoard()
+    const poweredInputs = buildSolveInputs(f.board, f.circuit, f.resolutions, [
+      { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.001 },
+    ], 2, { copperAware: true })
+    const powered = await withEngine((engine) => runSolvePlan(poweredInputs, engine))
+    expect(powered.copper!.partPower.R1).toBeGreaterThan(0.49)
+    expect(powered.copper!.padVoltages.R1['2']).toBeGreaterThan(0)
     f.board.tracks = []
     const inputs = buildSolveInputs(f.board, f.circuit, f.resolutions, [
       { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.001 },
     ], 2, { copperAware: true })
     const result = await withEngine((engine) => runSolvePlan(inputs, engine))
+    expect(inputs.copperNetwork!.unreachedPads.map((p) => `${p.ref}.${p.padNumber}`)).toEqual(['J1.1', 'R1.1', 'J1.2', 'R1.2'])
+    expect(result.copper!.unreachedPads).toEqual(inputs.copperNetwork!.unreachedPads)
     expect(result.copper!.partPower.R1).toBeUndefined()
-    const report = runCritic(f.board, f.circuit, { nodeVoltages: result.op.values, copper: result.copper, ...deriveSolvedCurrents(inputs, result) })
+    const currents = deriveSolvedCurrents(inputs, result)
+    expect(currents.unresolvedRefs).not.toContain('R1')
+    expect(currents.unknownPowerRefs).toContain('R1')
+    const report = runCritic(f.board, f.circuit, { nodeVoltages: result.op.values, copper: result.copper, ...currents })
     expect(report.skipped.some((s) => s.check === 'thermal')).toBe(true)
+    for (const check of ['ir-drop', 'ampacity']) {
+      expect(report.skipped.find((s) => s.check === check)?.reason).toContain('R1.1')
+      expect(report.skipped.find((s) => s.check === check)?.reason).toContain('R1.2')
+    }
+  }, 90_000)
+
+  it('exposes the bundled sample unreached pads even when the native solve fails (#160)', () => {
+    const root = join(__dirname, '../../../..')
+    const board = parseBoard(readFileSync(join(root, 'resources/sample/blinker-555.kicad_pcb'), 'utf8'))
+    const raw = extract(board)
+    const gnd = raw.nets.find((n) => n.kicadName === 'GND')!
+    const circuit = extract(board, { groundNetId: gnd.id })
+    const vcc = circuit.nets.find((n) => n.kicadName === 'VCC')!
+    const inputs = buildSolveInputs(board, circuit, resolveAll(circuit), [
+      { kind: 'dc-supply', id: '1', netId: vcc.id, volts: 5, seriesOhms: 0.001 },
+    ], gnd.id, { copperAware: true })
+    const expected = ['C1.2', 'C2.2', 'D1.1', 'U1.1', 'U1.8']
+    const names = inputs.copperNetwork!.unreachedPads.map((p) => `${p.ref}.${p.padNumber}`)
+    expect(names).toEqual(expect.arrayContaining(expected))
+    const copper = copperResult(inputs, { method: 'failed', values: { [vcc.spiceNode]: 5 } }, buildDeck(inputs))!
+    expect(copper.unreachedPads).toEqual(inputs.copperNetwork!.unreachedPads)
+    expect(copper.partPower).toEqual({})
+    expect(copper.edgeCurrents.every(Number.isNaN)).toBe(true)
+    const report = runCritic(board, circuit, { nodeVoltages: {}, copper })
+    for (const check of ['ir-drop', 'ampacity']) {
+      const reason = report.skipped.find((s) => s.check === check)?.reason
+      for (const pad of expected) expect(reason).toContain(pad)
+      expect(reason).toContain('did not converge')
+    }
+  })
+
+  it('names a disconnected supply entry without claiming all load pads miss copper', async () => {
+    const f = resistorBoard()
+    f.board.tracks[0].start = { x: 90, y: 0 }
+    const inputs = buildSolveInputs(f.board, f.circuit, f.resolutions, [
+      { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.001 },
+    ], 2, { copperAware: true, copperOptions: { supplyEntries: [{ netId: 1, pos: { x: 0, y: 0 } }] } })
+    const result = await withEngine((engine) => runSolvePlan(inputs, engine))
+    const report = runCritic(f.board, f.circuit, { nodeVoltages: result.op.values, copper: result.copper, ...deriveSolvedCurrents(inputs, result) })
+    for (const check of ['ir-drop', 'ampacity']) {
+      const reason = report.skipped.find((s) => s.check === check)?.reason
+      expect(reason).toMatch(/supply.entry.*J1.*1.*no modelled copper/i)
+      expect(reason).not.toContain('no modelled copper touches any pad')
+    }
   }, 90_000)
 
   it.each(['CD40106', 'CD4011'])('%s outputs and supply return follow their local physical ground', async (templateId) => {
@@ -168,6 +269,12 @@ describe.skipIf(!ffi.ngspiceResourcesAvailable())('copper-aware operating point'
     const copper = result.copper!
     const supplyPower = (copper.padVoltages.U1['8'] - copper.padVoltages.U1['1']) * copper.padCurrents.U1['8']
     expect(supplyPower).toBeGreaterThan(0.01)
+    // Independent unloaded supply estimate: the 1.8k shunt and 15k divider
+    // in the bundled block-diagram model draw about 3.1 mA at 5 V.
+    const expectedSupplyA = (copper.padVoltages.U1['8'] - copper.padVoltages.U1['1']) * (1 / 1800 + 1 / 15000)
+    expect(copper.padCurrents.U1['8']).toBeCloseTo(expectedSupplyA, 5)
+    expect(copper.padCurrents.U1['1']).toBeCloseTo(-copper.padCurrents.U1['8'], 6)
+    expect(Object.values(copper.padCurrents.U1).reduce((sum, amps) => sum + amps, 0)).toBeCloseTo(0, 9)
     expect(copper.partPower.U1).toBeCloseTo(supplyPower, 6)
     if (process.env.CIRCSIM_MEASURE_COPPER === '1') console.log(`POWER MEASUREMENT 555 reportedW=${copper.partPower.U1} supplyVIW=${supplyPower}`)
   }, 90_000)
@@ -179,6 +286,12 @@ describe.skipIf(!ffi.ngspiceResourcesAvailable())('copper-aware operating point'
     const aware = buildSolveInputs(f.board, f.circuit, f.resolutions, instruments, 2, { copperAware: true })
     expect(buildDeck(off)).toEqual(buildDeck(ideal))
     expect(buildDeck(aware).join('\n')).toContain('r_copper_')
+    const report = runCritic(f.board, f.circuit, { nodeVoltages: { vcc: 5 }, partCurrents: { R1: 0.1 } })
+    for (const check of ['ir-drop', 'ampacity']) {
+      const reason = report.skipped.find((s) => s.check === check)?.reason
+      expect(reason).toMatch(/ideal-net operating point.*copperAware: true/)
+      expect(reason).not.toContain('partly assessed')
+    }
   })
 
   it('avoids collisions with real net names and preserves an explicitly selected ground', () => {

@@ -1,6 +1,7 @@
 import type { BoardModel, Vec2 } from '../kicad/types'
 import type { Circuit } from '../netlist/extract'
-import { classifyRails } from '../critic/classify'
+import type { OpSolveMethod } from '../../simhost/protocol'
+import { classifyCopperRails } from './classify'
 import { buildRailGraph, type GraphEdge, type RailGraph, type RailPad } from './graph'
 
 export interface CopperOptions {
@@ -24,13 +25,25 @@ export interface CopperRail {
   source?: RailPad
   entry: EntryBasis
 }
+export interface CopperPadConnection {
+  ref: string
+  padNumber: string
+  netId: number
+  hasCopper: boolean
+  /** The entry itself is reachable even when a lead clips directly to a bare pad. */
+  connectedToSource: boolean
+  isSource: boolean
+}
 export interface CopperNetwork {
   copperOz: number
   zoneMeshMm: number
   nodes: CopperNode[]
   edges: CopperEdge[]
   rails: Map<number, CopperRail>
+  /** Pads without copper contacts or outside their entry's connected component. */
+  unreachedPads: CopperPadConnection[]
   padNode(ref: string, pad: string): string | undefined
+  padConnection(ref: string, pad: string): CopperPadConnection | undefined
 }
 
 /** Power and ground copper, with contact bonds contracted before SPICE emission. */
@@ -40,16 +53,19 @@ export function buildCopperNetwork(board: BoardModel, circuit: Circuit, opts: Co
   if (!(copperOz > 0) || !Number.isFinite(copperOz) || !(zoneMeshMm > 0) || !Number.isFinite(zoneMeshMm)) {
     throw new Error('Copper weight and pour mesh pitch must be finite and positive')
   }
-  const classified = classifyRails(circuit)
+  const classified = classifyCopperRails(circuit)
   const netIds = new Set([...classified.powerNetIds, ...classified.groundNetIds, ...(opts.netIds ?? [])])
   if (opts.groundNetId !== undefined) netIds.add(opts.groundNetId)
   const nodes: CopperNode[] = []
   const edges: CopperEdge[] = []
   const rails = new Map<number, CopperRail>()
   const pads = new Map<string, string>()
+  const connections = new Map<string, CopperPadConnection>()
+  const unreachedPads: CopperPadConnection[] = []
+  const netById = new Map(circuit.nets.map((n) => [n.id, n]))
   const occupied = new Set(circuit.nets.map((n) => n.spiceNode))
   for (const netId of [...netIds].sort((a, b) => a - b)) {
-    const net = circuit.nets.find((n) => n.id === netId)
+    const net = netById.get(netId)
     if (!net) continue
     const graph = buildRailGraph({ board, circuit, opts: { copperOz, zoneMeshMm } }, netId)
     const parent = graph.nodePos.map((_, i) => i)
@@ -76,6 +92,19 @@ export function buildCopperNetwork(board: BoardModel, circuit: Circuit, opts: Co
       ? { kind: 'lead', pos: { ...pos }, snapMm: Math.hypot(source.pos.x - pos.x, source.pos.y - pos.y) }
       : { kind: 'guess', why: attached ? 'no-position' : 'no-supply' }
     const anchor = source?.node ?? 0
+    const neighbors: number[][] = graph.nodePos.map(() => [])
+    for (const edge of graph.edges) {
+      neighbors[edge.a].push(edge.b)
+      neighbors[edge.b].push(edge.a)
+    }
+    const reached = new Set<number>()
+    const pending = source ? [source.node] : []
+    while (pending.length > 0) {
+      const node = pending.pop()!
+      if (reached.has(node)) continue
+      reached.add(node)
+      pending.push(...neighbors[node].filter((n) => !reached.has(n)))
+    }
     const rootToId = new Map<number, number>()
     const nodeNames = graph.nodePos.map((p, i) => {
       const root = find(i)
@@ -98,10 +127,23 @@ export function buildCopperNetwork(board: BoardModel, circuit: Circuit, opts: Co
       const b = rootToId.get(find(e.b))!
       if (a !== b && e.kind !== 'short') edges.push({ ...e, a, b, netId, railEdge })
     })
-    for (const p of graph.pads) pads.set(padKey(p.ref, p.padNumber), nodeNames[p.node])
+    for (const p of graph.pads) {
+      const key = padKey(p.ref, p.padNumber)
+      pads.set(key, nodeNames[p.node])
+      const connection: CopperPadConnection = {
+        ref: p.ref, padNumber: p.padNumber, netId, hasCopper: p.contacts.length > 0,
+        connectedToSource: reached.has(p.node), isSource: p === source,
+      }
+      connections.set(key, connection)
+      if (!connection.hasCopper || !connection.connectedToSource) unreachedPads.push(connection)
+    }
     rails.set(netId, { graph, nodeNames, source, entry })
   }
-  return { copperOz, zoneMeshMm, nodes, edges, rails, padNode: (ref, pad) => pads.get(padKey(ref, pad)) }
+  return {
+    copperOz, zoneMeshMm, nodes, edges, rails, unreachedPads,
+    padNode: (ref, pad) => pads.get(padKey(ref, pad)),
+    padConnection: (ref, pad) => connections.get(padKey(ref, pad)),
+  }
 }
 
 export function emitCopperCards(network: CopperNetwork): string[] {
@@ -118,6 +160,9 @@ export function padSenseName(ref: string, pad: string): string {
 
 export interface CopperOp {
   network: CopperNetwork
+  /** Geometry remains available on failed solves; voltages and currents do not. */
+  method?: OpSolveMethod
+  unreachedPads: CopperPadConnection[]
   nodeVoltages: Record<string, number>
   padVoltages: Record<string, Record<string, number>>
   padCurrents: Record<string, Record<string, number>>

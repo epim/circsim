@@ -95,7 +95,9 @@ describe.skipIf(!haveNativeCopper)('IR drop on a negative rail', () => {
     expect(f!.metrics!.sinkV).toBeCloseTo(-5 + TRACK_OHMS + gndOhms, 3)
     expect(f!.title).toMatch(/"VEE" rail sags to -4\.79V at U1 \(0\.21 V drop/)
     expect(f!.metrics!.totalSinkA).toBeCloseTo(1, 6)
-    expect(report.ranBy).toContain('ir-drop')
+    // The inference-only bypass capacitors are deliberately off both tracks.
+    const note = report.skipped.find((s) => s.check === 'ir-drop')?.reason
+    for (const pad of ['C1.1', 'C1.2', 'C2.1', 'C2.2']) expect(note).toContain(pad)
   })
 
   it('reports it from a bare partCurrents map too (no pad signs to go on)', async () => {

@@ -96,14 +96,16 @@ function mid(a: Vec2, b: Vec2): Vec2 {
 
 /** Reason surfaced in the report's `skipped` list when no power data exists. */
 export const THERMAL_NOT_ASSESSED =
-  'not assessed (no per-part power data from the simulation yet)'
+  'not assessed (no complete solved terminal voltages and currents for per-part power)'
 
 export function checkThermal(ctx: CriticContext): CheckOutput {
   const powers = ctx.opResult?.partPower
   // No power data at all: the check cannot fire. Say so instead of returning a
   // bare array, which the runner would count as "ran" (silence read as clean).
   if (!powers) return { findings: [], notAssessed: THERMAL_NOT_ASSESSED }
-  const unknown = (ctx.opResult?.unresolvedRefs ?? []).filter((ref) => powers[ref] === undefined)
+  const unknown = [...new Set([
+    ...(ctx.opResult?.unresolvedRefs ?? []), ...(ctx.opResult?.unknownPowerRefs ?? []),
+  ])].filter((ref) => powers[ref] === undefined).sort()
   const assessed = (findings: Finding[]): CheckOutput => unknown.length > 0
     ? { findings, notAssessed: 'partly assessed: no solved power for ' + unknown.join(', ') }
     : findings
@@ -127,7 +129,7 @@ export function checkThermal(ctx: CriticContext): CheckOutput {
       findings.push({
         id: `thermal:rating:${p.ref}`, check: 'thermal', severity: 'error', refs: [p.ref],
         title: `${p.ref} dissipates ${p.watts.toPrecision(3)} W above its ${ratedWatts} W rating`,
-        detail: 'Solved DC terminal power exceeds the explicit PowerRating board field. Verify the rating and operating conditions.',
+        detail: 'Solved terminal power exceeds the explicit PowerRating board field. Verify the rating and operating conditions.',
         location: p.pos, metrics: { watts: p.watts, ratedWatts },
       })
     }

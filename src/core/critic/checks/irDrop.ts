@@ -87,6 +87,9 @@ function pathHeadline(path: GraphEdge[]): Headline {
 
 export function checkIrDrop(ctx: CriticContext): CheckOutput {
   const { board, circuit, opResult, opts } = ctx
+  if (opResult && !opResult.copper) {
+    return { findings: [], notAssessed: 'ideal-net operating point; enable copperAware: true for copper-aware voltages and segment currents' }
+  }
   if (!hasBranchCurrents(ctx)) {
     return {
       findings: [],
@@ -175,12 +178,12 @@ export function checkIrDrop(ctx: CriticContext): CheckOutput {
 
   // ── power rails: supply sag, plus the ground shift at the same load ────────
   for (const railId of [...powerNetIds].sort((a, b) => a - b)) {
+    notes.push(...railGapNotes(ctx, railId, false, netName(railId)))
     // Nominal rail voltage from the op solve (the sim treats the whole net as one
     // node, i.e. the voltage at the supply entry). Without it a % sag is
     // undefined: skip rather than invent a number.
     const nominal = nominalOf(railId)
     if (nominal === undefined) continue
-    notes.push(...railGapNotes(ctx, railId, false, netName(railId)))
     const sol = solveRail(ctx, railId, false)
     if (!sol) continue
     if (sol.loadAmps < 1e-9) {

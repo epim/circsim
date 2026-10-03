@@ -2,7 +2,7 @@
 import type { Pad, TrackSegment, Vec2, Via, Zone } from '../kicad/types'
 import type { BoardModel } from '../kicad/types'
 import type { Circuit } from '../netlist/extract'
-import { dist, padWorldPos, segLengthMm, trackResistanceOhms } from '../critic/geom'
+import { dist, padWorldPos, segLengthMm, trackResistanceOhms } from './geometry'
 
 export interface GraphContext { board: BoardModel; circuit: Circuit; opts: { copperOz: number; zoneMeshMm: number } }
 
