@@ -258,15 +258,15 @@ describe('copper graph construction scale (pure TypeScript)', () => {
     expect(big.network.rails.get(1)!.graph.pads).toHaveLength(61)
     expect(big.cards.length).toBeGreaterThan(small.cards.length)
 
-    // Intent: meshing a pour into the graph must not bring back the cubic
-    // blow-up of the dense solver (320 ms there at this size). No absolute
-    // millisecond bound: CI runners are up to 5x slower than a dev machine, so
-    // compare two sizes on the same machine. Going from a 20 x 20 to a 40 x 40
-    // grid quadruples the node count: construction and emission should cost a
-    // small multiple of 4x to 8x, cubic-in-nodes work would cost 4^3 = 64x.
-    // The bound of 40 is 5x the expected ratio of 8, so a loaded runner does not
-    // trip it, and it still fails on cubic-in-nodes growth (about 64).
+    // Pour meshing changes the node growth independently of the track count.
+    // Measure that growth and allow 5x headroom over linear-in-nodes work,
+    // without an absolute time bound. The sizes must be far enough apart that
+    // their cubic growth exceeds this bound: nodeRatio^3 > 5 * nodeRatio.
+    const nodeRatio = big.network.nodes.length / small.network.nodes.length
+    expect(nodeRatio).toBeGreaterThan(Math.sqrt(5))
+    const bound = 5 * nodeRatio
     const ratio = big.best / small.best
-    expect(ratio).toBeLessThan(40)
+    console.log(`[copper-scale] nodes=${small.network.nodes.length}/${big.network.nodes.length} nodeRatio=${nodeRatio.toFixed(3)} timeRatio=${ratio.toFixed(3)} bound=${bound.toFixed(3)}`)
+    expect(ratio).toBeLessThan(bound)
   })
 })

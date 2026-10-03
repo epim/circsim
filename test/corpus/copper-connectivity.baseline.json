@@ -1,6 +1,8 @@
 {
   "command": "kicad-cli pcb drc --format json --severity-all -o report.json board.kicad_pcb",
   "tool": "KiCad 10.0.3",
+  "evidence": "The stable evidence is the named net and disconnected island. Ratsnest endpoint item pairs are one valid DRC output and can vary between runs.",
+  "dialectRegeneration": "KiCad 8 and 10 entries regenerated on unmodified standalone scratch board copies, without project rules or a zone refill, using the command above and default DRC settings.",
   "boards": {
     "k8-tiny-tapeout": [
       {
@@ -338,7 +340,5 @@
         }
       }
     ]
-  },
-  "evidence": "The stable evidence is the named net and disconnected island. Ratsnest endpoint item pairs are one valid DRC output and can vary between runs.",
-  "dialectRegeneration": "KiCad 8 and 10 entries regenerated on unmodified standalone scratch board copies, without project rules or a zone refill, using the command above and default DRC settings."
+  }
 }
