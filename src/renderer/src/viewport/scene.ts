@@ -292,6 +292,8 @@ export function createSceneManager(): SceneManager {
   let assembled: AssembledBoard | null = null
   let padOverlay: PadVoltageOverlay | null = null
   let loadedBoard: BoardModel | null = null
+  let padLabelAnchors: { ref: string; pad: string; label: AnnotationLabel }[] = []
+  let padLabelsActive = false
   let silkscreenGroup: THREE.Group | null = null
 
   // ── Task 20: Overlay + markers ──────────────────────────────────────────────
@@ -558,6 +560,16 @@ export function createSceneManager(): SceneManager {
       // method so they survive the geometry rebuild.
       boardCenter = { x: cx, y: cy }
       boardThicknessMm = board.boardThicknessMm
+      padLabelAnchors = board.footprints.flatMap(fp => fp.pads.map(pad => {
+        const pos = padWorldPos(fp, pad)
+        const world = kicadToWorld(pos.x, pos.y)
+        return { ref: fp.ref, pad: pad.number, label: {
+          netId: pad.netId ?? 0,
+          worldPos: new THREE.Vector3(world.x - cx, world.y - cy, board.boardThicknessMm),
+          text: '',
+        } }
+      }))
+      padLabelsActive = false
       criticOverlay.clear()
       criticOverlay.group.position.set(-cx, -cy, 0)
       if (criticOverlay.group.parent !== scene) scene.add(criticOverlay.group)
@@ -666,18 +678,18 @@ export function createSceneManager(): SceneManager {
       padOverlay?.setVisible(overlayController.getMode() === 'voltage')
       if (copper && loadedBoard) {
         const labels: AnnotationLabel[] = []
-        for (const fp of loadedBoard.footprints) for (const pad of fp.pads) {
-          const volts = copper.padVoltages[fp.ref]?.[pad.number]
-          if (volts === undefined || !Number.isFinite(volts)) continue
-          const pos = padWorldPos(fp, pad)
-          const world = kicadToWorld(pos.x, pos.y)
-          labels.push({
-            netId: pad.netId ?? 0,
-            worldPos: new THREE.Vector3(world.x - boardCenter.x, world.y - boardCenter.y, loadedBoard.boardThicknessMm),
-            text: `${fp.ref}.${pad.number}: ${formatVolts(volts)}`,
-          })
+        let changed = !padLabelsActive
+        for (const { ref, pad, label } of padLabelAnchors) {
+          const volts = copper.padVoltages[ref]?.[pad]
+          const text = volts !== undefined && Number.isFinite(volts) ? `${ref}.${pad}: ${formatVolts(volts)}` : ''
+          if (label.text !== text) changed = true
+          label.text = text
+          if (text) labels.push(label)
         }
-        markerController.showPadAnnotations(labels)
+        if (changed) markerController.showPadAnnotations(labels)
+        padLabelsActive = true
+      } else {
+        padLabelsActive = false
       }
       dirty = true
     },

@@ -102,7 +102,8 @@ async function audit(opts: CliOptions, session: Session, io: CliIo): Promise<num
 
   // A gate must not pass clean when the simulation it asked for did not run.
   let code = EXIT_OK
-  if (critic.summary.error > 0) code = EXIT_FINDINGS
+  if (solved?.op.method === 'failed') code = EXIT_SIM
+  else if (critic.summary.error > 0) code = EXIT_FINDINGS
   else if (!solve.ran && !opts.noOp) code = EXIT_SIM
 
   if (opts.json) io.stdout(JSON.stringify(auditJson(session, solve, critic, code), null, 2) + '\n')

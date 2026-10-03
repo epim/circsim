@@ -32,6 +32,7 @@ export default function BenchShelf({ jackHandlers }: { jackHandlers?: JackHandle
   const selectedNetId = useApp(s => s.selectedNetId)
   const copperAware = useApp(s => s.copperAware)
   const simState = useApp(s => s.simState)
+  const criticPending = useApp(s => s.criticPending)
   const [paletteOpen, setPaletteOpen] = useState(false)
   // Collapse to the header strip to give the board the whole column (issue #33).
   const [collapsed, setCollapsed] = useCollapsed('shelf')
@@ -66,7 +67,7 @@ export default function BenchShelf({ jackHandlers }: { jackHandlers?: JackHandle
   }
 
   return (
-    <div style={shelfStyle} data-testid="bench-shelf">
+    <div style={shelfStyle} data-testid="bench-shelf" data-critic-pending={criticPending}>
       <div style={shelfHeaderStyle}>
         <span style={{ fontWeight: 600 }}>Bench</span>
         <label title="Include routed power and ground resistance in the bench. The critic always checks copper after Power On.">

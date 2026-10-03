@@ -45,7 +45,9 @@ function makeStubChild(): {
     on(event: string, listener: (code: number) => void) {
       if (event === 'exit') exitListener = listener
     },
-    off(_event: string, _listener: unknown) {}
+    off(_event: string, listener: unknown) {
+      if (exitListener === listener) exitListener = null
+    }
   }
 
   return {
@@ -83,6 +85,30 @@ function makeStubWebContents(): WebContentsHandle & { calls: { channel: string; 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('SimhostSupervisor', () => {
+  it('planned restarts replace the child and port without counting a crash', () => {
+    const children = Array.from({ length: 7 }, () => makeStubChild())
+    const crashed = vi.fn()
+    let spawned = 0
+    const supervisor = new SimhostSupervisor({
+      fork: () => children[spawned++].child,
+      portPairFactory: () => makeStubPortPair(), onSimhostCrashed: crashed,
+    })
+    const wc = makeStubWebContents()
+    supervisor.setWebContents(wc)
+    supervisor.onRendererReady()
+    supervisor.start()
+    for (let i = 0; i < 6; i++) {
+      supervisor.restart()
+      expect(children[i].kill).toHaveBeenCalledOnce()
+      children[i].triggerExit(1)
+    }
+    expect(spawned).toBe(7)
+    expect(wc.calls.filter(call => call.channel === 'simhost-port')).toHaveLength(7)
+    expect(crashed).not.toHaveBeenCalled()
+    expect(supervisor.isFatal()).toBe(false)
+    supervisor.dispose()
+    expect(() => supervisor.restart()).toThrow(/unavailable/)
+  })
   // Use fake timers throughout so we can advance backoff delays without sleeping.
   beforeEach(() => {
     vi.useFakeTimers()

@@ -24,24 +24,25 @@ export interface VoltageLegendProps {
 }
 
 /** The text a screen reader (and the unit tests) get for the scale. */
-export function voltageLegendSummary(min: number, max: number): string {
-  if (min === max) return `All nets at ${formatVolts(min)}`
-  return `Low ${formatVolts(min)}, high ${formatVolts(max)}`
+export function voltageLegendSummary(min: number, max: number, kind: 'nets' | 'pads' = 'nets'): string {
+  if (min === max) return `All ${kind} at ${formatVolts(min)}`
+  return `${kind === 'pads' ? 'Pad voltages: low' : 'Low'} ${formatVolts(min)}, high ${formatVolts(max)}`
 }
 
 export default function VoltageLegend({ min, max, padVoltages, unreachedPads, method }: VoltageLegendProps): React.ReactElement {
   const flat = min === max
+  const summary = voltageLegendSummary(min, max, padVoltages ? 'pads' : 'nets')
   const hasReadings = padVoltages === undefined || Object.values(padVoltages).some(pads => Object.values(pads).some(Number.isFinite))
   return (
     <div
       style={wrapStyle}
       data-testid="voltage-legend"
-      aria-label={hasReadings ? `Copper voltage scale. ${voltageLegendSummary(min, max).replace('nets', padVoltages ? 'pads' : 'nets')}` : 'Physical solve: no pad voltage readings'}
+      aria-label={hasReadings ? `Copper voltage scale. ${summary}` : 'Physical solve: no pad voltage readings'}
     >
       <div style={titleStyle}>Copper voltage{padVoltages ? ' at pads' : ''}</div>
       {hasReadings && <div role="img"
         style={{ ...stripStyle, background: voltageRampGradient() }}
-        aria-label={`Voltage ramp. ${voltageLegendSummary(min, max).replace('nets', padVoltages ? 'pads' : 'nets')}`}
+        aria-label={`Voltage ramp. ${summary}`}
         data-testid="voltage-legend-strip"
       />}
       {hasReadings && (flat ? (

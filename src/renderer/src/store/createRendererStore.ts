@@ -32,7 +32,19 @@ export function createRendererStore(): AppStore {
     () => new BoardOpenWorker() as unknown as WorkerLike,
     createInlineRunner(),
   )
-  const store = createAppStore({ simClient: client, openRunner })
+  let plannedRestart = false
+  const store = createAppStore({ simClient: client, openRunner, restartSimhost: async () => {
+    plannedRestart = true
+    const ready = client.waitFor('ready', 30_000)
+    // If IPC fails first, the readiness timeout must not become an unhandled rejection.
+    void ready.catch(() => undefined)
+    try {
+      await window.circsim.restartSimhost()
+      await ready
+    } finally {
+      plannedRestart = false
+    }
+  } })
 
   // The live SimHost MessagePort is delivered to the MAIN world by the preload
   // via `window.postMessage('circsim:simhost-port', '*', [port])` — the canonical
@@ -51,7 +63,7 @@ export function createRendererStore(): AppStore {
     const port = e.ports?.[0]
     if (!port) return
     client.attachPort(port)
-    if (attachedOnce) {
+    if (attachedOnce && !plannedRestart) {
       // A respawn delivered a fresh port — replay so the bench resumes.
       store.getState().replayAfterCrash()
     }

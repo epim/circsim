@@ -1,32 +1,126 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createAppStore } from '../appStore'
 import { createMockSimClient } from '../../ipc/simClient'
 import type { CopperOp } from '../../../../core/copper'
 
-function bench(physicalMethod?: 'failed') {
+function bench(physicalMethod?: 'failed' | 'gmin' | 'source' | 'tran-fallback', options: { board?: '555'; holdPhysical?: boolean; primaryFailed?: boolean; primaryFallback?: boolean; throwPhysicalLoad?: boolean; loadError?: boolean } = {}) {
   const mock = createMockSimClient()
   const send = mock.send.bind(mock)
   let physical = false
   mock.send = command => {
     send(command)
-    if (command.type === 'loadCircuit') physical = command.deckLines.some(line => /^vpad_/i.test(line))
-    if (command.type === 'runOp') queueMicrotask(() => mock.emit({
-      type: 'opResult', values: { vin: 5, out: 2.5 }, method: physical ? physicalMethod : undefined,
+    if (command.type === 'loadCircuit') {
+      physical = command.deckLines.some(line => /^vpad_/i.test(line))
+      if (physical && options.throwPhysicalLoad) throw new Error('physical load failed')
+      if (!physical && options.loadError) mock.emit({ type: 'log', level: 'error', text: 'Error: unknown subckt: x_u1 half555' })
+    }
+    if (command.type === 'runOp' && !(physical && options.holdPhysical)) queueMicrotask(() => mock.emit({
+      type: 'opResult', values: { vin: 5, vcc: 5, out: 2.5 }, method: physical ? physicalMethod : options.primaryFailed ? 'failed' : options.primaryFallback ? 'tran-fallback' : undefined,
     }))
   }
-  const store = createAppStore({ simClient: mock })
+  const restartSimhost = vi.fn(async () => {})
+  const store = createAppStore({ simClient: mock, restartSimhost })
   store.getState().openBoardFromText(
-    readFileSync(join(__dirname, '../../../../../fixtures/fixture-rc.kicad_pcb'), 'utf8'),
+    readFileSync(join(__dirname, options.board === '555' ? '../../../../../resources/sample/blinker-555.kicad_pcb' : '../../../../../fixtures/fixture-rc.kicad_pcb'), 'utf8'),
     'rc.kicad_pcb',
   )
-  const vin = store.getState().circuit!.nets.find(n => n.kicadName === 'VIN')!
+  const vin = store.getState().circuit!.nets.find(n => n.kicadName === (options.board === '555' ? 'VCC' : 'VIN'))!
   store.getState().addInstrument({ kind: 'dc-supply', id: 'psu', netId: vin.id, volts: 5, seriesOhms: 0.1 })
-  return { store, mock }
+  return { store, mock, restartSimhost }
 }
 
 describe('bench copper mode and independent critic operating point', () => {
+  it('publishes the ideal result and idle UI before the physical critic finishes', async () => {
+    const { store, mock } = bench(undefined, { holdPhysical: true })
+    const pending = store.getState().powerOn()
+    try {
+      await vi.waitFor(() => expect(mock.sent.filter(command => command.type === 'runOp')).toHaveLength(2))
+      expect(store.getState().simState).toBe('idle')
+      expect(store.getState().opVoltages?.get(1)).toBe(5)
+      expect(store.getState().opVoltagesStale).toBe(false)
+      expect(store.getState().criticOp?.copper?.method).toBe('failed')
+    } finally {
+      mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+      await pending
+    }
+  })
+
+  it.each([{ primaryFailed: true }, { loadError: true }, { primaryFallback: true }])('does not load a physical critic circuit after a rejected or fallback primary solve: %j', async options => {
+    const { store, mock } = bench(undefined, options)
+    await store.getState().powerOn()
+    expect(mock.sent.filter(command => command.type === 'runOp')).toHaveLength(1)
+    expect(mock.sent.filter(command => command.type === 'loadCircuit')).toHaveLength(1)
+    expect(store.getState().criticOp?.copper?.method).toBe('failed')
+    expect(store.getState().criticReport?.ranBy).not.toContain('ampacity')
+  })
+
+  it.each(['failed', 'gmin', 'source', 'tran-fallback'] as const)('restarts before restoring the ideal deck after a physical %s result', async method => {
+    const { store, mock, restartSimhost } = bench(method)
+    let held!: () => void
+    restartSimhost.mockImplementationOnce(() => new Promise<void>(resolve => { held = resolve }))
+    const pending = store.getState().powerOn()
+    await vi.waitFor(() => expect(restartSimhost).toHaveBeenCalledOnce())
+    expect(mock.sent.filter(c => c.type === 'loadCircuit')).toHaveLength(2)
+    store.getState().run()
+    expect(mock.sent.some(c => c.type === 'runTransient')).toBe(false)
+    held()
+    await pending
+    store.getState().run()
+    expect(mock.sent.filter(c => c.type === 'loadCircuit')[2].deckLines.some(line => /^vpad_/i.test(line))).toBe(false)
+    expect(mock.sent.some(c => c.type === 'runTransient')).toBe(true)
+  })
+
+  it.each([undefined, '555'] as const)('a thrown physical load preserves the ideal result, restores its deck and permits Run (%s)', async board => {
+    const { store, mock, restartSimhost } = bench(undefined, { board, throwPhysicalLoad: true })
+    await store.getState().powerOn()
+    expect(store.getState().simState).toBe('idle')
+    expect(restartSimhost).toHaveBeenCalledOnce()
+    expect(store.getState().opVoltages?.get(1)).toBe(5)
+    expect(store.getState().criticOp?.copper?.method).toBe('failed')
+    expect(store.getState().criticReport?.findings.some(f => f.id.startsWith('floating:copper-gap:'))).toBe(true)
+    if (board === '555') expect(store.getState().criticOp?.copper?.unreachedPads).toHaveLength(6)
+    const loads = mock.sent.filter(command => command.type === 'loadCircuit')
+    expect(loads.at(-1)!.deckLines.some(line => /^vpad_/i.test(line))).toBe(false)
+    store.getState().run()
+    expect(mock.sent.some(command => command.type === 'runTransient')).toBe(true)
+  })
+
+  it('coalesces knob bench ops before one physical refresh, without waiting for that refresh', async () => {
+    const options = { holdPhysical: false }
+    const { store, mock } = bench(undefined, options)
+    await store.getState().powerOn()
+    options.holdPhysical = true
+    mock.clearSent()
+    store.getState().updateInstrument('psu', { kind: 'dc-supply', id: 'psu', netId: 1, volts: 4, seriesOhms: 0.1 })
+    store.getState().updateInstrument('psu', { kind: 'dc-supply', id: 'psu', netId: 1, volts: 3, seriesOhms: 0.1 })
+    await store.getState().whenReopSettled()
+    try {
+      expect(store.getState().simState).toBe('idle')
+      expect(store.getState().instruments.find(i => i.kind === 'dc-supply' && i.id === 'psu')).toMatchObject({ volts: 3 })
+      const loads = mock.sent.filter(c => c.type === 'loadCircuit')
+      expect(loads.filter(c => c.deckLines.some(line => /^vpad_/i.test(line)))).toHaveLength(1)
+      expect(mock.sent.filter(c => c.type === 'runOp')).toHaveLength(3)
+    } finally {
+      mock.emit({ type: 'opResult', values: { vin: 3, out: 1.5 } })
+      await vi.waitFor(() => expect(store.getState().criticOp?.copper?.method).not.toBe('failed'))
+    }
+  })
+
+  it('queues Run behind the active critic and restores the bench before starting transient', async () => {
+    const { store, mock } = bench(undefined, { holdPhysical: true })
+    const pending = store.getState().powerOn()
+    await vi.waitFor(() => expect(mock.sent.filter(c => c.type === 'runOp')).toHaveLength(2))
+    store.getState().run()
+    expect(mock.sent.some(c => c.type === 'runTransient')).toBe(false)
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+    await pending
+    await vi.waitFor(() => expect(mock.sent.some(c => c.type === 'runTransient')).toBe(true))
+    expect(store.getState().simState).toBe('running')
+    const last = mock.sent.filter(c => c.type === 'loadCircuit').at(-1)!
+    expect(last.deckLines.some(line => /^vpad_/i.test(line))).toBe(false)
+  })
   it('a failed critic op retains geometry, keeps the ideal bench result and reports missing assessment', async () => {
     const { store } = bench('failed')
     await store.getState().powerOn()

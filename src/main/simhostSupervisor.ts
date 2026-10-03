@@ -191,6 +191,17 @@ export class SimhostSupervisor {
     return this.fatal
   }
 
+  /** Replace a suspect engine without treating a planned reset as a crash (#163). */
+  restart(): void {
+    if (this.disposed || this.fatal) throw new Error('SimHost restart unavailable')
+    if (this.respawnTimer !== null) {
+      clearTimeout(this.respawnTimer)
+      this.respawnTimer = null
+    }
+    this.killChild()
+    this.spawnChild()
+  }
+
   /** Shut down the supervisor and kill the child. Does not respawn. */
   dispose(): void {
     this.disposed = true

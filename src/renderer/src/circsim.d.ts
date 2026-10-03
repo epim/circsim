@@ -100,6 +100,7 @@ declare global {
        */
       getPathForFile(file: File): string
       getSimPort(): Promise<MessagePort>
+      restartSimhost(): Promise<void>
       onSimhostCrashed(cb: (payload: CircsimCrashedPayload) => void): () => void
       platformPaths(): Promise<CircsimPlatformPaths>
       /**

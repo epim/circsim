@@ -55,7 +55,11 @@ While the board is energized, editing any bench instrument re-solves automatical
 
 ## What the operating point unlocks
 
-After Power On or Energize, the [Board Critic](./run-critic) always uses a copper-aware operating point, regardless of the bench toggle. Ampacity, IR-drop and terminal power use physical pad voltages and currents. Missing current, unknown power and routing gaps are named explicitly.
+After Power On or Energize, the [Board Critic](./run-critic) uses physical copper for its electrical checks, regardless of the bench toggle, when a suitable solve is available. Ampacity, IR-drop and terminal power use physical pad voltages and currents. Missing current, unknown power and routing gaps are named explicitly.
+
+In ideal mode, the bench readings appear as soon as their solve finishes; the physical critic assessment follows afterward. The Critic panel says **Copper assessment updating** while its electrical checks are pending. During a knob drag, bench readings update before one critic refresh for the final setting. If the bench solve fails or ngspice rejects its circuit, circsim retains routing-gap information and leaves electrical copper checks unassessed. A Run request waits for any active critic work to release the shared engine.
+
+The extra physical assessment runs after a direct ideal solve. If the ideal solve needed a fallback, the critic keeps geometry findings and leaves electrical copper checks unassessed. A physical critic solve that needs a fallback can still provide a bias snapshot, but circsim replaces its simulation host before restoring the ideal bench, to avoid reusing native transient state.
 
 ## Next
 

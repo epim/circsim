@@ -95,6 +95,8 @@ Net names match exactly first, then case-insensitively, then by their last path 
 
 `op` adds `solve` and `nets`, a list of `{ id, name, spiceNode, volts }` where `volts` is `null` for a net the solve did not report.
 
+When ngspice returns `method: "failed"`, both `op` and `audit` report `solve.ran: false`, explain the nonconvergence, and exit 3. This also applies to the ideal `op` command without `--copper`; a returned collection of partial values is not a successful solve.
+
 `deck` adds `solve` and `files`, the absolute paths written.
 
 ## Using it in CI

@@ -4,23 +4,30 @@ import { launchBuiltApp } from './util'
 
 const toggle = (page: Page) => page.getByTestId('copper-aware-toggle')
 
-/** App completion includes the critic solve, deck restoration, and React commit. */
-async function timePowerOn(page: Page): Promise<number> {
-  return page.evaluate(() => new Promise<number>((resolve, reject) => {
+/** Time to visible bench completion; a preceding critic must finish outside the timed interval. */
+async function timePowerOn(page: Page): Promise<{ visibleMs: number; completeMs: number }> {
+  await expect(page.getByTestId('bench-shelf')).toHaveAttribute('data-critic-pending', 'false')
+  return page.evaluate(() => new Promise<{ visibleMs: number; completeMs: number }>((resolve, reject) => {
     const control = document.querySelector('[data-testid="copper-aware-toggle"]') as HTMLInputElement
+    const shelf = document.querySelector('[data-testid="bench-shelf"]') as HTMLDivElement
     const button = document.querySelector('[data-testid="power-on-btn"]') as HTMLButtonElement
     let busy = false
+    let visibleMs: number | null = null
     const start = performance.now()
     const timer = setTimeout(() => { observer.disconnect(); reject(new Error('Power On did not finish')) }, 30_000)
     const observer = new MutationObserver(() => {
       if (control.disabled) busy = true
       else if (busy) {
-        clearTimeout(timer)
-        observer.disconnect()
-        resolve(performance.now() - start)
+        visibleMs ??= performance.now() - start
+        if (shelf.dataset.criticPending === 'false') {
+          clearTimeout(timer)
+          observer.disconnect()
+          resolve({ visibleMs, completeMs: performance.now() - start })
+        }
       }
     })
     observer.observe(control, { attributes: true, attributeFilter: ['disabled'] })
+    observer.observe(shelf, { attributes: true, attributeFilter: ['data-critic-pending'] })
     button.click()
   }))
 }
@@ -50,6 +57,7 @@ test.describe('copper-aware bench', () => {
     await expect(toggle(page)).toBeEnabled()
     await expect(page.locator('[data-finding-id^="floating:copper-gap:"]').first()).toBeVisible()
     await expect(page.getByTestId('voltage-legend')).not.toContainText('at pads')
+    await expect(page.getByTestId('bench-shelf')).toHaveAttribute('data-critic-pending', 'false')
   })
 
   test('measure Power On in the app on bundled 555 and sensor-node', async () => {
@@ -77,9 +85,15 @@ test.describe('copper-aware bench', () => {
         await expect(toggle(page)).toBeEnabled()
         for (let i = 0; i < 3; i++) await timePowerOn(page)
         const samples: number[] = []
-        for (let i = 0; i < 15; i++) samples.push(await timePowerOn(page))
+        const completeSamples: number[] = []
+        for (let i = 0; i < 15; i++) {
+          const timing = await timePowerOn(page)
+          samples.push(timing.visibleMs)
+          completeSamples.push(timing.completeMs)
+        }
         samples.sort((a, b) => a - b)
-        measurements.push({ board: name, copper, medianMs: samples[7], samples,
+        completeSamples.sort((a, b) => a - b)
+        measurements.push({ board: name, copper, medianMs: samples[7], completeMedianMs: completeSamples[7], samples, completeSamples,
           gaps: await page.locator('[data-finding-id^="floating:copper-gap:"]').count(),
           fallback: (await page.getByTestId('voltage-legend').textContent())?.includes('Settled transient snapshot') ?? false,
         })
