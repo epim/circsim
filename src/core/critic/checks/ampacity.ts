@@ -50,6 +50,9 @@ function mid(a: Vec2, b: Vec2): Vec2 {
 
 export function checkAmpacity(ctx: CriticContext): CheckOutput {
   const { board, circuit, opts } = ctx
+  if (ctx.opResult && !ctx.opResult.copper) {
+    return { findings: [], notAssessed: 'ideal-net operating point; enable copperAware: true for copper-aware voltages and segment currents' }
+  }
   if (!hasBranchCurrents(ctx)) {
     return {
       findings: [],
