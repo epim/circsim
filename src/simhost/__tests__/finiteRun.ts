@@ -5,10 +5,10 @@ export function finiteRunCompleted(events: readonly SimEvent[], tstop: number): 
   return events.some(event => event.type === 'status' && !event.running && event.simTimeSeconds >= tstop)
 }
 
-export async function waitForFiniteRun(events: readonly SimEvent[], tstop: number, timeoutMs = 15_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
+export async function waitForFiniteRun(events: readonly SimEvent[], tstop: number, maxTurns = 750): Promise<void> {
+  let turns = 0
   while (!finiteRunCompleted(events, tstop)) {
-    if (Date.now() >= deadline) throw new Error(`No final sample-channel status for tstop=${tstop}; received ${events.length} events`)
+    if (turns++ >= maxTurns) throw new Error(`No final sample-channel status for tstop=${tstop}; received ${events.length} events`)
     await new Promise(resolve => setTimeout(resolve, 20))
   }
 }

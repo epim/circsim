@@ -137,6 +137,30 @@ function makeHost(engine: SpiceEngine): SimHost {
 }
 
 describe('SimHost.dispose', () => {
+  it('drains an already executing queued native command before unloading', async () => {
+    let release!: () => void
+    let entered!: () => void
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const finish = new Promise<void>(resolve => { release = resolve })
+    class MidFlightEngine extends DrainStubEngine {
+      command(cmd: string): Promise<void> {
+        if (cmd === 'op') { entered(); return finish }
+        return super.command(cmd)
+      }
+      allVectors(): string[] { return ['out'] }
+      vectorData(): Float64Array { return new Float64Array([2.5]) }
+    }
+    const engine = new MidFlightEngine()
+    const host = makeHost(engine)
+    host.handleCommand({ type: 'runOp' })
+    await started
+    const disposal = host.dispose()
+    await new Promise<void>(resolve => setImmediate(resolve))
+    try { expect(engine.disposed).toBe(false) } finally { release() }
+    await disposal
+    expect(engine.disposed).toBe(true)
+  })
+
   it('does not let a queued transient start after the engine is disposed', async () => {
     const engine = new DrainStubEngine()
     const host = makeHost(engine)

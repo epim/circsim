@@ -64,9 +64,17 @@ The earlier fixed-step measurements below used Windows native ngspice, one fresh
 
 Per saved time point, the medians are 22.92 / 26.19 / 26.03 µs for the 555 and 4.94 / 4,194.98 / 661.76 µs for the lantern (ideal / full / reduced). The lantern has 1,011 saved time points in every mode; the 555 has 1,016 ideal and 1,011 physical. Reduction was about 6.3 times faster than the full lantern mesh, with the reduced physical solve about 7 times slower than real time and about 130 times the ideal deck's cost at that fixed step.
 
-The live bench now uses a 5 ms ceiling in quiet regions. A function generator lowers that ceiling to at most 1/200 of its period, and ngspice inserts source breakpoints and refines further for switching and circuit dynamics. Native regression tests preserve nanosecond pulse edges, fast sine resolution and the ideal 555's three oscillator edges relative to a 100 µs run. Finer explicit analysis steps remain finer; this ceiling does not guarantee a particular signal bandwidth for arbitrary imported behavioral models.
+The live bench uses 5 ms only as an upper bound. Literal SIN/PULSE source periods, including SPICE engineering suffixes, lower the bound to period/200. Explicit timing and feedback capacitors lower it to 1/10 of an RC estimate from their attached part resistors: recognised nodes include timer TRIG/THRES pins, analog model input ports, voltage-expression inputs and ADC bridge inputs. Copper connections are grouped as wire for this estimate; recognised model power rails and generated bench supply rails identify bypass capacitors, which remain under ngspice error control and source breakpoints. Passive RC decks use their unforced capacitor nodes. The rule does not expand model-local poles, parameter expressions or unknown port roles. An oscillator built from parts the rule does not recognise can fall back to the 5 ms ceiling and native error control, so its timing needs a finer-step comparison. Native tests preserve nanosecond pulse edges and fast sine resolution, compare the 138 Hz 555 astable with an independent 100 us reference within 3 percent, and resolve a 1 ms RC charge with a 100 us maximum step. Finer explicit analysis steps remain finer.
 
-Live measurements include sample delivery and window restarts: a one-second warmup followed by three seconds at pace max. On Windows, the routed lantern advanced about 0.02x with the full mesh and 0.15x with the reduced mesh at 100 µs. At the 5 ms quiet ceiling it advanced about 1.0x full and 8.4x reduced, with unchanged copper counts (1,733 nodes / 3,368 resistors full; 90 / 1,980 reduced). The original unrouted ideal lantern remains a separate model-cost control and reached about 60x; the bundled physical 555 reached about 173x. The realtime tests require at least 1x for the reduced routed lantern and bundled physical 555 on every CI platform, and print factors plus native Newton-iteration and accepted-timepoint counts in the logs. Larger or faster circuits can still fall below real time.
+Calibration used independent native analyses with explicit 1 us maximum steps. The fast 555 reference period was 7.2203 ms. The ideal feedback control settled rather than oscillating: its last crossing into a 100 mV band about its final value was 3.5052 ms. Crossing times were interpolated between samples; peak differences below are normalised to 5 V. RC/10 is the coarsest of the tested 10/20/50 factors that keeps both period and settling error below 2 percent. Coarser RC/2 distorted loop settling by 14.6 percent, and RC/1 by 80.7 percent.
+
+- **RC/10 (chosen):** fast 555 step 470 us, period error 0.90 percent; ideal loop step 100 us, settling error 1.34 percent.
+- **RC/20:** fast 555 step 235 us, period error 0.90 percent; ideal loop step 50 us, settling error 2.39 percent.
+- **RC/50:** fast 555 step 94 us, period error 0.24 percent; ideal loop step 20 us, settling error 0.73 percent.
+
+The loop peak-voltage difference was below 0.001 percent of 5 V in every row.
+
+Live measurements include sample delivery and window restarts: a one-second warmup followed by three seconds at pace max. Earlier isolated Windows measurements at the unqualified 5 ms ceiling were about 1.0x full and 8.4x reduced; a concurrent two-suite run reached 0.58x full and 6.14x reduced. Four-platform CI at W2.3 head ffbfe03 measured 0.36x to 0.99x full and 2.93x to 9.59x reduced. These are conditions on those observations, not a claim that the full mesh sustains real time. The refined rule adds three distributed 100 nF bypasses to the routed test decks and retains the 5 ms effective step: an isolated Windows run reached 0.95x full and 7.11x reduced, with unchanged copper counts (1,733 nodes / 3,368 resistors full; 90 / 1,980 reduced). Full and ideal control plots use one-second windows to bound their retained samples; reduced and physical 555 plots use 30 seconds. The original unrouted ideal lantern is a separate model/channel-cost control; calibration against an independent 1 us reference chose RC/10, giving a 100 us step with 1.34 percent settling-time error and negligible peak-voltage error. It measured 1.20x on an isolated Windows run; the earlier roughly 60x figure at 5 ms no longer applies. At RC/20 and RC/50 the settling errors were 2.39 and 0.73 percent; at RC/2 and RC/1 they rose to 14.6 and 80.7 percent. The fast timer's period errors at RC/10, RC/20 and RC/50 were 0.90, 0.90 and 0.24 percent. These are calibrated fixture observations, not an error bound for arbitrary circuits. The bundled physical 555 retained a 5 ms step and measured 171x locally (51.51x to 169.95x on the earlier CI run). Tests require at least 1x only for the reduced routed lantern with bypasses and bundled physical 555, print effective steps and factors on every CI platform, and check the 0.6 live/bare CPU ratio for the 555 and ideal control. Larger or faster circuits can still fall below real time.
 
 The 555 supply and return leads were placed directly on U1 pads 8 and 1. That sample is unrouted (#160), and its all-net physical network reports 16 pad gaps, so its physical run is not a validation of the ideal oscillator waveform. These are observations, not timing guarantees.
 
@@ -97,7 +105,7 @@ A rejected circuit cannot be simulated. Loading a valid circuit after a failed l
 - Bias points in audio and DC circuits
 - RC filters, voltage dividers, simple amplifiers
 - Spotting "the LED is always off because the base resistor is 10 MΩ" mistakes
-- The rough oscillation frequency of an astable timer
+- Oscillation frequency of the bundled astable timer when its timing RC is recognised; unfamiliar oscillators need a finer-step comparison
 - Whether a linear regulator is in dropout (the dropout voltage follows the load, per the datasheet curves)
 :::
 
@@ -106,7 +114,7 @@ A rejected circuit cannot be simulated. Loading a valid circuit after a failed l
 - Switching power supplies (simplified inductor/diode models)
 - Circuits with significant temperature effects
 - Anything where trace parasitics matter
-- Timing margins tighter than ~10× the simulation time-step
+- Timing margins tighter than about 10 times the effective maximum step, or oscillator dynamics the step rule does not recognise
 :::
 
 ## The fidelity banner

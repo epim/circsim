@@ -304,6 +304,7 @@ export class NgspiceFfiEngine implements SpiceEngine {
   private initialized = false
   private loading = false
   private loadFailure: string | null = null
+  private loadStderr: string[] = []
   private _version = ''
   private readonly opts: NgspiceFfiOptions
   private paths: NgspicePaths | null = null
@@ -399,8 +400,9 @@ export class NgspiceFfiEngine implements SpiceEngine {
       const text = String(output ?? '')
       // ngSpice_Circ can return zero after a parse error. Its synchronous
       // stderr callback is the authoritative failure signal in that case.
-      if (this.loading && /^stderr\s+(?:error|fatal)\b/i.test(text)) {
-        this.loadFailure ??= text.replace(/^stderr\s+/i, '').trim()
+      if (this.loading && /^stderr\s+/i.test(text)) {
+        this.loadStderr.push(text.replace(/^stderr\s+/i, '').trim())
+        if (/^stderr\s+(?:error|fatal)\b/i.test(text)) this.loadFailure ??= this.loadStderr.at(-1)!
       }
       this.emit({ type: 'char', text: String(output ?? '') })
       // Classify into a log event with a coarse level for the UI.
@@ -517,6 +519,7 @@ export class NgspiceFfiEngine implements SpiceEngine {
     // ngSpice_Circ wants a NULL-terminated char** array.
     const arr = [...deckLines, null]
     this.loadFailure = null
+    this.loadStderr = []
     this.loading = true
     let rc: number
     try {
@@ -524,7 +527,9 @@ export class NgspiceFfiEngine implements SpiceEngine {
     } finally {
       this.loading = false
     }
-    if (this.loadFailure !== null || rc !== 0) throw new Error(this.loadFailure ?? `ngSpice_Circ returned ${rc}`)
+    if (this.loadFailure !== null || rc !== 0) {
+      throw new Error(this.loadStderr.length > 0 ? this.loadStderr.join('\n') : this.loadFailure ?? `ngSpice_Circ returned ${rc}`)
+    }
   }
 
   command(cmd: string, _blocking: boolean): Promise<void> {

@@ -115,6 +115,7 @@ describe.skipIf(!haveNgspice)('SimHost transient streaming (real libngspice)', (
       expect(col.time.at(-1)).toBeGreaterThanOrEqual(5e-3)
       for (const t of [1e-3, 2e-3, 5e-3]) {
         const sample = col.valueAt('out', t)
+        expect(Math.abs(sample.time - t)).toBeLessThan(RC / 100)
         const captured = sample.value
         const analytic = 5 * (1 - Math.exp(-sample.time / RC))
         const relErr = Math.abs(captured - analytic) / analytic

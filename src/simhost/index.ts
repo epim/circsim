@@ -524,6 +524,8 @@ export class SimHost {
     try {
       // A queued window restart can still be awaiting its native command.
       // Drain the command queue as well as the halt/resume chain before unload.
+      // This drain is unbounded: unloading beneath an in-flight native call is
+      // unsafe. The process owner must terminate a wedged native worker.
       await this.whenIdle()
       // Let the halt / resume commands already ordered finish first: a bg_halt
       // issued here while one of them is mid-flight (a bg_resume still starting

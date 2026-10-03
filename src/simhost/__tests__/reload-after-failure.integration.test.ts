@@ -7,6 +7,19 @@ import type { SimEvent } from '../protocol'
 const VALID_DECK = ['* valid divider', 'v1 in 0 dc 5', 'r1 in out 1k', 'r2 out 0 1k', '.end']
 
 describe.skipIf(!ngspiceResourcesAvailable())('reload after native failure (issue #163)', () => {
+  it('retains the informative stderr continuation in loadFailed.detail', async () => {
+    const events: SimEvent[] = []
+    const host = new SimHost({ emit: event => events.push(event), disableWatchdog: true })
+    try {
+      await host.start()
+      host.handleCommand({ type: 'loadCircuit', deckLines: ['* bad resistor value', 'v1 in 0 5', 'r1 in 0 bogus', '.end'] })
+      await host.whenIdle()
+      const failure = events.find(event => event.type === 'loadFailed')
+      console.log(`[reload] multiline parse failure: ${JSON.stringify(failure)}`)
+      expect(failure).toEqual(expect.objectContaining({ detail: expect.stringMatching(/unknown parameter/i) }))
+    } finally { await host.dispose() }
+  })
+
   it('reports an unknown subcircuit load failure and then solves a valid second deck', async () => {
     const events: SimEvent[] = []
     const host = new SimHost({ emit: (event) => events.push(event), disableWatchdog: true })
