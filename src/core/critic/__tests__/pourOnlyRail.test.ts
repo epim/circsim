@@ -1,3 +1,4 @@
+import { haveNativeCopper } from './nativeCopper'
 /**
  * core/critic/__tests__/pourOnlyRail.test.ts
  *
@@ -24,9 +25,9 @@ import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { parseBoard } from '../../kicad/board'
 import { extract } from '../../netlist/extract'
-import { buildContext } from '../context'
+import { nativeBuildContext as buildContext } from './nativeCopper'
 import { solveRail } from '../railGraph'
-import { runCritic } from '../run'
+import { nativeRunCritic as runCritic } from './nativeCopper'
 import { DEFAULT_CRITIC_OPTIONS, type OpResult } from '../types'
 
 const SHEET_OHMS = 1.68e-8 / 34.8e-6
@@ -51,7 +52,7 @@ function opFor(u1: number, u2: number): OpResult {
   }
 }
 
-describe('pour-only rail fixture', () => {
+describe.skipIf(!haveNativeCopper)('pour-only rail fixture', () => {
   it('is what it says: no VCC track, one VCC pour, a B.Cu GND pour, vias', () => {
     expect(board.tracks.filter((t) => t.netId === vcc.id)).toHaveLength(0)
     expect(board.zones.filter((z) => z.netId === vcc.id && z.layer === 'F.Cu')).toHaveLength(1)
@@ -59,8 +60,8 @@ describe('pour-only rail fixture', () => {
     expect(board.vias.filter((v) => v.netId === gnd.id).length).toBeGreaterThanOrEqual(3)
   })
 
-  it('every load on the pour is a sink: the solve reaches all of them and strands none', () => {
-    const ctx = buildContext(board, circuit, opFor(2, 1), DEFAULT_CRITIC_OPTIONS)
+  it('every load on the pour is a sink: the solve reaches all of them and strands none', async () => {
+    const ctx = (await buildContext(board, circuit, opFor(2, 1), DEFAULT_CRITIC_OPTIONS))
     const sol = solveRail(ctx, vcc.id, false)
     expect(sol).not.toBeNull()
     expect(sol!.source.ref).toBe('J1') // the connector is the supply entry
@@ -69,16 +70,16 @@ describe('pour-only rail fixture', () => {
     expect(sol!.graph.hasPour).toBe(true)
   })
 
-  it('is assessed and quiet: a few mV at a few amps is neither a false error nor a false zero', () => {
-    const report = runCritic(board, circuit, opFor(2, 1))
+  it('is assessed and quiet: a few mV at a few amps is neither a false error nor a false zero', async () => {
+    const report = (await runCritic(board, circuit, opFor(2, 1)))
     expect(report.findings.filter((f) => f.check === 'ir-drop')).toHaveLength(0)
     expect(report.ranBy).toContain('ir-drop')
     expect(report.skipped.find((s) => s.check === 'ir-drop')).toBeUndefined()
     expect(report.findings.filter((f) => f.check === 'ampacity')).toHaveLength(0)
   })
 
-  it('solves to the pour resistance: U1 at 2 A, U2 (mid-neck) at 1 A', () => {
-    const ctx = buildContext(board, circuit, opFor(2, 1), DEFAULT_CRITIC_OPTIONS)
+  it('solves to the pour resistance: U1 at 2 A, U2 (mid-neck) at 1 A', async () => {
+    const ctx = (await buildContext(board, circuit, opFor(2, 1), DEFAULT_CRITIC_OPTIONS))
     const sol = solveRail(ctx, vcc.id, false)!
     const u1 = sol.loads.find((l) => l.pad.ref === 'U1')!
     const u2 = sol.loads.find((l) => l.pad.ref === 'U2')!
@@ -93,18 +94,19 @@ describe('pour-only rail fixture', () => {
     expect(dropU2).toBeLessThan(dropU1) // U2 is upstream of U1
   })
 
-  it('does not depend on the mesh pitch beyond a small margin', () => {
-    const drops = [4, 2, 1].map((h) => {
-      const ctx = buildContext(board, circuit, opFor(2, 1), { ...DEFAULT_CRITIC_OPTIONS, zoneMeshMm: h })
+  it('does not depend on the mesh pitch beyond a small margin', async () => {
+    const drops: number[] = []
+    for (const h of [4, 2, 1]) {
+      const ctx = (await buildContext(board, circuit, opFor(2, 1), { ...DEFAULT_CRITIC_OPTIONS, zoneMeshMm: h }))
       const sol = solveRail(ctx, vcc.id, false)!
-      return -sol.volts[sol.loads.find((l) => l.pad.ref === 'U1')!.pad.node]
-    })
+      drops.push(-sol.volts[sol.loads.find((l) => l.pad.ref === 'U1')!.pad.node])
+    }
     const fine = drops[2]
     for (const d of drops) expect(Math.abs(d - fine) / fine).toBeLessThan(0.25)
   })
 
-  it('solves the ground return through the vias and the B.Cu pour', () => {
-    const ctx = buildContext(board, circuit, opFor(2, 1), DEFAULT_CRITIC_OPTIONS)
+  it('solves the ground return through the vias and the B.Cu pour', async () => {
+    const ctx = (await buildContext(board, circuit, opFor(2, 1), DEFAULT_CRITIC_OPTIONS))
     const sol = solveRail(ctx, gnd.id, true)
     expect(sol).not.toBeNull()
     expect(sol!.stranded).toHaveLength(0)
@@ -114,9 +116,9 @@ describe('pour-only rail fixture', () => {
     expect(rise).toBeLessThan(0.02)
   })
 
-  it('reports a genuine sag through the pour, and names the pour as the copper', () => {
+  it('reports a genuine sag through the pour, and names the pour as the copper', async () => {
     // 60 A on a 4 mm neck is about 10 squares in series: ~0.29 V, 5.8 percent.
-    const report = runCritic(board, circuit, opFor(60, 1))
+    const report = (await runCritic(board, circuit, opFor(60, 1)))
     const f = report.findings.find((x) => x.check === 'ir-drop' && x.netId === vcc.id)
     expect(f).toBeDefined()
     expect(f!.refs).toContain('U1')

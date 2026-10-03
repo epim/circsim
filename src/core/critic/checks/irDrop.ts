@@ -266,7 +266,7 @@ function assumptionFor(ctx: CriticContext, sol: RailSolution, kind: 'supply' | '
   return (
     `${ctx.opts.copperOz} oz copper; vias ≈ ${viaMohm.toFixed(1)} mΩ each (20 µm plating)${pour}; ` +
     `${entryText(sol, kind)}; ` +
-    `currents from the operating-point solve (LEDs, resistors and bench sources measured, other parts by KCL at the nets)` +
+    `pad voltages and segment currents from the same copper-aware ngspice operating point` +
     (kind === 'supply' && !withReturn ? '; ground return not included' : '')
   )
 }

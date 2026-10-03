@@ -131,6 +131,8 @@ export interface SupplyEntry {
  * without `partPower`) reports `notAssessed` instead of running silently.
  */
 export interface OpResult {
+  /** The physical electrical solve, required for copper IR-drop and ampacity. */
+  copper?: import('../copper').CopperOp
   /** SPICE node name → DC voltage (V). */
   nodeVoltages: Record<string, number>
   /**
@@ -164,6 +166,6 @@ export interface OpResult {
    * several entries name one net the first is used.
    */
   supplyEntries?: SupplyEntry[]
-  /** Power (W) dissipated by a part, keyed by ref (P = Σ|V·I| across its pads). */
+  /** Absorbed power (W), the signed sum of terminal voltage times current. */
   partPower?: Record<string, number>
 }

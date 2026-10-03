@@ -1,3 +1,4 @@
+import { haveNativeCopper } from './nativeCopper'
 /**
  * core/critic/__tests__/irDrop.zones.test.ts
  *
@@ -18,7 +19,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseBoard } from '../../kicad/board'
 import { extract, type Circuit } from '../../netlist/extract'
-import { runCritic } from '../run'
+import { nativeRunCritic as runCritic } from './nativeCopper'
 import type { OpResult } from '../types'
 
 const SHEET_OHMS = 1.68e-8 / 34.8e-6
@@ -86,32 +87,32 @@ function opFor(circuit: Circuit, loads: Record<string, number>, volts = 5): OpRe
   return { nodeVoltages: { [vcc.spiceNode]: volts }, partCurrents: { ...loads }, padCurrents }
 }
 
-function run(board: ReturnType<typeof makeBoard>, loads: Record<string, number>) {
+async function run(board: ReturnType<typeof makeBoard>, loads: Record<string, number>) {
   const circuit = extract(board)
-  const report = runCritic(board, circuit, opFor(circuit, loads))
+  const report = (await runCritic(board, circuit, opFor(circuit, loads)))
   return { report, ir: report.findings.filter((f) => f.check === 'ir-drop') }
 }
 
-describe('IR drop with copper pours (issue #10)', () => {
-  it('case A: a lone 100 mm x 0.25 mm track at 1 A is still a 3.9% warning', () => {
-    const { ir } = run(makeBoard({ copper: TRACK }), { U1: 1 })
+describe.skipIf(!haveNativeCopper)('IR drop with copper pours (issue #10)', () => {
+  it('case A: a lone 100 mm x 0.25 mm track at 1 A is still a 3.9% warning', async () => {
+    const { ir } = (await run(makeBoard({ copper: TRACK }), { U1: 1 }))
     expect(ir).toHaveLength(1)
     expect(ir[0].metrics!.dropV).toBeCloseTo(0.1931, 3)
   })
 
-  it('case B: the same track under a pour that covers every pad is no longer an error', () => {
+  it('case B: the same track under a pour that covers every pad is no longer an error', async () => {
     // The pour carries the rail; the thin track underneath is bonded to it along
     // its whole length. Pre-fix this produced the identical 0.19 V warning and
     // the suggestion to add the pour that was already there.
-    const { ir, report } = run(makeBoard({ copper: `${TRACK} ${WIDE_POUR} ${GND_TRACK}` }), { U1: 1 })
+    const { ir, report } = (await run(makeBoard({ copper: `${TRACK} ${WIDE_POUR} ${GND_TRACK}` }), { U1: 1 }))
     expect(ir).toHaveLength(0)
     expect(report.ranBy).toContain('ir-drop')
     expect(report.skipped.find((s) => s.check === 'ir-drop')).toBeUndefined()
   })
 
-  it('case C: a rail fed only by a pour is solved, and a 4 mm neck in it shows its resistance', () => {
+  it('case C: a rail fed only by a pour is solved, and a 4 mm neck in it shows its resistance', async () => {
     // 100 mm of 4 mm strip = 25 squares = 12.07 mOhm; 10 A drops 0.121 V (2.4%).
-    const { ir } = run(makeBoard({ copper: NECK_POUR }), { U1: 10 })
+    const { ir } = (await run(makeBoard({ copper: NECK_POUR }), { U1: 10 }))
     expect(ir).toHaveLength(1)
     expect(ir[0].refs).toContain('U1')
     const expected = 10 * SHEET_OHMS * 25
@@ -123,30 +124,30 @@ describe('IR drop with copper pours (issue #10)', () => {
     expect(ir[0].suggestion ?? '').not.toMatch(/add a copper pour/i)
   })
 
-  it('case C: a wide pour with no track at all stays quiet and is reported as assessed', () => {
-    const { ir, report } = run(makeBoard({ copper: `${WIDE_POUR} ${GND_TRACK}` }), { U1: 2 })
+  it('case C: a wide pour with no track at all stays quiet and is reported as assessed', async () => {
+    const { ir, report } = (await run(makeBoard({ copper: `${WIDE_POUR} ${GND_TRACK}` }), { U1: 2 }))
     expect(ir).toHaveLength(0)
     expect(report.ranBy).toContain('ir-drop')
     expect(report.skipped.find((s) => s.check === 'ir-drop')).toBeUndefined()
   })
 
-  it('case D: a load that sits on the pour with no track is a sink, not silently dropped', () => {
+  it('case D: a load that sits on the pour with no track is a sink, not silently dropped', async () => {
     // Thin track J1 to U1 as before (U1 idle); U2 sits 50 mm along a 4 mm strip
     // of pour and has no track. 20 A over 12.5 squares is 0.121 V (2.4%): a
     // warning about U2. Pre-fix U2 had no copper contacts and was dropped.
     const strip = zone(1, 'VCC', 'F.Cu', 8, 8, 62, 12)
-    const { ir } = run(makeBoard({ copper: `${TRACK} ${strip}`, extraFootprints: U2 }), {
+    const { ir } = (await run(makeBoard({ copper: `${TRACK} ${strip}`, extraFootprints: U2 }), {
       U2: 20,
-    })
+    }))
     expect(ir).toHaveLength(1)
     expect(ir[0].refs).toContain('U2')
     expect(ir[0].metrics!.dropV).toBeGreaterThan(0.1)
   })
 
-  it('pins the ground return: a 4 mm pour neck on GND shows up as ground rise', () => {
+  it('pins the ground return: a 4 mm pour neck on GND shows up as ground rise', async () => {
     // The return of a 10 A load crosses 100 mm of 4 mm GND pour: 0.121 V of rise.
     const gndNeck = zone(2, 'GND', 'F.Cu', 8, 11, 112, 15)
-    const { ir } = run(makeBoard({ copper: `${WIDE_POUR} ${gndNeck}` }), { U1: 10 })
+    const { ir } = (await run(makeBoard({ copper: `${WIDE_POUR} ${gndNeck}` }), { U1: 10 }))
     const gnd = ir.find((f) => f.netId === 2)
     expect(gnd).toBeDefined()
     expect(gnd!.title).toMatch(/GND/)
@@ -154,12 +155,12 @@ describe('IR drop with copper pours (issue #10)', () => {
     expect(gnd!.metrics!.dropV).toBeLessThan(0.14)
   })
 
-  it('reports the round trip: a supply drop and a ground rise each under the warn line add up', () => {
+  it('reports the round trip: a supply drop and a ground rise each under the warn line add up', async () => {
     // 1.5% on the supply neck + 1.5% on the ground neck at 5 V is 3% round trip.
     // 75 mV on a 4 mm neck = 6.2 A over 25 squares; use 6.2 A.
     const vccNeck = NECK_POUR
     const gndNeck = zone(2, 'GND', 'F.Cu', 8, 11, 112, 15)
-    const { ir } = run(makeBoard({ copper: `${vccNeck} ${gndNeck}` }), { U1: 6.2 })
+    const { ir } = (await run(makeBoard({ copper: `${vccNeck} ${gndNeck}` }), { U1: 6.2 }))
     const vcc = ir.find((f) => f.netId === 1)
     expect(vcc).toBeDefined()
     expect(vcc!.metrics!.roundTripV).toBeGreaterThan(0.14)
@@ -169,58 +170,58 @@ describe('IR drop with copper pours (issue #10)', () => {
   })
 })
 
-describe('not assessed instead of silence (issue #9)', () => {
-  it('lists ir-drop and ampacity as not assessed when the op carries no branch currents', () => {
+describe.skipIf(!haveNativeCopper)('not assessed instead of silence (issue #9)', () => {
+  it('lists ir-drop and ampacity as not assessed when the op carries no branch currents', async () => {
     const board = makeBoard({ copper: TRACK })
     const circuit = extract(board)
     const vcc = circuit.nets.find((n) => n.kicadName === 'VCC')!
-    const report = runCritic(board, circuit, { nodeVoltages: { [vcc.spiceNode]: 5 } })
+    const report = (await runCritic(board, circuit, { nodeVoltages: { [vcc.spiceNode]: 5 } }))
     expect(report.ranBy).not.toContain('ir-drop')
     expect(report.ranBy).not.toContain('ampacity')
     expect(report.skipped.find((s) => s.check === 'ir-drop')?.reason).toMatch(/current/i)
     expect(report.skipped.find((s) => s.check === 'ampacity')?.reason).toMatch(/current/i)
   })
 
-  it('names a part whose current the solve could not resolve instead of counting it as zero', () => {
+  it('names a part whose current the solve could not resolve instead of counting it as zero', async () => {
     const board = makeBoard({ copper: `${TRACK} ${GND_TRACK}` })
     const circuit = extract(board)
     const op = { ...opFor(circuit, { U1: 1 }), unresolvedRefs: ['U9'] }
     // U9 is not on the board: nothing to name, stays assessed.
-    expect(runCritic(board, circuit, op).skipped.find((s) => s.check === 'ir-drop')).toBeUndefined()
+    expect((await runCritic(board, circuit, op)).skipped.find((s) => s.check === 'ir-drop')).toBeUndefined()
     const op2 = { ...opFor(circuit, {}), unresolvedRefs: ['U1'] }
-    const report = runCritic(board, circuit, op2)
+    const report = (await runCritic(board, circuit, op2))
     expect(report.skipped.find((s) => s.check === 'ir-drop')?.reason).toMatch(/U1/)
     expect(report.ranBy).not.toContain('ir-drop')
   })
 
-  it('names a rail with no copper at all that still carries current, in both checks', () => {
+  it('names a rail with no copper at all that still carries current, in both checks', async () => {
     // J1 and U1 on VCC, U1 drawing 5 A, no VCC copper: nothing was solved.
     const board = makeBoard({ copper: GND_TRACK })
     const circuit = extract(board)
-    const report = runCritic(board, circuit, opFor(circuit, { U1: 5 }))
+    const report = (await runCritic(board, circuit, opFor(circuit, { U1: 5 })))
     for (const check of ['ir-drop', 'ampacity'] as const) {
       expect(report.ranBy, check).not.toContain(check)
       expect(report.skipped.find((s) => s.check === check)?.reason, check).toMatch(/VCC: U1\.8 carry current but the board has no copper/)
     }
   })
 
-  it('names a rail whose copper touches no pad (every load stranded), in both checks', () => {
+  it('names a rail whose copper touches no pad (every load stranded), in both checks', async () => {
     // A VCC track in the middle of nowhere: copper exists, no pad is on it.
     const board = makeBoard({
       copper: `(segment (start 40 40) (end 60 40) (width 0.25) (layer "F.Cu") (net 1)) ${GND_TRACK}`,
     })
     const circuit = extract(board)
-    const report = runCritic(board, circuit, opFor(circuit, { U1: 5 }))
+    const report = (await runCritic(board, circuit, opFor(circuit, { U1: 5 })))
     for (const check of ['ir-drop', 'ampacity'] as const) {
       expect(report.ranBy, check).not.toContain(check)
       expect(report.skipped.find((s) => s.check === check)?.reason, check).toMatch(/VCC: U1\.8 carry current but no modelled copper touches any pad/)
     }
   })
 
-  it('says nothing about a rail that carries no current', () => {
+  it('says nothing about a rail that carries no current', async () => {
     const board = makeBoard({ copper: `${TRACK} ${GND_TRACK}` })
     const circuit = extract(board)
-    const report = runCritic(board, circuit, opFor(circuit, { U1: 0 }))
+    const report = (await runCritic(board, circuit, opFor(circuit, { U1: 0 })))
     expect(report.ranBy).toContain('ir-drop')
     expect(report.ranBy).toContain('ampacity')
   })

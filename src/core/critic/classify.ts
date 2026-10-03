@@ -42,12 +42,12 @@ function isBypassCap(part: Part): boolean {
  */
 export function classifyRails(
   circuit: Circuit,
-  _ctx: CriticContext,
+  _ctx?: CriticContext,
 ): { powerNetIds: Set<number>; groundNetIds: Set<number> } {
   // ── ground: a net counts as ground if suggestGround returns it alone ─────────
   const groundNetIds = new Set<number>()
   for (const n of [...circuit.nets].sort((a, b) => a.id - b.id)) {
-    if (suggestGround([n])) groundNetIds.add(n.id)
+    if (n.spiceNode === '0' || suggestGround([n])) groundNetIds.add(n.id)
   }
 
   // ── name-based power rails ───────────────────────────────────────────────────

@@ -46,6 +46,7 @@ import type { SolveInputs, SolveResult } from '../solve/types'
 import { ledSenseName } from '../spicegen/generate'
 
 export interface SolvedCurrents {
+  partPower?: Record<string, number>
   /** ref to pad number to signed amps drawn from the pad's net into the part. */
   padCurrents: Record<string, Record<string, number>>
   /** ref to the part's through current: the largest pad current magnitude. */
@@ -87,8 +88,17 @@ type Draws = Map<number, number> // netId to amps drawn from that net into the p
 
 export function deriveSolvedCurrents(
   inputs: Pick<SolveInputs, 'circuit' | 'resolutions'>,
-  solve: Pick<SolveResult, 'op' | 'deck'>,
+  solve: Pick<SolveResult, 'op' | 'deck' | 'copper'>,
 ): SolvedCurrents {
+  if (solve.copper) {
+    const padCurrents = solve.copper.padCurrents
+    return {
+      padCurrents,
+      partCurrents: Object.fromEntries(Object.entries(padCurrents).map(([ref, pads]) => [ref, Math.max(0, ...Object.values(pads).map(Math.abs))])),
+      partPower: Object.keys(solve.copper.partPower).length > 0 ? solve.copper.partPower : undefined,
+      unresolvedRefs: inputs.resolutions.filter((r) => r.status !== 'documented-open' && r.model?.kind !== 'stub' && solve.copper!.partPower[r.ref] === undefined).map((r) => r.ref).sort(),
+    }
+  }
   const { circuit, resolutions } = inputs
   const values = solve.op.values
   const netOfNode = new Map<string, number>()

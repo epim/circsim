@@ -18,7 +18,7 @@
  *     high-power pairs get 'warn' hot-cluster findings.
  *
  * Needs an operating-point sim (registry `needs:'op'`) that supplies `partPower`.
- * Nothing in the app produces `partPower` yet, so when it is absent the check
+ * Power comes from solved terminal voltages and currents. When absent the check
  * returns `notAssessed` rather than an empty array: an empty array would be
  * recorded as "ran" and read as "checked and clean" (issue #46). Pure core;
  * deterministic (parts iterated in stable order, fixed sweep count).
@@ -103,6 +103,10 @@ export function checkThermal(ctx: CriticContext): CheckOutput {
   // No power data at all: the check cannot fire. Say so instead of returning a
   // bare array, which the runner would count as "ran" (silence read as clean).
   if (!powers) return { findings: [], notAssessed: THERMAL_NOT_ASSESSED }
+  const unknown = (ctx.opResult?.unresolvedRefs ?? []).filter((ref) => powers[ref] === undefined)
+  const assessed = (findings: Finding[]): CheckOutput => unknown.length > 0
+    ? { findings, notAssessed: 'partly assessed: no solved power for ' + unknown.join(', ') }
+    : findings
 
   // ── powered parts with geometry, in stable (ref-sorted) order ────────────────
   const powered: Powered[] = []
@@ -113,13 +117,26 @@ export function checkThermal(ctx: CriticContext): CheckOutput {
     if (!fp) continue
     powered.push({ ref, watts, pos: { x: fp.at.x, y: fp.at.y } })
   }
-  if (powered.length === 0) return []
+  if (powered.length === 0) return assessed([])
 
+  const findings: Finding[] = []
+  for (const p of powered) {
+    const rating = ctx.refToPart.get(p.ref)?.properties.PowerRating
+    const ratedWatts = rating && /^\s*(\d+(?:\.\d+)?)\s*W\s*$/i.test(rating) ? Number.parseFloat(rating) : undefined
+    if (ratedWatts !== undefined && ratedWatts > 0 && p.watts > ratedWatts) {
+      findings.push({
+        id: `thermal:rating:${p.ref}`, check: 'thermal', severity: 'error', refs: [p.ref],
+        title: `${p.ref} dissipates ${p.watts.toPrecision(3)} W above its ${ratedWatts} W rating`,
+        detail: 'Solved DC terminal power exceeds the explicit PowerRating board field. Verify the rating and operating conditions.',
+        location: p.pos, metrics: { watts: p.watts, ratedWatts },
+      })
+    }
+  }
   const bounds = boardBounds(
     ctx,
     powered.map((p) => p.pos),
   )
-  if (!bounds) return []
+  if (!bounds) return assessed(findings)
 
   const width = bounds.maxX - bounds.minX
   const height = bounds.maxY - bounds.minY
@@ -164,7 +181,6 @@ export function checkThermal(ctx: CriticContext): CheckOutput {
     p.proxy = T[p.row][p.col]
   }
 
-  const findings: Finding[] = []
   const ASSUMPTION = 'first-order 2D heat-spread proxy; relative units, not absolute °C'
 
   // ── warmest-part info ────────────────────────────────────────────────────────
@@ -225,5 +241,5 @@ export function checkThermal(ctx: CriticContext): CheckOutput {
     }
   }
 
-  return findings
+  return assessed(findings)
 }
