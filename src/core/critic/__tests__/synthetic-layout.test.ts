@@ -29,6 +29,7 @@ import type { BoardModel, Footprint, Pad, Vec2 } from '../../kicad/types'
 import { extract } from '../../netlist/extract'
 import { padWorldPos, segPointDistanceMm, trackResistanceOhms } from '../geom'
 import { runCritic } from '../run'
+import { nativeRunCritic } from './nativeCopper'
 
 const FIXTURE_DIR = join(__dirname, '../../../../fixtures/synthetic')
 const board = parseBoard(readFileSync(join(FIXTURE_DIR, 'routed-rotated-kicad10.kicad_pcb'), 'utf8'))
@@ -147,10 +148,10 @@ describe('critic on the routed-rotated board', () => {
     expect(report.ranBy).toEqual(expect.arrayContaining(['floating', 'clearance', 'decoupling', 'loop-area']))
   })
 
-  it('IR drop on VIN is attributed to the R1 sink at the value the KiCad geometry gives', () => {
+  it('IR drop on VIN is attributed to the R1 sink at the value the KiCad geometry gives', async () => {
     const circuit = extract(board)
     const vin = circuit.nets.find((n) => n.kicadName === 'VIN')!
-    const report = runCritic(board, circuit, { nodeVoltages: { [vin.spiceNode]: 5 }, partCurrents: { R1: 10 } })
+    const report = await nativeRunCritic(board, circuit, { nodeVoltages: { [vin.spiceNode]: 5 }, partCurrents: { R1: 10 } })
     const f = report.findings.find((x) => x.check === 'ir-drop' && x.netId === vin.id)
     expect(f, 'an IR-drop finding for VIN').toBeDefined()
 

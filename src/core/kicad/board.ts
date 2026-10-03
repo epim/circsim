@@ -14,7 +14,7 @@
  */
 
 import { parseSexpr, findAll, find, atom, SExpr } from '../sexpr/parse'
-import { stitchOutline } from './outline'
+import { stitchOutline, tessellateArc } from './outline'
 import type {
   BoardModel,
   Footprint,
@@ -581,6 +581,24 @@ function parseBoardText(node: SExpr): BoardText | null {
 
 // ─── zone parsing ─────────────────────────────────────────────────────────────
 
+/** Copper polygon points, including KiCad's embedded three-point arcs. */
+function parseCopperPolygonPts(node: SExpr): Vec2[] {
+  const ptsNode = find(node, 'pts')
+  if (!ptsNode || !Array.isArray(ptsNode)) return []
+  const pts: Vec2[] = []
+  for (const pt of ptsNode) {
+    if (!Array.isArray(pt)) continue
+    if (pt[0] === 'xy') pts.push({ x: numAtom(pt, 1), y: numAtom(pt, 2) })
+    else if (pt[0] === 'arc') {
+      const start = parseVec2Child(pt, 'start')
+      const mid = parseVec2Child(pt, 'mid')
+      const end = parseVec2Child(pt, 'end')
+      pts.push(...tessellateArc(start, mid, end), end)
+    }
+  }
+  return pts
+}
+
 function parseZone(node: SExpr, nets: NetIndex): Zone | null {
   if (!Array.isArray(node) || node[0] !== 'zone') return null
 
@@ -602,17 +620,53 @@ function parseZone(node: SExpr, nets: NetIndex): Zone | null {
   const polygon: Vec2[][] = []
   const polyNodes = findAll(node, 'polygon')
   for (const polyNode of polyNodes) {
-    const ptsNode = find(polyNode, 'pts')
-    if (!ptsNode || !Array.isArray(ptsNode)) continue
-    const pts: Vec2[] = []
-    for (const pt of ptsNode) {
-      if (!Array.isArray(pt) || pt[0] !== 'xy') continue
-      pts.push({ x: numAtom(pt, 1), y: numAtom(pt, 2) })
-    }
+    const pts = parseCopperPolygonPts(polyNode)
     if (pts.length > 0) polygon.push(pts)
   }
 
   return layers.length > 0 ? { netId, layer, layers, polygon } : { netId, layer, polygon }
+}
+
+/** Board graphics carrying a net are real copper, including their stroke. */
+function parseCopperGraphic(node: SExpr, nets: NetIndex): NonNullable<BoardModel['copperGraphics']> | null {
+  if (!Array.isArray(node) || !['gr_rect', 'gr_poly', 'gr_circle', 'gr_line'].includes(strAtom(node, 0))) return null
+  const layer = parseLayer(node)
+  const netNode = find(node, 'net')
+  if (!layer.endsWith('.Cu') || !netNode) return null
+  const netId = nets.resolve(netNode)
+  if (netId === undefined || netId === 0) return null
+  const copperPts = node[0] === 'gr_poly' ? parseCopperPolygonPts(node) : null
+  const primitives = copperPts ? polyLines(copperPts) : parseEdgePrimitive(node)
+  if (!primitives) return null
+  const stroke = find(node, 'stroke')
+  const width = find(stroke ?? node, 'width')
+  const widthMm = width ? numAtom(width, 1) : 0
+  const fill = find(node, 'fill')
+  const filled = fill && ['yes', 'solid'].includes(strAtom(fill, 1))
+  const tracks: TrackSegment[] = []
+  const zones: Zone[] = []
+  const addLine = (start: Vec2, end: Vec2): void => {
+    if (widthMm > 0) tracks.push({ kind: 'segment', start, end, widthMm, layer, netId })
+  }
+  let polygon: Vec2[] = []
+  for (const primitive of primitives) {
+    if (primitive.kind === 'line') {
+      addLine(primitive.start, primitive.end)
+      polygon.push(primitive.start)
+    } else if (primitive.kind === 'rect') {
+      polygon = [primitive.start, { x: primitive.end.x, y: primitive.start.y }, primitive.end, { x: primitive.start.x, y: primitive.end.y }]
+      for (let i = 0; i < polygon.length; i++) addLine(polygon[i], polygon[(i + 1) % polygon.length])
+    } else if (primitive.kind === 'circle') {
+      const radius = Math.hypot(primitive.radiusPoint.x - primitive.center.x, primitive.radiusPoint.y - primitive.center.y)
+      polygon = Array.from({ length: 64 }, (_, i) => ({
+        x: primitive.center.x + radius * Math.cos(i * Math.PI / 32),
+        y: primitive.center.y + radius * Math.sin(i * Math.PI / 32),
+      }))
+      for (let i = 0; i < polygon.length; i++) addLine(polygon[i], polygon[(i + 1) % polygon.length])
+    }
+  }
+  if (filled && polygon.length >= 3) zones.push({ netId, layer, polygon: [polygon] })
+  return tracks.length || zones.length ? { tracks, zones } : null
 }
 
 /** `(version ...)` of KiCad 6.0, the oldest board format circsim reads. */
@@ -701,6 +755,14 @@ export function parseBoard(text: string): BoardModel {
     if (zone) zones.push(zone)
   }
 
+  const copperGraphics: NonNullable<BoardModel['copperGraphics']> = { tracks: [], zones: [] }
+  for (const child of root) {
+    const graphic = parseCopperGraphic(child, nets)
+    if (!graphic) continue
+    copperGraphics.tracks.push(...graphic.tracks)
+    copperGraphics.zones.push(...graphic.zones)
+  }
+
   // --- Edge.Cuts primitives ---
   // Board-level graphics (gr_*) and footprint graphics (fp_*) on Edge.Cuts both
   // contribute: a slot or cutout is often drawn inside a mechanical footprint,
@@ -771,5 +833,6 @@ export function parseBoard(text: string): BoardModel {
     outline,
     silkscreen,
     boardThicknessMm,
+    ...(copperGraphics.tracks.length || copperGraphics.zones.length ? { copperGraphics } : {}),
   }
 }

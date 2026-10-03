@@ -18,7 +18,7 @@ circsim op    <board.kicad_pcb> [options]
 
 ### audit
 
-Runs the Board Critic. By default it first solves the operating point, so the current-dependent checks (ampacity, IR-drop, thermal) run with real node voltages, exactly as after **Energize** in the app. Findings print grouped by severity, each with its detail, assumption, and suggestion.
+Runs the Board Critic. By default it first solves an ideal-net operating point, as **Energize** does in the app. Thermal can run from solved terminal power. Ampacity and IR-drop remain not assessed because they require a physical copper solve. The solve API supports `copperAware: true`; bench and CLI controls for that mode are still being added. Findings print grouped by severity, each with its detail, assumption, and suggestion.
 
 ```
 circsim audit board.kicad_pcb --schematic

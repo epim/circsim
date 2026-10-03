@@ -21,6 +21,12 @@ On a small board such as the 555 sample, `1×` is held steadily (a 1 Hz blinker 
 The transient starts from the circuit's initial state rather than a pre-solved DC point, so you watch capacitors charge and oscillators start up: the "power on and see it come alive" moment. For very long runs, circsim restarts the window every ~30 seconds to bound memory; your scope history is kept. A window is shorter than 30 seconds when its samples would not fit the simulator's 1.5 GB memory budget: a fast function generator sets a fine time step (1/200 of its period), and a board with many nets saves more per step. circsim then restarts at the shorter boundary and the log says how long the windows are (*"Transient windows are limited to …"*). At the default 100 µs step the bundled 555 blinker needs about 60 MB per window, so it keeps the full 30 seconds.
 :::
 
+## Copper-aware runs
+
+The bench's copper-aware control arrives with PR #162.
+
+With copper-aware solving enabled, the transient includes resistance on signal, supply and return nets. It uses a reduced copper network that retains pad terminals and eliminates internal mesh nodes. The operating-point audit keeps the full network. Missing routes remain disconnected, so an unrouted sample can behave differently from its ideal-net simulation; the bundled 555 has this limitation. Reduction lowers the cost of a large copper mesh, but physical mode can still run below real time. See the measured costs and geometry limits in [Fidelity](../concepts/fidelity#copper-resistance-and-remaining-parasitics).
+
 ## Frame the waveform
 
 - **Time/div**: the dropdown sets the horizontal scale, from `1µs` to `5s` (default `1ms`). Pick a value that shows a few cycles. When the window holds fewer simulated points than the scope has pixels across (at the default 100 µs step, `1ms`/div or finer), the trace joins the simulated points with straight lines; a function generator on the bench sets a finer step for a fast signal.

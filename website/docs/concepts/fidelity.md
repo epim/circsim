@@ -47,11 +47,26 @@ To play the part of the firmware, choose **Interactive pins** in the [Model Doct
 
 It is *not* enough to check timing relationships between firmware-driven signals and analog peripherals.
 
-### No parasitics
+### Copper resistance and remaining parasitics
 
-circsim does not model:
+The solve API has an opt-in physical copper mode (`copperAware: true`). Tracks, vias, pours and netted copper graphics on all nets, including signals, become resistor networks in the same ngspice circuit as the parts. Pads on one net can have different solved voltages. The [Board Critic](./board-critic) does estimate copper resistance through this shared network and reads pad voltages and segment currents from the full operating-point network; its rail checks still distinguish power and ground from signal nets. Ideal nets remain the default, and their generated decks are unchanged.
 
-- **Trace resistance and inductance**: a 5 cm, 0.25 mm trace on 1 oz copper is about 0.1 Ω, negligible at DC but real at RF. *(Note: the [Board Critic](./board-critic) does estimate copper resistance for its IR-drop check, including copper pours and the ground return, but the SPICE simulation itself treats nets as ideal nodes; the critic reads each part's current from that ideal-net solve and then solves the copper with those currents.)*
+Track resistance uses length, width, and an assumed 1 oz copper weight (35 µm), configurable through the solve options. A 5 cm, 0.25 mm trace on 1 oz copper is about 0.1 Ω. Via resistance assumes 20 µm barrel plating. Pours use an approximately 2 mm sheet-resistance mesh of their outlines, refined when a pad's thin copper feature would otherwise be omitted and coarsened to a cell budget. Touching pour items connect through resistive links whose entire path lies in their copper union. Thermal-relief spokes, fill clearance islands, and keepouts are not extracted. Missing copper leaves pads disconnected, and a lead position selects its nearest physical pad; without a position the source pad is guessed.
+
+The network and solve result expose pads without copper contacts or a path from the supply entry, and the Critic names them even at zero current. A failed solve retains that geometry but supplies no electrical readings. A transient-fallback result is labelled as a bias snapshot rather than a converged DC operating point. Connected idle parts can have known zero dissipation; missing model terminals or physically unpowered parts remain not assessed for power.
+
+For a transient, circsim eliminates internal resistor nodes with Kron reduction and keeps the pad terminals. This preserves the mesh's terminal resistance while reducing what ngspice solves at each step. It does not add inductance, capacitance or a more detailed copper geometry model. Full and reduced native operating points agree within 0.1 µV at every tested pad and 1 µA on reconstructed segment currents on the pour-only fixture and a lantern-shaped synthetic board. The connectivity gate checks 950 multi-pad nets across 24 corpus, sample and synthetic boards. It skips and counts 546 single-pad nets, which need no route between terminals; 12 pad gaps on tiny-tapeout and the dialect probes have independent KiCad DRC evidence in the corpus baseline.
+
+Measured on Windows with native ngspice, one fresh process per board and mode, three warmups then 15 runs. Each run simulates 0.1 s with a requested 100 µs step. The medians include solving and reading saved vectors; cost per saved time point is not the cost of an internal adaptive solver step. These measurements exclude deck construction, reduction setup and live rendering.
+
+- **Bundled 555:** ideal 23.29 ms, full copper 26.48 ms, reduced copper 26.32 ms. Copper nodes: 27 full, 20 reduced.
+- **Lantern-shaped synthetic:** ideal 4.99 ms, full copper 4,241.13 ms, reduced copper 669.04 ms. Copper nodes: 1,733 full, 90 reduced.
+
+Per saved time point, the medians are 22.92 / 26.19 / 26.03 µs for the 555 and 4.94 / 4,194.98 / 661.76 µs for the lantern (ideal / full / reduced). The lantern has 1,011 saved time points in every mode; the 555 has 1,016 ideal and 1,011 physical. Reduction is about 6.3 times faster than the full lantern mesh in this measurement, but its 669 ms for 0.1 s of simulation is about 7 times slower than real time and about 130 times the ideal deck's cost. Achieving 1x real time is separate work in #25. The 555 supply and return leads were placed directly on U1 pads 8 and 1. That sample is unrouted (#160), and its all-net physical network reports 16 pad gaps, so its physical run is not a validation of the ideal oscillator waveform. These are observations, not timing guarantees.
+
+circsim still does not model:
+
+- **Trace inductance**: this matters for RF and fast edges.
 - **Via inductance**: ~0.5 to 1 nH each, invisible to the simulation.
 - **Pad and lead-frame capacitance**: picofarads that matter for high-speed signals.
 - **Coupling between traces**: crosstalk, EMI pickup, differential-pair imbalance.
@@ -107,7 +122,7 @@ Every number on this page is held by a test that fails when the model drifts fro
 - **DC operating point and RC waveforms.** `op.integration.test.ts` (a divider reads 2.5 V to 5 mV) and `transient.integration.test.ts` (an RC charge curve within 2 percent).
 - **Undriven nets.** `generate.test.ts` (the 1 GΩ tie), `floating-supply-pin.integration.test.ts`, and `WarningsBar.test.tsx` (the "Undriven nets held at 0 V" note).
 - **Fixed 27 °C.** `fidelity-claims.test.ts` checks that no generated deck carries a temperature card or sweep.
-- **Trace resistance figure.** `geom.test.ts` (100 mm by 0.5 mm on 1 oz copper is 0.0966 Ω, the same 200 squares as the 5 cm by 0.25 mm trace quoted above) and `irDrop.test.ts` for the critic's copper solve.
+- **Trace resistance figure.** `geom.test.ts` (100 mm by 0.5 mm on 1 oz copper is 0.0966 Ω, the same 200 squares as the 5 cm by 0.25 mm trace quoted above) and `copper.integration.test.ts` for the shared physical solve. The pour-only corpus assertion checks that the fixture's pad voltages agree with Critic IR-drop. `kron.integration.test.ts` checks full/reduced pad voltage and segment-current equivalence; the all-net connectivity test in `npm run test:corpus` checks routing with KiCad-confirmed gap evidence; `measurements.test.ts` supplies the opt-in transient measurements above.
 - **Stubs and the fidelity banner.** `resolve.test.ts` (which parts are stubbed) and `WarningsBar.test.tsx` (the banner, its minimized badge, and its re-expansion when the affected set changes).
 - **Convergence fallbacks.** `library-op-convergence.integration.test.ts`.
 

@@ -14,6 +14,7 @@ import type { Circuit } from '../netlist/extract'
 import { generateDeckWithDiagnostics, type GenerateOptions } from '../spicegen/generate'
 import { wiredInstruments, type Instrument } from '../spicegen/instruments'
 import type { SolveInputs, SolveOverrides, UndrivenNet, UserModelText } from './types'
+import { buildCopperNetwork } from '../copper'
 
 /**
  * Snapshot every deck input. Rail overrides are resolved against this circuit,
@@ -29,7 +30,15 @@ export function buildSolveInputs(
   groundNetId: number,
   overrides: SolveOverrides = {},
 ): SolveInputs {
+  if (overrides.copperAware && !board) throw new Error('copperAware requires routed board geometry')
   return {
+    copperAware: overrides.copperAware,
+    copperNetwork: overrides.copperAware && board ? buildCopperNetwork(board, circuit, {
+      ...overrides.copperOptions,
+      allNets: true,
+      groundNetId,
+      netIds: [...(overrides.copperOptions?.netIds ?? []), ...instruments.flatMap(i => i.kind === 'dc-supply' ? [i.netId] : [])],
+    }) : undefined,
     board,
     circuit,
     resolutions,
@@ -48,7 +57,7 @@ export function buildSolveInputs(
  * baseline by clearing them first.
  */
 export function buildDeck(inputs: SolveInputs): string[] {
-  return buildDeckWithUndriven(inputs).deck
+  return buildDeckWithUndriven(inputs, 'transient').deck
 }
 
 /**
@@ -56,8 +65,11 @@ export function buildDeck(inputs: SolveInputs): string[] {
  * drives them (issue #43). Still the only place in the app that calls the deck
  * generator.
  */
-export function buildDeckWithUndriven(inputs: SolveInputs): { deck: string[]; undrivenNets: UndrivenNet[] } {
-  const { lines, diagnostics } = generateDeckWithDiagnostics(generateOptions(inputs))
+export function buildDeckWithUndriven(inputs: SolveInputs, purpose: 'op' | 'transient' = 'op'): { deck: string[]; undrivenNets: UndrivenNet[] } {
+  const { lines, diagnostics } = generateDeckWithDiagnostics({
+    ...generateOptions(inputs),
+    copperReduction: purpose === 'transient' ? 'terminals' : undefined,
+  })
   return { deck: lines, undrivenNets: undrivenNetsOf(diagnostics.undrivenIslands, inputs.circuit) }
 }
 
@@ -89,6 +101,7 @@ export function undrivenNetsOf(islands: readonly (readonly string[])[], circuit:
 
 function generateOptions(inputs: SolveInputs): GenerateOptions {
   return {
+    copperNetwork: inputs.copperAware ? inputs.copperNetwork : undefined,
     circuit: inputs.circuit,
     resolutions: inputs.resolutions,
     instruments: inputs.instruments,
