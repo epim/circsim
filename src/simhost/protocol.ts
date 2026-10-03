@@ -44,6 +44,9 @@ export type SimCommand =
 
 export type SimEvent =
   | { type: 'ready'; ngspiceVersion: string }
+  // A rejected deck is not loaded. Pending solves fail cleanly; the next valid
+  // load resets native state first when parsing left a partial circuit (#163).
+  | { type: 'loadFailed'; detail: string }
   | { type: 'vectors'; names: string[] } // vector list after run starts
   | {
       type: 'samples'
@@ -88,13 +91,12 @@ export interface LatestSnapshot {
 // ─── bench tstep ─────────────────────────────────────────────────────────────
 
 /**
- * Coarsest transient time-step the live bench asks for: what a bench with no
- * fast source on it runs at (issue #25). ngspice refines below it on its own
- * wherever the circuit demands (edges, switching), so it bounds only the
- * quietest stretches, and the scope decimates to pixel columns anyway. Shared
- * so the renderer's bandwidth-derived tstep and the real-time tests agree.
+ * Upper bound requested by the live bench (issue #25). Source bandwidth and
+ * recognised timing/feedback RC nodes can make the effective step finer;
+ * ngspice refines further around edges. Shared so renderer requests and the
+ * real-time tests agree, not a guarantee for opaque oscillator dynamics.
  */
-export const BENCH_TSTEP_MAX_SECONDS = 100e-6
+export const BENCH_TSTEP_MAX_SECONDS = 5e-3
 
 // ─── op solve method (Spec §8.8 retry ladder — additive extension) ───────────
 

@@ -344,8 +344,8 @@ export const MAX_TSTEP_SECONDS = BENCH_TSTEP_MAX_SECONDS
 /**
  * Compute the transient time-step from the signal bandwidth on the bench: the
  * fastest function-gen sets it at 200 points per cycle,
- *   tstep = min( 1 / (200 · fmax), 100 µs )
- * and with no function-gen (nothing periodic to resolve) it is the 100 µs
+ *   tstep = min( 1 / (200 * fmax), BENCH_TSTEP_MAX_SECONDS )
+ * and with no function-gen (nothing periodic to resolve) it is the protocol
  * ceiling (Spec §7.5, Task 24, issue #25).
  */
 export function computeTstep(instruments: Instrument[]): number {

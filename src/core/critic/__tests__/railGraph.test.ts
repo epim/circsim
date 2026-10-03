@@ -1,3 +1,4 @@
+import { haveNativeCopper } from './nativeCopper'
 /**
  * core/critic/__tests__/railGraph.test.ts
  *
@@ -9,10 +10,11 @@
 import { describe, it, expect } from 'vitest'
 import { parseBoard } from '../../kicad/board'
 import { extract } from '../../netlist/extract'
-import { buildContext } from '../context'
+import { nativeBuildContext as buildContext } from './nativeCopper'
 import { solveRail, viaResistanceOhms } from '../railGraph'
-import { runCritic } from '../run'
+import { nativeRunCritic as runCritic } from './nativeCopper'
 import { DEFAULT_CRITIC_OPTIONS, type OpResult } from '../types'
+import { buildCopperNetwork, emitCopperCards } from '../../copper'
 
 const SHEET = 1.68e-8 / 34.8e-6
 
@@ -33,21 +35,21 @@ function zone(layer: string, pts: [number, number][], holes: [number, number][][
 const rect = (x0: number, y0: number, x1: number, y1: number): [number, number][] => [
   [x0, y0], [x1, y0], [x1, y1], [x0, y1],
 ]
-function ctxFor(body: string, loads: Record<string, number>, zoneMeshMm = 2) {
+async function ctxFor(body: string, loads: Record<string, number>, zoneMeshMm = 2) {
   const board = parseBoard(pcb(body))
   const circuit = extract(board)
   const padCurrents: Record<string, Record<string, number>> = {}
   for (const [ref, a] of Object.entries(loads)) padCurrents[ref] = { '8': a, '4': -a }
   const op: OpResult = { nodeVoltages: { vcc: 5 }, partCurrents: loads, padCurrents }
-  return { board, circuit, ctx: buildContext(board, circuit, op, { ...DEFAULT_CRITIC_OPTIONS, zoneMeshMm }) }
+  return { board, circuit, ctx: (await buildContext(board, circuit, op, { ...DEFAULT_CRITIC_OPTIONS, zoneMeshMm })) }
 }
 function netId(circuit: ReturnType<typeof extract>, name: string): number {
   return circuit.nets.find((n) => n.kicadName === name)!.id
 }
 
-describe('pour meshing', () => {
-  it('a 100 mm x 10 mm strip is ten squares: 4.8 mOhm end to end (within 12 percent)', () => {
-    const { circuit, ctx } = ctxFor(`${fp('J1', 10, 10)} ${fp('U1', 110, 10)} ${zone('F.Cu', rect(8, 5, 112, 15))}`, { U1: 10 })
+describe.skipIf(!haveNativeCopper)('pour meshing', () => {
+  it('a 100 mm x 10 mm strip is ten squares: 4.8 mOhm end to end (within 12 percent)', async () => {
+    const { circuit, ctx } = (await ctxFor(`${fp('J1', 10, 10)} ${fp('U1', 110, 10)} ${zone('F.Cu', rect(8, 5, 112, 15))}`, { U1: 10 }))
     const sol = solveRail(ctx, netId(circuit, 'VCC'), false)!
     const drop = -sol.volts[sol.loads[0].pad.node]
     const want = 10 * SHEET * (100 / 10)
@@ -55,66 +57,66 @@ describe('pour meshing', () => {
     expect(drop).toBeLessThan(want * 1.12)
   })
 
-  it('a square plate fed corner to corner by point contacts sits between the bounds (no mesh blow-up)', () => {
+  it('a square plate fed corner to corner by point contacts sits between the bounds (no mesh blow-up)', async () => {
     // Point-to-point spreading resistance in a sheet grows with log(L/a); just
     // check a finite, positive, small answer.
-    const { circuit, ctx } = ctxFor(`${fp('J1', 10, 10)} ${fp('U1', 40, 40)} ${zone('F.Cu', rect(5, 5, 45, 45))}`, { U1: 5 })
+    const { circuit, ctx } = (await ctxFor(`${fp('J1', 10, 10)} ${fp('U1', 40, 40)} ${zone('F.Cu', rect(5, 5, 45, 45))}`, { U1: 5 }))
     const sol = solveRail(ctx, netId(circuit, 'VCC'), false)!
     const drop = -sol.volts[sol.loads[0].pad.node]
     expect(drop).toBeGreaterThan(0)
     expect(drop).toBeLessThan(5 * SHEET * 5)
   })
 
-  it('two pours with a gap between them split the rail: the far load is stranded and named, not dropped', () => {
+  it('two pours with a gap between them split the rail: the far load is stranded and named, not dropped', async () => {
     // A 2 mm gap at x 35..37 cuts the strip in two; nothing bridges it.
-    const { circuit, ctx } = ctxFor(
+    const { circuit, ctx } = (await ctxFor(
       `${fp('J1', 10, 10)} ${fp('U1', 60, 10)} ${zone('F.Cu', rect(5, 5, 35, 15))} ${zone('F.Cu', rect(37, 5, 65, 15))}`,
       { U1: 1 },
-    )
+    ))
     const sol = solveRail(ctx, netId(circuit, 'VCC'), false)!
     expect(sol.stranded.map((l) => l.pad.ref)).toEqual(['U1'])
     // and the critic says so instead of passing the rail
-    const report = runCritic(ctx.board, circuit, ctx.opResult)
+    const report = (await runCritic(ctx.board, circuit, ctx.opResult))
     expect(report.skipped.find((s) => s.check === 'ir-drop')?.reason).toMatch(/U1\.8.*no modelled copper/)
     expect(report.ranBy).not.toContain('ir-drop')
   })
 
-  it('a multi-layer zone (KiCad 7+ `(layers ...)`) is one fill per layer, joined by vias', () => {
+  it('a multi-layer zone (KiCad 7+ `(layers ...)`) is one fill per layer, joined by vias', async () => {
     // No `(layer ...)` token at all: pre-fix the zone had layer '' and matched nothing.
     const multi = `(zone (net 1) (net_name "VCC") (layers "F.Cu" "B.Cu") (hatch edge 0.5)
       (polygon (pts (xy 5 5) (xy 65 5) (xy 65 15) (xy 5 15))))`
-    const { circuit, board, ctx } = ctxFor(
+    const { circuit, board, ctx } = (await ctxFor(
       `${fp('J1', 10, 10)} ${fp('U1', 60, 10, 0, 'B.Cu')}
        (via (at 30 10) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1)) ${multi}`,
       { U1: 2 },
-    )
+    ))
     expect(board.zones[0].layers).toEqual(['F.Cu', 'B.Cu'])
     const sol = solveRail(ctx, netId(circuit, 'VCC'), false)!
     expect(sol.stranded).toHaveLength(0) // U1 is on B.Cu, J1 on F.Cu: the via joins the two fills
     expect(sol.loads.map((l) => l.pad.ref)).toEqual(['U1'])
   })
 
-  it('a hole in the pour is routed around, costing resistance', () => {
-    const plain = ctxFor(`${fp('J1', 10, 10)} ${fp('U1', 60, 10)} ${zone('F.Cu', rect(5, 5, 65, 15))}`, { U1: 10 })
-    const holed = ctxFor(
+  it('a hole in the pour is routed around, costing resistance', async () => {
+    const plain = (await ctxFor(`${fp('J1', 10, 10)} ${fp('U1', 60, 10)} ${zone('F.Cu', rect(5, 5, 65, 15))}`, { U1: 10 }))
+    const holed = (await ctxFor(
       `${fp('J1', 10, 10)} ${fp('U1', 60, 10)} ${zone('F.Cu', rect(5, 5, 65, 15), [rect(30, 5.5, 34, 13)])}`,
       { U1: 10 },
-    )
-    const drop = (c: ReturnType<typeof ctxFor>): number => {
+    ))
+    const drop = (c: Awaited<ReturnType<typeof ctxFor>>): number => {
       const s = solveRail(c.ctx, netId(c.circuit, 'VCC'), false)!
       return -s.volts[s.loads[0].pad.node]
     }
     expect(drop(holed)).toBeGreaterThan(drop(plain) * 1.3)
   })
 
-  it('stitches two pours on different layers through a via', () => {
-    const { circuit, ctx } = ctxFor(
+  it('stitches two pours on different layers through a via', async () => {
+    const { circuit, ctx } = (await ctxFor(
       `${fp('J1', 10, 10)} ${fp('U1', 60, 10, 0, 'B.Cu')}
        ${zone('F.Cu', rect(5, 5, 35, 15))}
        (via (at 34 10) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
        ${zone('B.Cu', rect(30, 5, 65, 15))}`,
       { U1: 2 },
-    )
+    ))
     const sol = solveRail(ctx, netId(circuit, 'VCC'), false)!
     expect(sol.stranded).toHaveLength(0)
     const u1 = sol.loads.find((l) => l.pad.ref === 'U1')!
@@ -123,7 +125,7 @@ describe('pour meshing', () => {
   })
 })
 
-describe('a track lying in a pour', () => {
+describe.skipIf(!haveNativeCopper)('a track lying in a pour', () => {
   // Regression: cut points of a track under a pour were each shorted to every
   // cell near them, so consecutive cut points shared cells and the pour row
   // under the track collapsed to one node: no drop, no current in the track,
@@ -131,11 +133,11 @@ describe('a track lying in a pour', () => {
   const TRACK = '(segment (start 10 10) (end 110 10) (width 0.25) (layer "F.Cu") (net 1))'
   const PHASES = [8, 8.17, 8.33, 8.5, 8.67, 9, 9.4]
 
-  function solveWith(pourPts: [number, number][], amps: number) {
-    const { circuit, ctx } = ctxFor(
+  async function solveWith(pourPts: [number, number][], amps: number) {
+    const { circuit, ctx } = (await ctxFor(
       `${fp('J1', 10, 10)} ${fp('U1', 110, 10)} ${TRACK} ${zone('F.Cu', pourPts)}`,
       { U1: amps },
-    )
+    ))
     const sol = solveRail(ctx, netId(circuit, 'VCC'), false)!
     // The track's current at mid-span, away from the pad ends where it depends on how the pad lands on cells.
     let trackA = 0
@@ -147,19 +149,23 @@ describe('a track lying in a pour', () => {
     return { dropV: -sol.volts[sol.loads[0].pad.node], trackA }
   }
 
-  it('a 4 mm neck keeps its resistance whatever the lattice phase against the track', () => {
+  it('a 4 mm neck keeps its resistance whatever the lattice phase against the track', async () => {
     // 100 mm of 4 mm strip is 25 squares: 12.07 mOhm, 0.121 V at 10 A.
     const want = 10 * SHEET * 25
     for (const x0 of PHASES) {
-      const { dropV } = solveWith(rect(x0, 8, 112, 12), 10)
+      const { dropV } = (await solveWith(rect(x0, 8, 112, 12), 10))
       expect(dropV, `x0=${x0}`).toBeGreaterThan(want * 0.85)
       expect(dropV, `x0=${x0}`).toBeLessThan(want * 1.15)
     }
   })
 
-  it('the track carries a steady share of the current at every phase, never none', () => {
-    const wide = PHASES.map((x0) => solveWith(rect(x0, -10, 125, 30), 5).trackA)
-    const neck = PHASES.map((x0) => solveWith(rect(x0, 8, 112, 12), 10).trackA)
+  it('the track carries a steady share of the current at every phase, never none', async () => {
+    const wide: number[] = []
+    const neck: number[] = []
+    for (const x0 of PHASES) {
+      wide.push((await solveWith(rect(x0, -10, 125, 30), 5)).trackA)
+      neck.push((await solveWith(rect(x0, 8, 112, 12), 10)).trackA)
+    }
     for (const set of [wide, neck]) {
       const lo = Math.min(...set)
       const hi = Math.max(...set)
@@ -168,19 +174,19 @@ describe('a track lying in a pour', () => {
     }
   })
 
-  it('the neck splits the current as the parallel resistors do: track 0.193 ohm, neck 12.07 mOhm', () => {
+  it('the neck splits the current as the parallel resistors do: track 0.193 ohm, neck 12.07 mOhm', async () => {
     const rTrack = (SHEET * 100) / 0.25
     const rNeck = SHEET * 25
     const want = (10 * rNeck) / (rTrack + rNeck)
-    const { trackA } = solveWith(rect(8.3, 8, 112, 12), 10)
+    const { trackA } = (await solveWith(rect(8.3, 8, 112, 12), 10))
     expect(trackA).toBeGreaterThan(want * 0.9)
     expect(trackA).toBeLessThan(want * 1.1)
   })
 
-  it('the same holds with the pour offset in y', () => {
-    const base = solveWith(rect(8, 8, 112, 12), 10)
+  it('the same holds with the pour offset in y', async () => {
+    const base = (await solveWith(rect(8, 8, 112, 12), 10))
     for (const dy of [0.2, 0.45, 0.7]) {
-      const shifted = solveWith(rect(8, 8 - dy, 112, 12 - dy + 0.4), 10)
+      const shifted = (await solveWith(rect(8, 8 - dy, 112, 12 - dy + 0.4), 10))
       expect(shifted.dropV).toBeGreaterThan(base.dropV * 0.8)
       expect(shifted.dropV).toBeLessThan(base.dropV * 1.35)
       expect(shifted.trackA).toBeGreaterThan(0.01)
@@ -188,7 +194,7 @@ describe('a track lying in a pour', () => {
   })
 })
 
-describe('via resistance', () => {
+describe.skipIf(!haveNativeCopper)('via resistance', () => {
   it('is derived from drill, plating and board thickness: 0.3 mm drill, 1.6 mm board is 1.43 mOhm', () => {
     const ohms = viaResistanceOhms({ at: { x: 0, y: 0 }, sizeMm: 0.6, drillMm: 0.3, layers: ['F.Cu', 'B.Cu'] }, 1.6)
     expect(ohms * 1000).toBeCloseTo(1.43, 2)
@@ -202,11 +208,11 @@ describe('via resistance', () => {
   })
 })
 
-describe('scale', () => {
+describe('copper graph construction scale (pure TypeScript)', () => {
   /**
    * An N x N grid of VCC tracks plus a pour over the whole board, with `loads`
-   * 50 mA loads: the council's perf-scale board in miniature (N = 40 is 3280
-   * segments, about 1950 graph nodes with the pour mesh).
+   * pad terminals: the council's perf-scale board in miniature. N = 40 has
+   * 3280 segments and more than 1950 copper nodes after bonding.
    */
   function scaleBoard(N: number, loads: number) {
     const segs: string[] = []
@@ -219,49 +225,48 @@ describe('scale', () => {
     }
     const extent = 15 + N * step
     const parts = [fp('J1', 10, 10)]
-    const loadMap: Record<string, number> = {}
     for (let k = 0; k < loads; k++) {
       const ref = `U${k + 1}`
       parts.push(fp(ref, 10 + (k % 10) * (N / 4), 10 + Math.floor(k / 10) * (N * 0.375)))
-      loadMap[ref] = 0.05
     }
-    return ctxFor(`${parts.join(' ')} ${segs.join(' ')} ${zone('F.Cu', rect(5, 5, extent, extent))}`, loadMap)
+    const board = parseBoard(pcb(`${parts.join(' ')} ${segs.join(' ')} ${zone('F.Cu', rect(5, 5, extent, extent))}`))
+    return { board, circuit: extract(board) }
   }
 
-  /** Best-of-N wall time (ms) for one rail solve, plus the last result. */
-  function timeSolve(N: number, loads: number, reps: number) {
+  /** Best-of-N graph construction plus card emission, excluding board parsing. */
+  function timeBuild(N: number, loads: number, reps: number) {
+    const { board, circuit } = scaleBoard(N, loads)
     let best = Infinity
-    let sol: ReturnType<typeof solveRail> = null
+    let network: ReturnType<typeof buildCopperNetwork> | undefined
+    let cards: string[] = []
     for (let r = 0; r < reps; r++) {
-      // solveRail memoises per context, so every repetition gets a fresh one.
-      const { circuit, ctx } = scaleBoard(N, loads)
-      const net = netId(circuit, 'VCC')
       const t0 = performance.now()
-      sol = solveRail(ctx, net, false)
+      network = buildCopperNetwork(board, circuit)
+      cards = emitCopperCards(network)
       best = Math.min(best, performance.now() - t0)
     }
-    return { best, sol }
+    return { best, network: network!, cards }
   }
 
-  it('solves a 1950-node track rail with a pour in time that does not grow cubically', () => {
-    timeSolve(10, 4, 1) // warm the JIT so the small run is not the cold one
-    // Best of 5 and 3: the small solve is already several milliseconds (above
+  it('builds and emits a large track rail with a pour without cubic growth', () => {
+    timeBuild(10, 4, 1) // warm the JIT so the small run is not the cold one
+    // Best of 5 and 3: the small build is already several milliseconds (above
     // timer noise), and best-of-N on both sides discards scheduler hiccups.
-    const small = timeSolve(20, 15, 5)
-    const big = timeSolve(40, 60, 3)
-    expect(small.sol).not.toBeNull()
-    expect(big.sol).not.toBeNull()
-    expect(big.sol!.loads.length).toBeGreaterThanOrEqual(55)
+    const small = timeBuild(20, 15, 5)
+    const big = timeBuild(40, 60, 3)
+    expect(big.network.nodes.length).toBeGreaterThan(1950)
+    expect(big.network.rails.get(1)!.graph.pads).toHaveLength(61)
+    expect(big.cards.length).toBeGreaterThan(small.cards.length)
 
-    // Intent: meshing a pour into the graph must not bring back the cubic
-    // blow-up of the dense solver (320 ms there at this size). No absolute
-    // millisecond bound: CI runners are up to 5x slower than a dev machine, so
-    // compare two sizes on the same machine. Going from a 20 x 20 to a 40 x 40
-    // grid quadruples the node count: the sparse solve costs a small multiple of
-    // 4x to 8x (measured 4 to 6 locally), dense elimination would cost 4^3 = 64x.
-    // The bound of 40 is 5x the expected ratio of 8, so a loaded runner does not
-    // trip it, and it still fails on cubic-in-nodes growth (about 64).
+    // Pour meshing changes the node growth independently of the track count.
+    // Measure that growth and allow 5x headroom over linear-in-nodes work,
+    // without an absolute time bound. The sizes must be far enough apart that
+    // their cubic growth exceeds this bound: nodeRatio^3 > 5 * nodeRatio.
+    const nodeRatio = big.network.nodes.length / small.network.nodes.length
+    expect(nodeRatio).toBeGreaterThan(Math.sqrt(5))
+    const bound = 5 * nodeRatio
     const ratio = big.best / small.best
-    expect(ratio).toBeLessThan(40)
+    console.log(`[copper-scale] nodes=${small.network.nodes.length}/${big.network.nodes.length} nodeRatio=${nodeRatio.toFixed(3)} timeRatio=${ratio.toFixed(3)} bound=${bound.toFixed(3)}`)
+    expect(ratio).toBeLessThan(bound)
   })
 })

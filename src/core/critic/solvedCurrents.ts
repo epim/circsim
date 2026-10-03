@@ -7,7 +7,8 @@
  * or an IC. Before this module the critic got LED sense currents only, so
  * every other load on a rail was invisible to the copper checks.
  *
- * What is derived, in order:
+ * Copper-aware solves supply measured terminal currents directly. For ideal
+ * solves, the following pass derives currents in order:
  *
  *   1. Measured parts, exactly: a resistor's current is (V1 - V2) / R from the
  *      solved node voltages, a capacitor carries nothing at DC, and an LED's
@@ -32,10 +33,10 @@
  * not-assessed line. Parts the deck does not model (open stubs, documented-open
  * parts, unresolved parts) carry no current by construction.
  *
- * This is the pre-copper-aware solve: the deck still treats each net as one
- * ideal node, so a current here is the current that net would carry if its
- * copper were perfect. W2.1 (#20) puts the copper into the deck; this module is
- * the seam the critic reads until then.
+ * The critic reads both modes through this seam. Copper-aware currents come
+ * from the shared physical solve; ideal currents describe perfect net copper.
+ * Missing meters remain unresolved. Omitted model-less parts have no circuit
+ * element, so their modeled current and power are exactly zero.
  *
  * Pure core; deterministic.
  */
@@ -46,6 +47,9 @@ import type { SolveInputs, SolveResult } from '../solve/types'
 import { ledSenseName } from '../spicegen/generate'
 
 export interface SolvedCurrents {
+  partPower?: Record<string, number>
+  /** Parts without assessed power, even when their terminal currents are known. */
+  unknownPowerRefs?: string[]
   /** ref to pad number to signed amps drawn from the pad's net into the part. */
   padCurrents: Record<string, Record<string, number>>
   /** ref to the part's through current: the largest pad current magnitude. */
@@ -87,8 +91,26 @@ type Draws = Map<number, number> // netId to amps drawn from that net into the p
 
 export function deriveSolvedCurrents(
   inputs: Pick<SolveInputs, 'circuit' | 'resolutions'>,
-  solve: Pick<SolveResult, 'op' | 'deck'>,
+  solve: Pick<SolveResult, 'op' | 'deck' | 'copper'>,
 ): SolvedCurrents {
+  if (solve.copper) {
+    const padCurrents = solve.copper.padCurrents
+    const parts = new Map(inputs.circuit.parts.map((p) => [p.ref, p]))
+    const modeled = inputs.resolutions.filter((r) => r.status !== 'documented-open' && r.model !== undefined && r.model.kind !== 'stub')
+    return {
+      padCurrents,
+      partCurrents: Object.fromEntries(Object.entries(padCurrents).map(([ref, pads]) => [ref, Math.max(0, ...Object.values(pads).map(Math.abs))])),
+      partPower: Object.keys(solve.copper.partPower).length > 0 ? solve.copper.partPower : undefined,
+      unknownPowerRefs: modeled.filter((r) => solve.copper!.partPower[r.ref] === undefined).map((r) => r.ref).sort(),
+      unresolvedRefs: modeled.filter((r) => {
+        const part = parts.get(r.ref)
+        const model = r.model
+        if (!part || !model || model.kind === 'stub') return true
+        const pads = model.kind === 'primitive' ? [...part.padNet.keys()] : Object.keys(model.pinMap).filter((p) => part.padNet.has(p))
+        return pads.length === 0 || pads.some((p) => !Number.isFinite(padCurrents[r.ref]?.[p]))
+      }).map((r) => r.ref).sort(),
+    }
+  }
   const { circuit, resolutions } = inputs
   const values = solve.op.values
   const netOfNode = new Map<string, number>()

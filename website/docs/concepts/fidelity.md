@@ -47,11 +47,49 @@ To play the part of the firmware, choose **Interactive pins** in the [Model Doct
 
 It is *not* enough to check timing relationships between firmware-driven signals and analog peripherals.
 
-### No parasitics
+### Copper resistance and remaining parasitics
 
-circsim does not model:
+The solve API has an opt-in physical copper mode (`copperAware: true`). Tracks, vias, pours and netted copper graphics on all nets, including signals, become resistor networks in the same ngspice circuit as the parts. Pads on one net can have different solved voltages. The [Board Critic](./board-critic) does estimate copper resistance through this shared network and reads pad voltages and segment currents from the full operating-point network; its rail checks still distinguish power and ground from signal nets. Ideal nets remain the default, and their generated decks are unchanged.
 
-- **Trace resistance and inductance**: a 5 cm, 0.25 mm trace on 1 oz copper is about 0.1 Ω, negligible at DC but real at RF. *(Note: the [Board Critic](./board-critic) does estimate copper resistance for its IR-drop check, including copper pours and the ground return, but the SPICE simulation itself treats nets as ideal nodes; the critic reads each part's current from that ideal-net solve and then solves the copper with those currents.)*
+Track resistance uses length, width, and an assumed 1 oz copper weight (35 µm), configurable through the solve options. A 5 cm, 0.25 mm trace on 1 oz copper is about 0.1 Ω. Via resistance assumes 20 µm barrel plating. Pours use an approximately 2 mm sheet-resistance mesh of their outlines, refined when a pad's thin copper feature would otherwise be omitted and coarsened to a cell budget. Touching pour items connect through resistive links whose entire path lies in their copper union. Thermal-relief spokes, fill clearance islands, and keepouts are not extracted. Missing copper leaves pads disconnected, and a lead position selects its nearest physical pad; without a position the source pad is guessed.
+
+The network and solve result expose pads without copper contacts or a path from the supply entry, and the Critic names them even at zero current. A failed solve retains that geometry but supplies no electrical readings. A transient-fallback result is labelled as a bias snapshot rather than a converged DC operating point. Connected idle parts can have known zero dissipation; missing model terminals or physically unpowered parts remain not assessed for power.
+
+For a transient, circsim eliminates internal resistor nodes with Kron reduction and keeps the pad terminals. This preserves the mesh's terminal resistance while reducing what ngspice solves at each step. It does not add inductance, capacitance or a more detailed copper geometry model. Full and reduced native operating points agree within 0.1 µV at every tested pad and 1 µA on reconstructed segment currents on the pour-only fixture and a lantern-shaped synthetic board. The connectivity gate checks 950 multi-pad nets across 24 corpus, sample and synthetic boards. It skips and counts 546 single-pad nets, which need no route between terminals; 12 pad gaps on tiny-tapeout and the dialect probes have independent KiCad DRC evidence in the corpus baseline.
+
+The earlier fixed-step measurements below used Windows native ngspice, one fresh process per board and mode, three warmups then 15 runs. Each run simulated 0.1 s with a requested 100 µs step. The medians include solving and reading saved vectors; cost per saved time point is not the cost of an internal adaptive solver step. These measurements exclude deck construction, reduction setup and live rendering.
+
+- **Bundled 555:** ideal 23.29 ms, full copper 26.48 ms, reduced copper 26.32 ms. Copper nodes: 27 full, 20 reduced.
+- **Lantern-shaped synthetic:** ideal 4.99 ms, full copper 4,241.13 ms, reduced copper 669.04 ms. Copper nodes: 1,733 full, 90 reduced.
+
+Per saved time point, the medians are 22.92 / 26.19 / 26.03 µs for the 555 and 4.94 / 4,194.98 / 661.76 µs for the lantern (ideal / full / reduced). The lantern has 1,011 saved time points in every mode; the 555 has 1,016 ideal and 1,011 physical. Reduction was about 6.3 times faster than the full lantern mesh, with the reduced physical solve about 7 times slower than real time and about 130 times the ideal deck's cost at that fixed step.
+
+The live bench uses 5 ms only as an upper bound. Literal SIN/PULSE source periods, including SPICE engineering suffixes, lower the bound to period/200. Explicit timing and feedback capacitors lower it to 1/10 of an RC estimate from their attached part resistors, with a 10 us floor on this RC-derived bound: recognised nodes include timer TRIG/THRES pins, analog model input ports, voltage-expression inputs and ADC bridge inputs. A floating capacitor uses the sum of its two terminal resistances; ground and recognised power rails act as AC ground for the estimate. Copper connections are grouped as wire for this estimate; recognised model power rails and generated bench supply rails identify bypass capacitors, which remain under ngspice error control and source breakpoints. Passive RC decks use their unforced capacitor nodes. Discrete BJT, MOSFET and JFET terminals are also recognised as signal nodes. This prevents the reviewed BJT astable from being skipped and flat-lining, but does not calibrate its nonlinear oscillation period: the deterministic test measured about 1.63 ms at the derived 480 us step versus 6.84 ms at an independent 1 us step. Its period needs an explicit 1 us comparison; the distortion is tracked in [#168](https://github.com/epim/circsim/issues/168). The 10 us floor reuses the former bench cap to limit forced quiet-region work to 100,000 points per simulated second; faster poles remain under native LTE and breakpoints. Source-period bounds and explicit finer requests can still go below 10 us. The rule does not expand model-local poles, parameter expressions or unknown port roles. A non-power terminal with no attached resistor has no finite RC estimate, so a bare integrator feedback capacitor may leave the 5 ms ceiling unchanged. An oscillator built from parts the rule does not recognise can fall back to the 5 ms ceiling and native error control, so its timing needs a finer-step comparison. Native tests preserve nanosecond pulse edges and fast sine resolution, compare the 138 Hz 555 astable with an independent 100 us reference within 3 percent, and resolve a 1 ms RC charge with a 100 us maximum step. Finer explicit analysis steps remain finer.
+
+Calibration used independent native analyses with explicit 1 us maximum steps. The fast 555 reference period was 7.2203 ms. The ideal feedback control settled rather than oscillating: its last crossing into a 100 mV band about its final value was 3.5052 ms. Crossing times were interpolated between samples; peak differences below are normalised to 5 V. RC/10 is the coarsest of the tested 10/20/50 factors that keeps both period and settling error below 2 percent. Coarser RC/2 distorted loop settling by 14.6 percent, and RC/1 by 80.7 percent.
+
+- **RC/10 (chosen):** fast 555 step 470 us, period error 0.90 percent; ideal loop step 100 us, settling error 1.34 percent.
+- **RC/20:** fast 555 step 235 us, period error 0.90 percent; ideal loop step 50 us, settling error 2.39 percent.
+- **RC/50:** fast 555 step 94 us, period error 0.24 percent; ideal loop step 20 us, settling error 0.73 percent.
+
+The loop peak-voltage difference was below 0.001 percent of 5 V in every row.
+
+Live measurements include sample delivery and window restarts: a one-second warmup followed by three seconds at pace max. With the refined rule, the routed test decks have three distributed 100 nF capacitors across resistor pads. They exercise the active-deck skip path, rather than a rail-to-ground bypass; separate step-rule tests cover actual supply bypasses. The effective step is 5 ms and copper counts are unchanged (1,733 nodes / 3,368 resistors full; 90 / 1,980 reduced). An isolated Windows run reached 0.95x full and 7.11x reduced. An earlier concurrent two-suite run reached 0.58x full; full-mesh real time is not guaranteed. Full and ideal control plots use one-second windows to bound retained samples; reduced and physical 555 plots use 30 seconds.
+
+Four-platform CI [run 37144892601](https://github.com/epim/circsim/actions/runs/37144892601) at W2.3 head 7c6b62a observed these factors. The ideal feedback control uses its calibrated 100 us step; the physical fixtures use 5 ms:
+
+- **Windows:** ideal 1.19x; routed full 1.00x, reduced 6.57x; physical 555 168.40x.
+- **macOS ARM:** ideal 0.83x; routed full 0.68x, reduced 5.29x; physical 555 132.99x.
+- **Linux (coverage):** ideal 1.17x; routed full 1.19x, reduced 6.90x; physical 555 128.63x; ideal CPU ratio 0.88.
+- **macOS Intel:** ideal 0.19x; routed full 0.23x, reduced 1.88x; physical 555 29.36x.
+
+The original ideal lantern is a separate model/channel-cost control with an observed 0.19x to 1.19x range in that CI run. In the earlier run 37142009909 at 763d19c, its range was 0.20x to 1.12x after retry: the loaded Linux first attempt measured 0.37x and failed the 0.6 CPU-ratio gate at 0.583, then the unchanged retry passed at 0.94. Its earlier roughly 60x figure at 5 ms was under-resolved and no longer applies. These are calibrated fixture observations, not an error bound for arbitrary circuits. Tests require at least 1x only for the reduced routed lantern and bundled physical 555, print effective steps and factors on every CI platform, and check the 0.6 live/bare CPU ratio for the 555 and ideal control. Larger or faster circuits can still fall below real time.
+
+The 555 supply and return leads were placed directly on U1 pads 8 and 1. That sample is unrouted (#160), and its all-net physical network reports 16 pad gaps, so its physical run is not a validation of the ideal oscillator waveform. These are observations, not timing guarantees.
+
+circsim still does not model:
+
+- **Trace inductance**: this matters for RF and fast edges.
 - **Via inductance**: ~0.5 to 1 nH each, invisible to the simulation.
 - **Pad and lead-frame capacitance**: picofarads that matter for high-speed signals.
 - **Coupling between traces**: crosstalk, EMI pickup, differential-pair imbalance.
@@ -68,13 +106,15 @@ If circsim reports it "couldn't find a stable solution," that usually means the 
 
 Assign ground to the right net, stub out unresolved parts, and check for floating nodes. See [reading the warnings](../guides/warnings).
 
+A rejected circuit cannot be simulated. Loading a valid circuit after a failed load or a fallback operating point starts with fresh solver state, so the earlier attempt cannot poison the next circuit. The convergence caveats still apply to the failed or fallback result itself.
+
 ## When to trust the results
 
 ::: tip Trust circsim for
 - Bias points in audio and DC circuits
 - RC filters, voltage dividers, simple amplifiers
 - Spotting "the LED is always off because the base resistor is 10 MΩ" mistakes
-- The rough oscillation frequency of an astable timer
+- Oscillation frequency of the bundled astable timer when its timing RC is recognised; unfamiliar oscillators need a finer-step comparison
 - Whether a linear regulator is in dropout (the dropout voltage follows the load, per the datasheet curves)
 :::
 
@@ -83,7 +123,7 @@ Assign ground to the right net, stub out unresolved parts, and check for floatin
 - Switching power supplies (simplified inductor/diode models)
 - Circuits with significant temperature effects
 - Anything where trace parasitics matter
-- Timing margins tighter than ~10× the simulation time-step
+- Timing margins tighter than about 10 times the effective maximum step, or oscillator dynamics the step rule does not recognise
 :::
 
 ## The fidelity banner
@@ -107,7 +147,7 @@ Every number on this page is held by a test that fails when the model drifts fro
 - **DC operating point and RC waveforms.** `op.integration.test.ts` (a divider reads 2.5 V to 5 mV) and `transient.integration.test.ts` (an RC charge curve within 2 percent).
 - **Undriven nets.** `generate.test.ts` (the 1 GΩ tie), `floating-supply-pin.integration.test.ts`, and `WarningsBar.test.tsx` (the "Undriven nets held at 0 V" note).
 - **Fixed 27 °C.** `fidelity-claims.test.ts` checks that no generated deck carries a temperature card or sweep.
-- **Trace resistance figure.** `geom.test.ts` (100 mm by 0.5 mm on 1 oz copper is 0.0966 Ω, the same 200 squares as the 5 cm by 0.25 mm trace quoted above) and `irDrop.test.ts` for the critic's copper solve.
+- **Trace resistance figure.** `geom.test.ts` (100 mm by 0.5 mm on 1 oz copper is 0.0966 Ω, the same 200 squares as the 5 cm by 0.25 mm trace quoted above) and `copper.integration.test.ts` for the shared physical solve. The pour-only corpus assertion checks that the fixture's pad voltages agree with Critic IR-drop. `kron.integration.test.ts` checks full/reduced pad voltage and segment-current equivalence; the all-net connectivity test in `npm run test:corpus` checks routing with KiCad-confirmed gap evidence; `measurements.test.ts` supplies the opt-in transient measurements above.
 - **Stubs and the fidelity banner.** `resolve.test.ts` (which parts are stubbed) and `WarningsBar.test.tsx` (the banner, its minimized badge, and its re-expansion when the affected set changes).
 - **Convergence fallbacks.** `library-op-convergence.integration.test.ts`.
 

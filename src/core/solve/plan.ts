@@ -29,6 +29,7 @@ import { deriveMeasuredRailVHigh } from '../spicegen/generate'
 import { hasLinearOpAmp, settleBistableOpAmps, type LatchedOpAmp } from './bistable'
 import { buildDeckWithUndriven } from './inputs'
 import { loadAndRunOp } from './loadAndRunOp'
+import { copperResult } from './copperResult'
 import type { OpResult, SolveEngine, SolveInputs, SolveResult, UndrivenNet } from './types'
 
 /**
@@ -174,6 +175,7 @@ export async function runSolvePlan(inputs: SolveInputs, engine: SolveEngine): Pr
 
   return {
     op,
+    copper: copperResult(inputs, op, deck),
     netVoltages: mapOpResultToNetVoltages(op.values, inputs.circuit),
     deck,
     pass1Deck,

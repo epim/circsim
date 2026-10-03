@@ -68,6 +68,8 @@ export interface SpiceEngine {
   /**
    * Load a deck from memory via ngSpice_Circ. Callers MUST issue `destroy all`
    * (via command()) before each reload — Spec §7.4 gotcha 5.
+   * Throws when native parsing fails, including errors with a zero return code.
+   * A failed load can leave a partial circuit; reset the engine before reloading.
    */
   loadCircuit(deckLines: string[]): void
 

@@ -711,6 +711,26 @@ describe('halting and resuming the background thread', () => {
 })
 
 describe('knob drags: alters at a steady cadence (PR #129 review)', () => {
+  it('Stop cancels a window restart queued behind it', async () => {
+    const engine = new StubEngine()
+    const host = new SimHost({ engine, emit: () => {}, disableWatchdog: true, disableTimers: true,
+      resumeGapMs: 0, benchWindowSeconds: 1 })
+    try {
+      host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
+      host.handleCommand({ type: 'runTransient', tstepSeconds: 1e-4, tstopSeconds: 100 })
+      await host.whenIdle()
+      engine.pushPoint({ time: 1, out: 5 })
+      host.sampleTick()
+      host.handleCommand({ type: 'stop' })
+      // A timer tick can see the finished window before Stop is drained.
+      host.pacingTick()
+      await host.whenIdle()
+      expect(engine.commands.filter(cmd => cmd.startsWith('bg_tran'))).toHaveLength(1)
+      expect(engine.running).toBe(false)
+      expect(host.isTransientActive()).toBe(false)
+    } finally { await host.dispose() }
+  })
+
   const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
   /** Real clock and settle gap; records whether the thread was running when each alter reached the engine. */

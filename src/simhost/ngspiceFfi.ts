@@ -302,6 +302,9 @@ export class NgspiceFfiEngine implements SpiceEngine {
   private lib: LibraryHandle | null = null
   private listeners: EngineEventListener[] = []
   private initialized = false
+  private loading = false
+  private loadFailure: string | null = null
+  private loadStderr: string[] = []
   private _version = ''
   private readonly opts: NgspiceFfiOptions
   private paths: NgspicePaths | null = null
@@ -394,9 +397,15 @@ export class NgspiceFfiEngine implements SpiceEngine {
     // (3) Register callbacks. They ONLY enqueue (via emit) — never call back into
     // ngspice (Spec §7.4 gotcha 2).
     const cbSendChar = koffi.register((output: string) => {
+      const text = String(output ?? '')
+      // ngSpice_Circ can return zero after a parse error. Its synchronous
+      // stderr callback is the authoritative failure signal in that case.
+      if (this.loading && /^stderr\s+/i.test(text)) {
+        this.loadStderr.push(text.replace(/^stderr\s+/i, '').trim())
+        if (/^stderr\s+(?:error|fatal)\b/i.test(text)) this.loadFailure ??= this.loadStderr.at(-1)!
+      }
       this.emit({ type: 'char', text: String(output ?? '') })
       // Classify into a log event with a coarse level for the UI.
-      const text = String(output ?? '')
       traceNgspiceOutput(text)
       const level: 'info' | 'warn' | 'error' = /error/i.test(text)
         ? 'error'
@@ -414,6 +423,7 @@ export class NgspiceFfiEngine implements SpiceEngine {
 
     const cbControlledExit = koffi.register(
       (exitStatus: number, immediate: boolean, quitOnExit: boolean) => {
+        if (this.loading) this.loadFailure ??= `ngspice ControlledExit during load: status=${exitStatus}`
         traceNgspiceExit(exitStatus, !!immediate, !!quitOnExit)
         this.emit({
           type: 'controlledExit',
@@ -508,9 +518,23 @@ export class NgspiceFfiEngine implements SpiceEngine {
     this.ensureInit()
     // ngSpice_Circ wants a NULL-terminated char** array.
     const arr = [...deckLines, null]
-    const rc: number = this.fn.ngSpice_Circ(arr)
-    if (rc !== 0) {
-      this.emit({ type: 'log', level: 'error', text: `ngSpice_Circ returned ${rc}` })
+    this.loadFailure = null
+    this.loadStderr = []
+    this.loading = true
+    let rc: number
+    try {
+      rc = this.fn.ngSpice_Circ(arr)
+    } finally {
+      this.loading = false
+    }
+    if (this.loadFailure !== null || rc !== 0) {
+      // Lead with the error and its continuations, retaining earlier warnings
+      // afterward so consumers do not mistake a warning for the failure.
+      const errorIndex = this.loadStderr.findIndex(line => /^(?:error|fatal)\b/i.test(line))
+      const lines = errorIndex > 0
+        ? [...this.loadStderr.slice(errorIndex), ...this.loadStderr.slice(0, errorIndex)]
+        : this.loadStderr
+      throw new Error(lines.length > 0 ? lines.join('\n') : this.loadFailure ?? `ngSpice_Circ returned ${rc}`)
     }
   }
 

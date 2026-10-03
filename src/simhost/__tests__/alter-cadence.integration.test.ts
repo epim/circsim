@@ -194,7 +194,12 @@ describe.skipIf(!haveNgspice)('knob drags: an alter every 200 ms (real libngspic
         // Cap the drag so a run that never streams or never logs its end fails
         // as an assertion below with a reason, not at the 60 s test timeout. The
         // deadline covers the case where no sample ever starts the drag.
-        const maxTurns = 40
+        // This is only a hang guard. Under another full suite's load, the
+        // foreground calibration can overestimate background throughput, so
+        // keep dragging until the native run and its eight post-end turns
+        // finish. Completion and the one-turn delivery bound below are the
+        // assertions; exhausting an eight-second drag was a false failure.
+        const maxTurns = 160
         let resolveEnd!: () => void
         let resolveDrag!: () => void
         const runEnded = new Promise<void>((resolve) => { resolveEnd = resolve })

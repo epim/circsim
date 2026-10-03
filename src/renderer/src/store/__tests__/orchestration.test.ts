@@ -120,7 +120,7 @@ describe('orchestration — run / pause / resume / pace (fixture-rc)', () => {
     store.getState().addInstrument({ kind: 'voltage-probe', id: 'vp1', netId: outId, color: '#6f6' })
   })
 
-  it('run loads the deck (dirty) then runs a BOUNDED transient (tstop=30s, tstep at the 100µs ceiling)', () => {
+  it('run loads the deck then runs a bounded transient at the protocol ceiling', () => {
     store.getState().run()
     const load = mock.sent.find(c => c.type === 'loadCircuit')
     expect(load).toBeDefined()
@@ -130,9 +130,8 @@ describe('orchestration — run / pause / resume / pace (fixture-rc)', () => {
     expect(tran).toBeDefined()
     // bounded window — never unbounded (Spec §7.5)
     expect(tran!.tstopSeconds).toBe(30)
-    // no function-gen → nothing periodic to resolve → the coarse 100 µs ceiling
-    // (issue #25: the old 10 µs cap on every bench held the bench under real time)
-    expect(tran!.tstepSeconds).toBe(100e-6)
+    // With no periodic source, the bench uses the shared quiet-region ceiling.
+    expect(tran!.tstepSeconds).toBe(BENCH_TSTEP_MAX_SECONDS)
     expect(tran!.tstepSeconds).toBe(MAX_TSTEP_SECONDS)
     expect(store.getState().simState).toBe('running')
   })
@@ -453,19 +452,18 @@ describe('computeTstep, derived from the signal bandwidth on the bench (issue #2
     wave: 'sine', freqHz, amplitudeV: 1, offsetV: 0, outputOhms: 50,
   })
 
-  it('the ceiling is the protocol constant the real-time tests use, 100 µs', () => {
+  it('the ceiling is the protocol constant the real-time tests use', () => {
     expect(MAX_TSTEP_SECONDS).toBe(BENCH_TSTEP_MAX_SECONDS)
-    expect(BENCH_TSTEP_MAX_SECONDS).toBe(100e-6)
   })
 
   it('a bench with no function generator runs at the ceiling', () => {
-    expect(computeTstep([])).toBe(100e-6)
-    expect(computeTstep([{ kind: 'ground-ref', netId: 0 }])).toBe(100e-6)
+    expect(computeTstep([])).toBe(BENCH_TSTEP_MAX_SECONDS)
+    expect(computeTstep([{ kind: 'ground-ref', netId: 0 }])).toBe(BENCH_TSTEP_MAX_SECONDS)
   })
 
-  it('a slow generator (1 Hz to 50 Hz) cannot ask for a step coarser than the ceiling', () => {
-    expect(computeTstep([gen(1)])).toBe(100e-6)
-    expect(computeTstep([gen(50)])).toBe(100e-6)
+  it('the quiet ceiling bounds 1 Hz and a 50 Hz generator derives a finer step', () => {
+    expect(computeTstep([gen(1)])).toBe(BENCH_TSTEP_MAX_SECONDS)
+    expect(computeTstep([gen(50)])).toBe(1 / (200 * 50))
   })
 
   it('a fast generator sets 200 points per cycle', () => {

@@ -7,13 +7,15 @@
  * 0.8 us per saved vector), so the channel cost several times the solve: the
  * bench topped out near 0.02x (555 sample) and 0.15x (lantern-class deck).
  *
- * What these tests gate, and why not "1x real time" (issue #25 stays open):
+ * The original ideal lantern remains a model/channel-cost control. The routed
+ * lantern exercises full physical DC followed by a reduced physical transient;
+ * it and the bundled 555 must sustain at least 1x real time (issue #25).
+ *
+ * The additional channel-cost ratio isolates polling overhead:
  * the achieved wall-clock factor is mostly ngspice's own solve time, which
  * scales with the runner (CI runners are 2x to 5x slower than a dev machine,
  * and `npm test` runs the other ngspice files in parallel on the same cores).
- * An absolute 1x floor on a lantern-class deck passed on a dev machine and
- * failed on every CI leg, so it gated the runner, not the code. The gates
- * below are ratios measured in one process, which hold on any machine:
+ * Both the absolute factors and the ratios are recorded on every CI platform.
  *
  *  - channel overhead: sim seconds per CPU second of the whole process (the
  *    ngspice thread, the 15 ms poll, the event emission) during a live
@@ -38,14 +40,18 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { generateBoard, lanternShape } from '../../../scripts/gen-synthetic-board.mjs'
+import { lanternBoard } from '../../core/copper/__tests__/lanternFixture'
+import { reduceCopperNetwork } from '../../core/copper/kron'
 import { parseBoard } from '../../core/kicad/board'
+import { parseSchematicSimData } from '../../core/kicad/schematic'
 import { resolveAll } from '../../core/models/resolve'
 import type { LibraryEntry } from '../../core/models/types'
 import { extract, suggestGround } from '../../core/netlist/extract'
-import { generateDeck } from '../../core/spicegen/generate'
+import { buildDeck, buildDeckWithUndriven, buildSolveInputs } from '../../core/solve/inputs'
 import type { Instrument } from '../../core/spicegen/instruments'
+import { transientMaxStep } from '../../core/spicegen/transientStep'
 import { SimHost } from '../index'
-import { ngspiceResourcesAvailable } from '../ngspiceFfi'
+import { NgspiceFfiEngine, ngspiceResourcesAvailable } from '../ngspiceFfi'
 import { BENCH_TSTEP_MAX_SECONDS, type SimEvent } from '../protocol'
 
 const haveNgspice = ngspiceResourcesAvailable()
@@ -55,15 +61,22 @@ if (!haveNgspice) {
 
 const MODELS = join(process.cwd(), 'resources', 'models')
 
+
 interface Bench {
+  label: string
   deck: string[]
+  opDeck: string[]
+  windowSeconds: number
+  copperNodes: number
+  copperResistors: number
+  effectiveStep: number
   instruments: Instrument[]
   /** SPICE node of the net a scope probe would sit on. */
   probeNode: string
 }
 
 /** The app flow for a board: ground, a 5 V / 0.1 ohm supply on `supplyNet`, one scope probe on `probeNet`. */
-function makeBench(boardText: string, supplyNet: string, probeNet: string): Bench {
+function makeBench(boardText: string, supplyNet: string, probeNet: string, mode: 'ideal' | 'full' | 'reduced' = 'ideal', bundled555 = false): Bench {
   const board = parseBoard(boardText)
   const library = (JSON.parse(readFileSync(join(MODELS, 'index.json'), 'utf8')) as { entries: LibraryEntry[] }).entries
   const modelTexts: Record<string, string> = {}
@@ -74,7 +87,8 @@ function makeBench(boardText: string, supplyNet: string, probeNet: string): Benc
   const gnd = suggestGround(extract(board).nets)
   if (!gnd) throw new Error('no ground suggested')
   const circuit = extract(board, { groundNetId: gnd.id })
-  const resolutions = resolveAll(circuit, undefined, undefined, library)
+  const schematic = bundled555 ? parseSchematicSimData(readFileSync('resources/sample/blinker-555.kicad_sch', 'utf8')) : undefined
+  const resolutions = resolveAll(circuit, schematic, undefined, library)
   const supply = circuit.nets.find((n) => n.kicadName === supplyNet)
   const probe = circuit.nets.find((n) => n.kicadName === probeNet)
   if (!supply || !probe) throw new Error(`nets ${supplyNet} / ${probeNet} not found`)
@@ -83,15 +97,58 @@ function makeBench(boardText: string, supplyNet: string, probeNet: string): Benc
     { kind: 'dc-supply', id: 'auto-supply', netId: supply.id, volts: 5, seriesOhms: 0.1 },
     { kind: 'voltage-probe', id: 'probe-1', netId: probe.id, color: '#ffd166' }
   ]
-  const deck = generateDeck({
-    circuit,
-    resolutions,
-    instruments,
-    groundNetId: gnd.id,
+  const inputs = buildSolveInputs(board, circuit, resolutions, instruments, gnd.id, {
+    copperAware: mode !== 'ideal',
+    copperOptions: bundled555 ? { supplyEntries: [
+      { netId: supply.id, pos: { x: 32.34, y: 21.905 } },
+      { netId: gnd.id, pos: { x: 27.66, y: 21.905 } },
+    ] } : undefined,
     title: 'realtime-bench',
     modelTexts
   })
-  return { deck, instruments, probeNode: probe.spiceNode }
+  // The shared routed fixture is resistive. These distributed caps span
+  // resistor pads, not rail-to-ground nodes; they exercise the active-deck
+  // skip path, without changing shared geometry or copper counts. Separate
+  // transientMaxStep tests cover actual rail-to-ground supply bypasses.
+  const bypasses = supplyNet === 'VCC' && !bundled555
+    ? ['R1', 'R24', 'R48'].map((ref, i) => `c_bypass_${i} ${inputs.copperNetwork!.padNode(ref, '1')} ${inputs.copperNetwork!.padNode(ref, '2')} 100n`)
+    : []
+  const withBypasses = (cards: string[]): string[] => [...cards.slice(0, -1), ...bypasses, cards.at(-1)!]
+  const opDeck = withBypasses(buildDeckWithUndriven(inputs).deck)
+  const deck = mode === 'full' ? opDeck : withBypasses(buildDeck(inputs))
+  const probeNode = inputs.copperNetwork?.padNode(bundled555 ? 'U1' : 'R48', bundled555 ? '3' : '1') ?? probe.spiceNode
+  const copperNodes = inputs.copperNetwork
+    ? (mode === 'reduced' ? reduceCopperNetwork(inputs.copperNetwork).nodes.length : inputs.copperNetwork.nodes.length)
+    : 0
+  return { deck, opDeck, instruments, probeNode, windowSeconds: mode === 'full' || (mode === 'ideal' && !bundled555) ? 1 : 30,
+    label: `${bundled555 ? 'bundled-555' : supplyNet === 'VCC' ? 'routed-lantern' : 'ideal-lantern'}/${mode}`,
+    copperNodes, copperResistors: deck.filter(card => card.startsWith('r_copper_')).length,
+    effectiveStep: transientMaxStep(BENCH_TSTEP_MAX_SECONDS, deck) }
+}
+
+/** ngspice's accepted solver timepoints, rather than the number of saved rows. */
+async function printNativeStats(engine: NgspiceFfiEngine, bench: Bench, tstep: number, channel: string, windowDeliveredSamples = true): Promise<void> {
+  tstep = transientMaxStep(tstep, bench.deck)
+  const lines: string[] = []
+  const unsub = engine.on(e => { if (e.type === 'char') lines.push(e.text.replace(/^stdout\s+/, '')) })
+  try { await engine.command('rusage all', false) } finally { unsub() }
+  const value = (name: string): number => Number(lines.find(line => line.startsWith(`${name} = `))?.split(' = ')[1])
+  const iterations = value('Transient iterations')
+  const accepted = value('Accepted timepoints')
+  const rejected = value('Rejected timepoints')
+  // Stop can land just after the next window was loaded. Overall throughput
+  // already proves delivery; an empty current window has no solver stats to
+  // assert. Foreground runs and windows with delivered samples still require
+  // actual native timepoints and iterations.
+  if (!windowDeliveredSamples && !(iterations > 0 && accepted > 0)) {
+    console.log(`[realtime] ${bench.label} ${channel} stats: current window stopped before analysis; no delivered samples in that window`)
+    return
+  }
+  expect(accepted).toBeGreaterThan(0)
+  expect(iterations).toBeGreaterThan(0)
+  console.log(`[realtime] ${bench.label} ${channel} stats: tstep=${tstep}, copper nodes=${bench.copperNodes}, resistors=${bench.copperResistors}, ` +
+    `Newton iterations=${iterations}, accepted solver timepoints=${accepted}, rejected=${rejected}, iterations/accepted=${(iterations / accepted).toFixed(3)}, ` +
+    `tran=${value('Transient analysis time').toFixed(6)}s, load=${value('Transient load time').toFixed(6)}s, factor=${value('Transient factor time').toFixed(6)}s`)
 }
 
 /** CPU seconds this process has used so far, every thread (the ngspice one included). */
@@ -115,44 +172,61 @@ interface Measurement {
 }
 
 /** Run the bench for `warmMs + measureMs` of wall time and report the factors over the last `measureMs`. */
-async function measure(bench: Bench, pace: number | 'max', warmMs: number, measureMs: number): Promise<Measurement> {
-  const status: { wall: number; simTime: number }[] = []
+async function measure(bench: Bench, pace: number | 'max', warmMs: number, measureMs: number, tstep = BENCH_TSTEP_MAX_SECONDS): Promise<Measurement> {
   let batches = 0
   let sampledUntil = 0
+  let windowHead = 0
+  let earlierWindows = 0
   let statuses = 0
   let notRunning = 0
+  const engine = new NgspiceFfiEngine()
   const host = new SimHost({
+    engine,
     emit: (e: SimEvent) => {
       if (e.type === 'status') {
-        status.push({ wall: Date.now(), simTime: e.simTimeSeconds })
         statuses++
         if (!e.running) notRunning++
       }
       if (e.type === 'samples') {
         batches++
-        if (e.simTime.length > 0) sampledUntil = Math.max(sampledUntil, e.simTime[e.simTime.length - 1])
+        if (e.simTime.length > 0) {
+          windowHead = Math.max(windowHead, e.simTime[e.simTime.length - 1])
+          sampledUntil = earlierWindows + windowHead
+        }
+      }
+      if (e.type === 'benchRestarted') {
+        earlierWindows += windowHead
+        windowHead = 0
       }
     },
-    disableWatchdog: true
+    disableWatchdog: true,
+    benchWindowSeconds: bench.windowSeconds
   })
   try {
     await host.start()
+    host.handleCommand({ type: 'loadCircuit', deckLines: bench.opDeck })
+    host.handleCommand({ type: 'runOp' })
+    await host.whenIdle()
     host.handleCommand({ type: 'loadCircuit', deckLines: bench.deck })
     // The scope probe is the only series the renderer asks for at full rate;
     // everything else is tinted from display-rate snapshots.
     host.handleCommand({ type: 'watch', vectors: [bench.probeNode] })
     host.handleCommand({ type: 'setPace', realtimeFactor: pace })
-    host.handleCommand({ type: 'runTransient', tstepSeconds: BENCH_TSTEP_MAX_SECONDS, tstopSeconds: 30 })
+    host.handleCommand({ type: 'runTransient', tstepSeconds: tstep, tstopSeconds: 300 })
     await host.whenIdle()
     await new Promise((r) => setTimeout(r, warmMs))
     const cpu0 = cpuSeconds()
     const sim0 = sampledUntil
+    const wall0 = performance.now()
     await new Promise((r) => setTimeout(r, measureMs))
     const cpuFactor = (sampledUntil - sim0) / (cpuSeconds() - cpu0)
-    const end = status[status.length - 1]
-    const startWall = end.wall - measureMs
-    const start = [...status].reverse().find((s) => s.wall <= startWall) ?? status[0]
-    const factor = (end.simTime - start.simTime) / ((end.wall - start.wall) / 1000)
+    // Very fast decks can finish every window before the next status tick.
+    // Measure delivered sample timestamps across restarts against elapsed wall
+    // time, which also accounts for restart overhead and delayed JS delivery.
+    const factor = (sampledUntil - sim0) / ((performance.now() - wall0) / 1000)
+    host.handleCommand({ type: 'stop' })
+    await host.whenIdle()
+    await printNativeStats(engine, bench, tstep, 'live', windowHead > 0)
     return { factor, cpuFactor, batches, sampledUntil, statuses, notRunning }
   } finally {
     await host.dispose()
@@ -164,8 +238,15 @@ async function measure(bench: Bench, pace: number | 'max', warmMs: number, measu
  * channel: sim seconds per CPU second and per wall second between the `t1` and
  * `t2` marks (two runs, so the start-up transient and the run setup cancel).
  */
-async function measureBare(bench: Bench, t1: number, t2: number): Promise<{ cpuFactor: number; factor: number }> {
-  const host = new SimHost({ emit: () => {}, disableWatchdog: true })
+async function measureBare(bench: Bench, t1: number, t2: number, tstep = BENCH_TSTEP_MAX_SECONDS): Promise<{ cpuFactor: number; factor: number }> {
+  // Keep the two native runs' point counts comparable when the circuit needs
+  // a much finer step. Use longer ideal stops below to reduce CPU-ratio noise;
+  // a one-second live window still bounds retained plots.
+  const stepScale = transientMaxStep(tstep, bench.deck) / tstep
+  t1 *= stepScale
+  t2 *= stepScale
+  const engine = new NgspiceFfiEngine()
+  const host = new SimHost({ engine, emit: () => {}, disableWatchdog: true })
   try {
     await host.start()
     host.handleCommand({ type: 'loadCircuit', deckLines: bench.deck })
@@ -173,11 +254,12 @@ async function measureBare(bench: Bench, t1: number, t2: number): Promise<{ cpuF
     const run = async (tstop: number): Promise<{ cpu: number; wall: number }> => {
       const cpu = cpuSeconds()
       const wall = Date.now()
-      await host.runTran(BENCH_TSTEP_MAX_SECONDS, tstop)
+      await host.runTran(tstep, tstop)
       return { cpu: cpuSeconds() - cpu, wall: (Date.now() - wall) / 1000 }
     }
     const a = await run(t1)
     const b = await run(t2)
+    await printNativeStats(engine, bench, tstep, 'foreground')
     return { cpuFactor: (t2 - t1) / (b.cpu - a.cpu), factor: (t2 - t1) / (b.wall - a.wall) }
   } finally {
     await host.dispose()
@@ -187,30 +269,177 @@ async function measureBare(bench: Bench, t1: number, t2: number): Promise<{ cpuF
 /** Floor for live / bare sim seconds per CPU second (see the file header). */
 const CHANNEL_OVERHEAD_FLOOR = 0.6
 
+async function waveformMetrics(engine: NgspiceFfiEngine, node: string, stop: number, step: number): Promise<{ period: number; firstEdge: number; min: number; max: number; peak: number; settling: number | null; maxGap: number }> {
+  // Bypass transientMaxStep, which must not change the reference or
+  // the requested candidate while calibrating that very rule.
+  await engine.command(`tran ${step} ${stop} 0 ${step} uic`, true)
+  const time = engine.vectorData('time')!
+  const voltage = engine.vectorData(node)!
+  const edges: number[] = []
+  let min = Infinity
+  let max = -Infinity
+  let maxGap = 0
+  let peak = -Infinity
+  for (let i = 1; i < time.length; i++) {
+    peak = Math.max(peak, voltage[i])
+    maxGap = Math.max(maxGap, time[i] - time[i - 1])
+    if (time[i] > stop / 4) { min = Math.min(min, voltage[i]); max = Math.max(max, voltage[i]) }
+    if (voltage[i - 1] < 2.5 && voltage[i] >= 2.5) {
+      const fraction = (2.5 - voltage[i - 1]) / (voltage[i] - voltage[i - 1])
+      edges.push(time[i - 1] + fraction * (time[i] - time[i - 1]))
+    }
+  }
+  const stableEdges = edges.filter(time => time > stop / 4)
+  const period = stableEdges.length > 1 ? (stableEdges.at(-1)! - stableEdges[0]) / (stableEdges.length - 1) : 0
+  let settling: number | null = null
+  if (max - min <= 0.1) {
+    settling = 0
+    let lastOutside = -1
+    for (let i = 0; i < time.length; i++) if (Math.abs(voltage[i] - voltage.at(-1)!) > 0.1) lastOutside = i
+    if (lastOutside >= 0 && lastOutside < time.length - 1) {
+      const i = lastOutside
+      const boundary = voltage.at(-1)! + Math.sign(voltage[i] - voltage.at(-1)!) * 0.1
+      const fraction = (boundary - voltage[i]) / (voltage[i + 1] - voltage[i])
+      settling = time[i] + fraction * (time[i + 1] - time[i])
+    }
+  }
+  return { period, firstEdge: edges[0] ?? 0, min, max, peak, settling, maxGap }
+}
+
 describe.skipIf(!haveNgspice)('live bench sample channel cost (real libngspice, issue #25)', () => {
-  const b555 = haveNgspice ? makeBench(readFileSync('fixtures/fixture-555.kicad_pcb', 'utf8'), 'VCC', 'OUT') : null
+  const b555 = haveNgspice ? makeBench(readFileSync('resources/sample/blinker-555.kicad_pcb', 'utf8'), 'VCC', 'OUT', 'reduced', true) : null
+  const ideal555 = haveNgspice ? makeBench(readFileSync('resources/sample/blinker-555.kicad_pcb', 'utf8'), 'VCC', 'OUT', 'ideal', true) : null
   const lantern = haveNgspice ? makeBench(generateBoard(lanternShape(10)), '/PACK+', '/LED1_K') : null
+  const routedFull = haveNgspice ? makeBench(lanternBoard(), 'VCC', 'VCC', 'full') : null
+  const routedReduced = haveNgspice ? makeBench(lanternBoard(), 'VCC', 'VCC', 'reduced') : null
+
+  it.skipIf(process.env.CIRCSIM_PROFILE_REALTIME !== '1')('profiles the bundled sensor-node timing cost', async () => {
+    const sensor = makeBench(readFileSync('resources/sample/sensor-node.kicad_pcb', 'utf8'), '+5V', 'NTC_SENSE')
+    sensor.label = 'sensor-node/ideal'
+    const live = await measure(sensor, 'max', 1000, 3000)
+    console.log(`[realtime] sensor-node ideal, effective tstep=${sensor.effectiveStep}: live pace max ${live.factor.toFixed(2)}x, CPU factor ${live.cpuFactor.toFixed(2)}x`)
+  }, 90_000)
   /** Wall-clock factor the lantern-class deck reached at pace max in this process. */
   let lanternMax: number | null = null
 
-  it('the fixture-555 sample: the live channel costs little next to the solve', async () => {
-    const bare = await measureBare(b555!, 2, 8)
+  it.skipIf(process.env.CIRCSIM_PROFILE_REALTIME !== '1')('profiles the original 100 us step on all benchmark fixtures', async () => {
+    for (const bench of [b555!, routedFull!, routedReduced!, lantern!]) {
+      const bare = await measureBare(bench, 0.1, 0.3, 100e-6)
+      console.log(`[realtime] baseline ${bench.label}, tstep=0.0001: bare ${bare.factor.toFixed(2)}x`)
+    }
+  }, 120_000)
+
+  it.skipIf(process.env.CIRCSIM_PROFILE_REALTIME !== '1')('calibrates timing and feedback RC resolution against an independent 1 us reference', async () => {
+    const fast555 = [
+      '* fast 555 astable', 'v1 vcc 0 5', 'r1 vcc disch 10k', 'r2 disch timing 47k',
+      'c1 timing 0 100n', 'c2 ctrl 0 10n', 'rload out 0 10k',
+      'x1 0 timing out vcc ctrl timing disch vcc NE555',
+      ...readFileSync('resources/models/timer555.lib', 'utf8').split(/\r?\n/), '.save v(out)', '.end',
+    ]
+    const cases = [
+      { name: 'fast-555', deck: fast555, node: 'out', tau: 0.0047, stop: 0.3 },
+      { name: 'ideal-lantern-feedback', deck: lantern!.deck, node: '_osc', tau: 0.001, stop: 0.04 },
+    ]
+    for (const fixture of cases) {
+      const engine = new NgspiceFfiEngine()
+      const host = new SimHost({ engine, emit: () => {}, disableTimers: true, disableWatchdog: true })
+      try {
+        await host.start()
+        await host.loadCircuit(fixture.deck)
+        const run = (step: number) => waveformMetrics(engine, fixture.node, fixture.stop, step)
+        const reference = await run(1e-6)
+        console.log(`[step-calibration] ${fixture.name} 1 us reference: ${JSON.stringify(reference)}`)
+        for (const factor of [10, 20, 50, 2, 1, 0.2]) {
+          const step = fixture.tau / factor
+          const candidate = await run(step)
+          const errors = {
+            periodPercent: reference.period > 0 ? 100 * Math.abs(candidate.period - reference.period) / reference.period : null,
+            startupPercent: reference.firstEdge > 0 ? 100 * Math.abs(candidate.firstEdge - reference.firstEdge) / reference.firstEdge : null,
+            lowPercentOf5V: 100 * Math.abs(candidate.min - reference.min) / 5,
+            highPercentOf5V: 100 * Math.abs(candidate.max - reference.max) / 5,
+            peakPercentOf5V: 100 * Math.abs(candidate.peak - reference.peak) / 5,
+            settlingPercent: reference.settling ? 100 * Math.abs((candidate.settling ?? fixture.stop) - reference.settling) / reference.settling : null,
+          }
+          console.log(`[step-calibration] ${fixture.name} RC/${factor}, step=${step}: ${JSON.stringify({ candidate, errors })}`)
+        }
+      } finally { await host.dispose() }
+    }
+  }, 120_000)
+
+  it('the ideal feedback control preserves settling and overshoot against 1 us', async () => {
+    const engine = new NgspiceFfiEngine()
+    const host = new SimHost({ engine, emit: () => {}, disableTimers: true, disableWatchdog: true })
+    try {
+      await host.start()
+      await host.loadCircuit(lantern!.deck)
+      const reference = await waveformMetrics(engine, '_osc', 0.04, 1e-6)
+      const bench = await waveformMetrics(engine, '_osc', 0.04, lantern!.effectiveStep)
+      expect(reference.settling).toBeGreaterThan(0)
+      expect(bench.settling).toBeGreaterThan(0)
+      const settlingError = Math.abs(bench.settling! - reference.settling!) / reference.settling!
+      const peakError = Math.abs(bench.peak - reference.peak) / 5
+      console.log(`[step-control] ideal feedback: effective tstep=${lantern!.effectiveStep}, settling error=${100 * settlingError}%, peak error=${100 * peakError}% of 5 V`)
+      expect(settlingError).toBeLessThan(0.02)
+      expect(peakError).toBeLessThan(0.02)
+    } finally { await host.dispose() }
+  }, 60_000)
+
+  it('the quiet ceiling preserves the ideal 555 oscillator edges relative to 100 us', async () => {
+    const host = new SimHost({ emit: () => {}, disableWatchdog: true })
+    try {
+      await host.start()
+      await host.loadCircuit(ideal555!.deck)
+      const crossings = async (step: number): Promise<number[]> => {
+        const result = await host.runTran(step, 1.4)
+        const out = result.vectors[ideal555!.probeNode]
+        const edges: number[] = []
+        for (let i = 1; i < out.length; i++) {
+          if (out[i - 1] < 2.5 !== out[i] < 2.5) edges.push(result.time[i])
+        }
+        return edges
+      }
+      const fine = await crossings(100e-6)
+      const coarse = await crossings(BENCH_TSTEP_MAX_SECONDS)
+      expect(fine).toHaveLength(3)
+      expect(coarse).toHaveLength(fine.length)
+      coarse.forEach((time, i) => expect(Math.abs(time - fine[i]) / fine[i]).toBeLessThan(0.02))
+    } finally { await host.dispose() }
+  }, 90_000)
+
+  it('the bundled 555 with direct U1.8/1 leads sustains 1x with a physical transient', async () => {
+    const bare = await measureBare(b555!, 20, 80)
     const live = await measure(b555!, 'max', 1000, 3000)
     const ratio = live.cpuFactor / bare.cpuFactor
     console.log(
-      `[realtime] fixture-555: live pace max ${live.factor.toFixed(2)}x real time, bare tran ${bare.factor.toFixed(2)}x; ` +
+      `[realtime] bundled-555 physical reduced, direct U1.8/1, effective tstep=${b555!.effectiveStep}: live pace max ${live.factor.toFixed(2)}x real time, bare tran ${bare.factor.toFixed(2)}x; ` +
         `sim s per CPU s live ${live.cpuFactor.toFixed(2)} / bare ${bare.cpuFactor.toFixed(2)} = ${ratio.toFixed(2)}`
     )
+    expect(live.factor).toBeGreaterThanOrEqual(1)
     expect(ratio).toBeGreaterThanOrEqual(CHANNEL_OVERHEAD_FLOOR)
   }, 90_000)
 
+  it('records the routed lantern full-mesh cost', async () => {
+    const bare = await measureBare(routedFull!, 0.5, 1.5)
+    const live = await measure(routedFull!, 'max', 1000, 3000)
+    console.log(`[realtime] routed lantern physical full, effective tstep=${routedFull!.effectiveStep}: live pace max ${live.factor.toFixed(2)}x, bare ${bare.factor.toFixed(2)}x`)
+    expect(live.sampledUntil).toBeGreaterThan(0)
+  }, 90_000)
+
+  it('the routed lantern sustains 1x after full physical DC and a reduced transient', async () => {
+    const bare = await measureBare(routedReduced!, 1, 3)
+    const live = await measure(routedReduced!, 'max', 1000, 3000)
+    console.log(`[realtime] routed lantern physical reduced, effective tstep=${routedReduced!.effectiveStep}: live pace max ${live.factor.toFixed(2)}x, bare ${bare.factor.toFixed(2)}x`)
+    expect(live.factor).toBeGreaterThanOrEqual(1)
+    expect(live.sampledUntil).toBeGreaterThan(0)
+  }, 90_000)
+
   it('a lantern-class deck: the live channel costs little next to the solve', async () => {
-    const bare = await measureBare(lantern!, 1, 3)
+    const bare = await measureBare(lantern!, 50, 150)
     const live = await measure(lantern!, 'max', 1000, 3000)
     lanternMax = live.factor
     const ratio = live.cpuFactor / bare.cpuFactor
     console.log(
-      `[realtime] lantern-shape: live pace max ${live.factor.toFixed(2)}x real time, bare tran ${bare.factor.toFixed(2)}x; ` +
+      `[realtime] lantern-shape, effective tstep=${lantern!.effectiveStep}: live pace max ${live.factor.toFixed(2)}x real time, bare tran ${bare.factor.toFixed(2)}x; ` +
         `sim s per CPU s live ${live.cpuFactor.toFixed(2)} / bare ${bare.cpuFactor.toFixed(2)} = ${ratio.toFixed(2)}`
     )
     expect(ratio).toBeGreaterThanOrEqual(CHANNEL_OVERHEAD_FLOOR)
@@ -222,7 +451,7 @@ describe.skipIf(!haveNgspice)('live bench sample channel cost (real libngspice, 
     // the pace max test did not run first).
     const max = lanternMax ?? (await measure(lantern!, 'max', 1000, 3000)).factor
     const due = Math.min(1, max)
-    console.log(`[realtime] lantern-shape pace 1x: ${m.factor.toFixed(2)}x (pace max reached ${max.toFixed(2)}x, so ${due.toFixed(2)}x is due)`)
+    console.log(`[realtime] lantern-shape pace 1x, effective tstep=${lantern!.effectiveStep}: ${m.factor.toFixed(2)}x (pace max reached ${max.toFixed(2)}x, so ${due.toFixed(2)}x is due)`)
     expect(m.factor).toBeLessThan(1.15)
     // Half of what is due: the two runs are seconds apart, and the load on a
     // shared runner moves the wall-clock factor between them (the slowest CI

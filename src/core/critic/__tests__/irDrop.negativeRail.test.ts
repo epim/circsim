@@ -1,3 +1,4 @@
+import { haveNativeCopper } from './nativeCopper'
 /**
  * core/critic/__tests__/irDrop.negativeRail.test.ts
  *
@@ -19,7 +20,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseBoard } from '../../kicad/board'
 import { extract, type Circuit } from '../../netlist/extract'
-import { runCritic } from '../run'
+import { nativeRunCritic as runCritic } from './nativeCopper'
 import type { OpResult } from '../types'
 
 const TRACK_OHMS = (1.68e-8 / 34.8e-6) * (100 / 0.25)
@@ -72,15 +73,15 @@ function opWith(circuit: Circuit, veeA: number, gndA: number): OpResult {
   }
 }
 
-function irOf(board: ReturnType<typeof makeBoard>, op: (c: Circuit) => OpResult) {
+async function irOf(board: ReturnType<typeof makeBoard>, op: (c: Circuit) => OpResult) {
   const circuit = extract(board)
-  const report = runCritic(board, circuit, op(circuit))
+  const report = (await runCritic(board, circuit, op(circuit)))
   return { report, ir: report.findings.filter((f) => f.check === 'ir-drop') }
 }
 
-describe('IR drop on a negative rail', () => {
-  it('reports the sag toward 0 V with the solve-signed currents (VEE pad -1 A, GND pad +1 A)', () => {
-    const { ir, report } = irOf(makeBoard(), (c) => opWith(c, -1, 1))
+describe.skipIf(!haveNativeCopper)('IR drop on a negative rail', () => {
+  it('reports the sag toward 0 V with the solve-signed currents (VEE pad -1 A, GND pad +1 A)', async () => {
+    const { ir, report } = (await irOf(makeBoard(), (c) => opWith(c, -1, 1)))
     const f = ir.find((x) => x.netId === 1)
     expect(f, JSON.stringify(report.skipped)).toBeDefined()
     expect(f!.severity).toBe('warn')
@@ -94,24 +95,26 @@ describe('IR drop on a negative rail', () => {
     expect(f!.metrics!.sinkV).toBeCloseTo(-5 + TRACK_OHMS + gndOhms, 3)
     expect(f!.title).toMatch(/"VEE" rail sags to -4\.79V at U1 \(0\.21 V drop/)
     expect(f!.metrics!.totalSinkA).toBeCloseTo(1, 6)
-    expect(report.ranBy).toContain('ir-drop')
+    // The inference-only bypass capacitors are deliberately off both tracks.
+    const note = report.skipped.find((s) => s.check === 'ir-drop')?.reason
+    for (const pad of ['C1.1', 'C1.2', 'C2.1', 'C2.2']) expect(note).toContain(pad)
   })
 
-  it('reports it from a bare partCurrents map too (no pad signs to go on)', () => {
-    const { ir } = irOf(makeBoard(), (c) => ({
+  it('reports it from a bare partCurrents map too (no pad signs to go on)', async () => {
+    const { ir } = (await irOf(makeBoard(), (c) => ({
       nodeVoltages: { [vee(c).spiceNode]: -5 },
       partCurrents: { U1: 1 },
-    }))
+    })))
     const f = ir.find((x) => x.netId === 1)
     expect(f).toBeDefined()
     expect(f!.metrics!.dropV).toBeCloseTo(TRACK_OHMS, 3)
     expect(f!.metrics!.sinkV).toBeGreaterThan(-5)
   })
 
-  it('adds the ground fall at the load to the round trip', () => {
+  it('adds the ground fall at the load to the round trip', async () => {
     // A 0.25 mm GND return as well: 0.5 A drops 0.0966 V on each leg (1.9%,
     // under the 2% warn line alone) and 0.193 V round trip (3.9%).
-    const { ir } = irOf(makeBoard(0.25), (c) => opWith(c, -0.5, 0.5))
+    const { ir } = (await irOf(makeBoard(0.25), (c) => opWith(c, -0.5, 0.5)))
     const f = ir.find((x) => x.netId === 1)
     expect(f).toBeDefined()
     expect(f!.metrics!.dropV).toBeCloseTo(0.5 * TRACK_OHMS, 3)
@@ -119,10 +122,10 @@ describe('IR drop on a negative rail', () => {
     expect(f!.metrics!.roundTripV).toBeCloseTo(TRACK_OHMS, 3)
   })
 
-  it('reports a ground that falls under a negative-rail load as a ground shift', () => {
+  it('reports a ground that falls under a negative-rail load as a ground shift', async () => {
     // 1 A drawn out of a 0.25 mm GND return: the ground at U1 sits 0.193 V
     // below the return entry, 3.9% of the 5 V rail.
-    const { ir } = irOf(makeBoard(0.25), (c) => opWith(c, -1, 1))
+    const { ir } = (await irOf(makeBoard(0.25), (c) => opWith(c, -1, 1)))
     const g = ir.find((x) => x.netId === 2)
     expect(g).toBeDefined()
     expect(g!.severity).toBe('warn')
@@ -130,10 +133,10 @@ describe('IR drop on a negative rail', () => {
     expect(g!.metrics!.dropV).toBeCloseTo(TRACK_OHMS, 3)
   })
 
-  it('names a rail whose only current flows into it instead of staying silent', () => {
+  it('names a rail whose only current flows into it instead of staying silent', async () => {
     // U1 pulls current out of the -5 V rail, as a supply would: no pad draws a
     // load from the inferred entry J1, so there is no sag to measure from it.
-    const { ir, report } = irOf(makeBoard(), (c) => opWith(c, 1, -1))
+    const { ir, report } = (await irOf(makeBoard(), (c) => opWith(c, 1, -1)))
     expect(ir.find((x) => x.netId === 1)).toBeUndefined()
     expect(report.ranBy).not.toContain('ir-drop')
     expect(report.skipped.find((s) => s.check === 'ir-drop')?.reason).toMatch(/VEE: U1\.1 /)

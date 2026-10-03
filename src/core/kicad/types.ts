@@ -26,6 +26,8 @@ export interface BoardModel {
   tracks: TrackSegment[];
   vias: Via[];                 // at, size, drill, layers, netId
   zones: Zone[];               // filled polygons with holes, netId, layer
+  /** Netted board graphics, separate from routed tracks and zone item counts. */
+  copperGraphics?: { tracks: TrackSegment[]; zones: Zone[] };
   edgeCuts: EdgePrimitive[];   // raw, in file order
   outline: OutlineGeometry;    // stitched from edgeCuts (see below)
   silkscreen: BoardText[];     // gr_text + fp_text on F.SilkS/F.Silkscreen + B equivalents

@@ -47,7 +47,7 @@ While the board is energized, editing any bench instrument re-solves automatical
 
 ## What the operating point unlocks
 
-A solved operating point also feeds the simulation-informed [Board Critic](./run-critic) checks: **ampacity** and **IR-drop** run against the branch currents of the solve (every part, not only LEDs), through your tracks, vias and copper pours, so you find out whether your power copper is wide enough for the load you just measured. Anything the solve could not measure is named in the panel rather than counted as zero.
+A solved operating point also feeds the simulation-informed [Board Critic](./run-critic). **Thermal** can run from solved terminal power. Energize currently uses ideal nets, so **ampacity** and **IR-drop** are not assessed. Those checks require a physical copper solve, supported by the solve API with `copperAware: true`; bench controls for that mode are still being added. Missing current or power data is named in the panel rather than counted as assessed.
 
 ## Next
 

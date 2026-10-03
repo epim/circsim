@@ -1,3 +1,6 @@
+import { emitCopperCards, padSenseName, type CopperNetwork } from '../copper'
+import { reduceCopperNetwork } from '../copper/kron'
+import { COPPER_TERMINAL_REDUCTION_MARKER } from './copperMarker'
 /**
  * core/spicegen/generate.ts
  *
@@ -29,6 +32,10 @@ import { clampPotOhms, potResistorNames } from './instruments'
 // ─── Public API types ─────────────────────────────────────────────────────────
 
 export interface GenerateOptions {
+  /** Opt-in physical copper. Absent preserves the ideal deck. */
+  copperNetwork?: CopperNetwork
+  /** Retain only pad terminals for a transient; the operating point uses the full mesh. */
+  copperReduction?: 'terminals'
   /** Circuit (from core/netlist/extract) */
   circuit: Circuit
   /** Resolutions for every part (from core/models/resolve) */
@@ -100,6 +107,29 @@ interface SubcktDef {
   terminals: string[]
   /** The full definition text (one entry per logical line). */
   lines: string[]
+}
+
+/** ngspice treats a literal gnd node as global 0, even in a subcircuit port. */
+function copperSubcktLines(def: SubcktDef): string[] {
+  if (!def.terminals.includes('gnd')) {
+    const globalReturn = def.lines.slice(1).some((line) =>
+      /^\s*[a-z]/i.test(line) && /(^|[\s(,])gnd(?=$|[\s),])/i.test(line))
+    return globalReturn ? [
+      `* copper warning: ${def.name} uses global gnd without a return port; current bypasses physical ground copper`,
+      ...def.lines,
+    ] : def.lines
+  }
+  let localReturn = 'circsim_return'
+  const text = def.lines.join('\n').toLowerCase()
+  while (text.includes(localReturn)) localReturn += '_'
+  const rename = (line: string): string => line.replace(/(^|[\s(,])gnd(?=$|[\s),])/gi, '$1' + localReturn)
+  return def.lines.map((line, i) => {
+    if (line.trimStart().startsWith('*') || /^\s*\.ends\b/i.test(line)) return line
+    if (i === 0) {
+      return line.replace(/^(\s*\.subckt\s+\S+\s+)(.*)$/i, (_, prefix: string, ports: string) => prefix + rename(ports))
+    }
+    return rename(line)
+  })
 }
 
 /**
@@ -1107,7 +1137,7 @@ function parseLogic74(idx: ModelTextIndex, file: string): Logic74File | null {
 export function digitalVddNet(
   tpl: Logic74Template,
   pinMap: Record<string, string>,
-  part: { padNet: Map<string, number> },
+  part: { padNet: Map<string, number>; padNodes?: ReadonlyMap<string, string> },
   netIdToNode: Map<number, string>,
 ): { vddNetId?: number; vssGrounded: boolean } {
   const vccSig = tpl.power?.vcc?.toUpperCase()
@@ -1136,7 +1166,7 @@ export function digitalVddNet(
 function deriveSupplyVHigh(
   tpl: Logic74Template,
   pinMap: Record<string, string>,
-  part: { padNet: Map<string, number> },
+  part: { padNet: Map<string, number>; padNodes?: ReadonlyMap<string, string> },
   netIdToNode: Map<number, string>,
   instruments: Instrument[],
 ): number | undefined {
@@ -1260,7 +1290,7 @@ export function deriveMeasuredRailVHigh(opts: {
 function expandXspiceDigital(
   ref: string,
   model: { kind: 'xspice-digital'; templateId: string; pinMap: Record<string, string> },
-  part: { padNet: Map<string, number> },
+  part: { padNet: Map<string, number>; padNodes?: ReadonlyMap<string, string> },
   netIdToNode: Map<number, string>,
   idx: ModelTextIndex,
   templateFile: string | undefined,
@@ -1316,7 +1346,7 @@ function expandXspiceDigital(
   for (const [pad, sig] of Object.entries(model.pinMap)) {
     const netId = part.padNet.get(pad)
     if (netId === undefined) continue
-    const node = netIdToNode.get(netId)
+    const node = part.padNodes?.get(pad) ?? netIdToNode.get(netId)
     if (node !== undefined) signalToNode.set(sig.toUpperCase(), node)
   }
   /** Analog node for a chip signal (internal per-instance node when unconnected). */
@@ -1338,10 +1368,13 @@ function expandXspiceDigital(
   // current source.
   const vccSig = tpl.power?.vcc?.toUpperCase()
   const vccNode = vccSig !== undefined ? signalToNode.get(vccSig) : undefined
+  const localGround = part.padNodes && tpl.power?.gnd ? aNode(tpl.power.gnd) : '0'
+  const physicalRail = part.padNodes && vccNode ? `max(v(${vccNode},${localGround}),0)` : undefined
   const supplyCurrentLine = (terms: string[]): string | undefined => {
     if (vccNode === undefined || vccNode === '0' || terms.length === 0) return undefined
     const sum = terms.map((t) => `0.5*((${t}) + sqrt((${t})*(${t}) + 1e-18))`).join(' + ')
-    return `b_${refLc}_icc ${vccNode} 0 I = 0.5*(1 + tanh((v(${vccNode}) - 1)/0.25))*(${sum})`
+    const railVoltage = physicalRail ?? `v(${vccNode})`
+    return `b_${refLc}_icc ${vccNode} ${localGround} I = 0.5*(1 + tanh((${railVoltage} - 1)/0.25))*(${sum})`
   }
 
   const lines: string[] = []
@@ -1409,8 +1442,11 @@ function expandXspiceDigital(
       // sags the pad cannot disturb the hysteresis.
       const srcN = srcNode(g.out as string)
       lines.push(
-        `b_${refLc}_${gi} ${srcN} 0 V = ` +
-          `(v(${inN}) > (v(${srcN}) > ${mid} ? ${inHigh} : ${inLow})) ? 0 : ${vHigh.toFixed(4)}`,
+        physicalRail
+          ? `b_${refLc}_${gi} ${srcN} ${localGround} V = ` +
+            `(v(${inN},${localGround}) > (v(${srcN},${localGround}) > 0.5*${physicalRail} ? ${adc.inHighFrac}*${physicalRail} : ${adc.inLowFrac}*${physicalRail})) ? 0 : ${physicalRail}`
+          : `b_${refLc}_${gi} ${srcN} 0 V = ` +
+            `(v(${inN}) > (v(${srcN}) > ${mid} ? ${inHigh} : ${inLow})) ? 0 : ${vHigh.toFixed(4)}`,
       )
       if (stage) lines.push(stage.card(g.out as string, srcN, padN))
       // Both the input and the pad are single-node island terminals (matches the
@@ -1428,7 +1464,7 @@ function expandXspiceDigital(
     }
     const supply = supplyCurrentLine(outCurrents)
     if (supply) lines.push(supply)
-    return { lines, expanded: true, analogNodes, links: [], drivenNodes }
+    return { lines, expanded: true, analogNodes, links: physicalRail ? [[vccNode!, localGround]] : [], drivenNodes }
   }
 
   const rd = `${tpl.delaysNs}n`
@@ -1458,7 +1494,9 @@ function expandXspiceDigital(
 
   // One adc_bridge per input signal: analog board node → digital event node.
   for (const sig of tpl.inputs) {
-    lines.push(`abr_${refLc}_${sig.toLowerCase()} [${aNode(sig)}] [${dNode(sig)}] ${adcModel}`)
+    const input = physicalRail ? `${refLc}_adc_${sig.toLowerCase()}` : aNode(sig)
+    if (physicalRail) lines.push(`b_${refLc}_adc_${sig.toLowerCase()} ${input} 0 V = v(${aNode(sig)},${localGround})*${vHigh.toFixed(4)}/max(${physicalRail},1e-6)`)
+    lines.push(`abr_${refLc}_${sig.toLowerCase()} [${input}] [${dNode(sig)}] ${adcModel}`)
     analogNodes.push(aNode(sig))
   }
 
@@ -1516,6 +1554,14 @@ function expandXspiceDigital(
   // a B-source). Otherwise the bridge drives the board node directly, as before.
   const outCurrents: string[] = []
   const links: string[][] = []
+  const emitDac = (sig: string, output: string): void => {
+    const raw = physicalRail ? `${output}_raw` : output
+    lines.push(`abr_${refLc}_out_${sig.toLowerCase()} [${dNode(sig)}] [${raw}] ${dacModel}`)
+    if (physicalRail) {
+      lines.push(`b_${refLc}_dac_${sig.toLowerCase()} ${output} ${localGround} V = v(${raw})*${physicalRail}/${vHigh.toFixed(4)}`)
+      links.push([output, localGround])
+    }
+  }
   for (const sig of tpl.outputs) {
     const sigLc = sig.toLowerCase()
     const padN = aNode(sig)
@@ -1526,21 +1572,21 @@ function expandXspiceDigital(
       // doubles as the supply-side term (no sense source needed). The pad is the
       // single analog island terminal; the source node is driven by the bridge.
       const srcN = srcNode(sig)
-      lines.push(`abr_${refLc}_out_${sigLc} [${dNode(sig)}] [${srcN}] ${dacModel}`)
+      emitDac(sig, srcN)
       lines.push(stage.card(sig, srcN, padN))
       if (wired) outCurrents.push(stage.current(srcN, padN))
       analogNodes.push(padN)
     } else if (wired) {
       const bridgeN = `${refLc}_o_${sigLc}`
       const senseName = `v_${refLc}_o_${sigLc}`
-      lines.push(`abr_${refLc}_out_${sigLc} [${dNode(sig)}] [${bridgeN}] ${dacModel}`)
+      emitDac(sig, bridgeN)
       lines.push(`${senseName} ${bridgeN} ${padN} DC 0`)
       // The sense source is a DC path, so the bridge node is part of the pad's island.
       links.push([bridgeN, padN])
       outCurrents.push(`i(${senseName})`)
       analogNodes.push(bridgeN, padN)
     } else {
-      lines.push(`abr_${refLc}_out_${sigLc} [${dNode(sig)}] [${padN}] ${dacModel}`)
+      emitDac(sig, padN)
       analogNodes.push(padN)
     }
     // Every output pad is held by its dac_bridge (directly, through the sense
@@ -1678,7 +1724,7 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
     if (!def) return
     const key = `subckt:${file}:${name.toLowerCase()}`
     if (emittedDefKeys.has(key)) return
-    queueDef(key, def.lines)
+    queueDef(key, opts.copperNetwork ? copperSubcktLines(def) : def.lines)
     for (const dep of extractSubcktRefs(def.lines)) queueSubcktWithDeps(file, dep)
   }
 
@@ -1846,16 +1892,60 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
   // `find` this replaced did (issue #76: that scan was parts x resolutions).
   const partsByRef = new Map<string, Part>()
   for (const p of circuit.parts) if (!partsByRef.has(p.ref)) partsByRef.set(p.ref, p)
-  for (const res of resolutions) {
-    const part = partsByRef.get(res.ref)
-    if (!part) continue
+  if (opts.copperNetwork) {
+    lines.push('* physical copper networks')
+    const emitted = opts.copperReduction === 'terminals' ? reduceCopperNetwork(opts.copperNetwork) : opts.copperNetwork
+    if (opts.copperReduction === 'terminals') {
+      lines.push(COPPER_TERMINAL_REDUCTION_MARKER)
+      lines.push(...emitted.edges.map((edge, i) => `r_copper_${i + 1} ${emitted.nodes[edge.a].name} ${emitted.nodes[edge.b].name} ${edge.ohms.toPrecision(12)}`))
+    } else {
+      lines.push(...emitCopperCards(opts.copperNetwork))
+    }
+    for (const edge of emitted.edges) {
+      islandNodes.link([emitted.nodes[edge.a].name, emitted.nodes[edge.b].name])
+    }
+  }
 
+  const occupiedPadNodes = new Set([...circuit.nets.map((n) => n.spiceNode), ...(opts.copperNetwork?.nodes.map((n) => n.name) ?? [])])
+  for (const res of resolutions) {
+    const originalPart = partsByRef.get(res.ref)
+    if (!originalPart) continue
+    const part = opts.copperNetwork
+      ? { ...originalPart, padNodes: new Map<string, string>() }
+      : { ...originalPart, padNodes: undefined }
     if (!res.model) {
       lines.push(`* ${res.ref}: unresolved — no model found`)
       continue
     }
 
     const model = res.model
+    const digitalTemplateFile = model.kind === 'xspice-digital' && haveModelTexts
+      ? findDigitalTemplateFile(modelIndex, model.templateId)
+      : undefined
+    // A meter only describes terminal power when its model actually runs.
+    // Placeholder comments and skipped cards otherwise look like powered,
+    // zero-current parts and turn an unknown dissipation into a false zero.
+    const emitsModel = model.kind === 'primitive'
+      ? incompleteCardReason(model.card) === undefined
+      : model.kind === 'xspice-digital'
+        ? digitalTemplateFile !== undefined
+        : model.kind !== 'stub'
+    if (opts.copperNetwork && part.padNodes && model.kind !== 'stub' && emitsModel) {
+      const modeledPads = model.kind === 'primitive' ? [...part.padNet.keys()] : Object.keys(model.pinMap)
+      for (const pad of modeledPads) {
+        const netId = part.padNet.get(pad)
+        if (netId === undefined) continue
+        const external = opts.copperNetwork.padNode(part.ref, pad) ?? netIdToNode.get(netId)
+        if (external === undefined) continue
+        const sense = padSenseName(part.ref, pad)
+        let internal = sense + '_n'
+        while (occupiedPadNodes.has(internal)) internal += '_'
+        occupiedPadNodes.add(internal)
+        part.padNodes.set(pad, internal)
+        lines.push(sense + ' ' + external + ' ' + internal + ' DC 0')
+        islandNodes.link([external, internal])
+      }
+    }
 
     if (model.kind === 'stub') {
       if (model.mode === 'open') {
@@ -1863,8 +1953,8 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
       } else if (model.mode === 'short') {
         // Tie all pads together via 1 µΩ resistors
         const nodes: string[] = []
-        for (const [, netId] of part.padNet) {
-          const node = netIdToNode.get(netId)
+        for (const [pad, netId] of part.padNet) {
+          const node = opts.copperNetwork?.padNode(part.ref, pad) ?? netIdToNode.get(netId)
           if (node && !nodes.includes(node)) nodes.push(node)
         }
         if (nodes.length >= 2) {
@@ -1888,7 +1978,8 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
       // but a card ngspice cannot use must never reach it. A model-less diode
       // fails the whole parse ("could not find a valid modelname"); a valueless
       // source is "DC 0 assumed" (a short); an empty value is "ignored!".
-      const incomplete = incompleteCardReason(model.card)
+      const card = part.padNodes ? copperPrimitiveCard(model.card, part, netIdToNode) : model.card
+      const incomplete = incompleteCardReason(card)
       if (incomplete) {
         lines.push(`* ${res.ref}: skipped incomplete primitive card (${incomplete})`)
         continue
@@ -1899,14 +1990,14 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
       if (cp) {
         // Top-level primitive: no ammeter needed — the device current vector
         // @<dev>[i] is available natively. Card goes in as-is.
-        lines.push(model.card)
+        lines.push(card)
         // .save @<dev>[i] is added in the .save section below
       } else {
-        lines.push(model.card)
+        lines.push(card)
       }
       // A capacitor joins the island but passes no DC (issue #43).
-      const scope = model.card.trim().charAt(0).toLowerCase() === 'c' ? 'island' : 'both'
-      for (const group of primitiveCardNodeGroups(model.card)) islandNodes.link(group, scope)
+      const scope = card.trim().charAt(0).toLowerCase() === 'c' ? 'island' : 'both'
+      for (const group of primitiveCardNodeGroups(card)) islandNodes.link(group, scope)
       continue
     }
 
@@ -1992,7 +2083,7 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
         // Find which pad to splice
         const splicePad = cp.pad
         const netIdToSplice = splicePad ? part.padNet.get(splicePad) : undefined
-        const spliceNode = netIdToSplice !== undefined ? netIdToNode.get(netIdToSplice) : undefined
+        const spliceNode = splicePad ? (part.padNodes?.get(splicePad) ?? (netIdToSplice !== undefined ? netIdToNode.get(netIdToSplice) : undefined)) : undefined
 
         if (spliceNode) {
           // Create an internal node for the splice
@@ -2033,11 +2124,8 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
       // library ships one file per family (logic74hc.json at 5 V, logic4000.json
       // at 12 V) because vHigh is a per-file constant — so pick the file that
       // actually CONTAINS this templateId (never hard-prefer one family file).
-      const templateFile = haveModelTexts
-        ? findDigitalTemplateFile(modelIndex, model.templateId)
-        : undefined
       const xspice = expandXspiceDigital(
-        res.ref, model, part, netIdToNode, modelIndex, templateFile, instruments,
+        res.ref, model, part, netIdToNode, modelIndex, digitalTemplateFile, instruments,
         opts.railOverrides, opts.measuredRailVHigh,
       )
       lines.push(...xspice.lines)
@@ -2153,7 +2241,7 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
  * Sorted by the numeric pinMap value (terminal position), then alpha.
  */
 function buildPositionalNodeList(
-  part: { padNet: Map<string, number> },
+  part: { padNet: Map<string, number>; padNodes?: ReadonlyMap<string, string> },
   netIdToNode: Map<number, string>,
   pinMap: Record<string, string>,
 ): string[] {
@@ -2167,7 +2255,7 @@ function buildPositionalNodeList(
   const nodes: string[] = []
   for (const [padNum] of padEntries) {
     const netId = part.padNet.get(padNum)
-    if (netId !== undefined) nodes.push(netIdToNode.get(netId) ?? '0')
+    if (netId !== undefined) nodes.push(part.padNodes?.get(padNum) ?? netIdToNode.get(netId) ?? '0')
   }
   return nodes
 }
@@ -2189,7 +2277,7 @@ function buildPositionalNodeList(
  * unchanged.
  */
 function buildSubcktNodeListPlain(
-  part: { padNet: Map<string, number> },
+  part: { padNet: Map<string, number>; padNodes?: ReadonlyMap<string, string> },
   netIdToNode: Map<number, string>,
   pinMap: Record<string, string>,
   subcktDef?: SubcktDef,
@@ -2208,7 +2296,7 @@ function buildSubcktNodeListPlain(
   const nodes: string[] = []
   for (const [padNum] of padEntries) {
     const netId = part.padNet.get(padNum)
-    if (netId !== undefined) nodes.push(netIdToNode.get(netId) ?? '0')
+    if (netId !== undefined) nodes.push(part.padNodes?.get(padNum) ?? netIdToNode.get(netId) ?? '0')
   }
   return nodes.join(' ')
 }
@@ -2218,7 +2306,7 @@ function buildSubcktNodeListPlain(
  * designated splicePad (ammeter insertion).
  */
 function buildSubcktNodeList(
-  part: { padNet: Map<string, number> },
+  part: { padNet: Map<string, number>; padNodes?: ReadonlyMap<string, string> },
   netIdToNode: Map<number, string>,
   pinMap: Record<string, string>,
   splicePad: string | undefined,
@@ -2241,7 +2329,7 @@ function buildSubcktNodeList(
       nodes.push(spliceIntNode)
     } else {
       const netId = part.padNet.get(padNum)
-      if (netId !== undefined) nodes.push(netIdToNode.get(netId) ?? '0')
+      if (netId !== undefined) nodes.push(part.padNodes?.get(padNum) ?? netIdToNode.get(netId) ?? '0')
     }
   }
   return nodes.join(' ')
@@ -2256,7 +2344,7 @@ function buildSubcktNodeList(
  * ground "0" (a defensive default — the resolution warnings already flag gaps).
  */
 function orderNodesByTerminals(
-  part: { padNet: Map<string, number> },
+  part: { padNet: Map<string, number>; padNodes?: ReadonlyMap<string, string> },
   netIdToNode: Map<number, string>,
   pinMap: Record<string, string>,
   terminals: string[],
@@ -2284,7 +2372,7 @@ function orderNodesByTerminals(
     }
     if (pad !== undefined) {
       const netId = part.padNet.get(pad)
-      nodes.push(netId !== undefined ? (netIdToNode.get(netId) ?? '0') : '0')
+      nodes.push(netId !== undefined ? (part.padNodes?.get(pad) ?? netIdToNode.get(netId) ?? '0') : '0')
     } else {
       nodes.push('0')
     }
@@ -2501,4 +2589,18 @@ export function alterPlan(
 
   // Default: reload for anything unknown
   return { kind: 'reload' }
+}
+
+/** Translate terminal positions without replacing model names or numeric values. */
+function copperPrimitiveCard(card: string, part: { padNet: Map<string, number>; padNodes?: ReadonlyMap<string, string> }, netNodes: ReadonlyMap<number, string>): string {
+  const tokens = card.trim().split(/\s+/)
+  const count = ({ r: 2, c: 2, l: 2, v: 2, i: 2, d: 2, b: 2, q: 3, m: 4, e: 4, g: 4, f: 2, h: 2 } as Record<string, number>)[tokens[0][0].toLowerCase()] ?? 0
+  const available = [...part.padNet].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+  for (let i = 1; i <= count; i++) {
+    const at = available.findIndex(([, net]) => netNodes.get(net)?.toLowerCase() === tokens[i]?.toLowerCase())
+    if (at < 0) continue
+    const [pad] = available.splice(at, 1)[0]
+    tokens[i] = part.padNodes?.get(pad) ?? tokens[i]
+  }
+  return tokens.join(' ')
 }

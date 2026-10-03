@@ -47,6 +47,7 @@ import { describe, expect, it } from 'vitest'
 import { SimHost } from '../index'
 import { ngspiceResourcesAvailable } from '../ngspiceFfi'
 import { normalizeVectorKey, type SimEvent } from '../protocol'
+import { waitForFiniteRun } from './finiteRun'
 
 const haveNgspice = ngspiceResourcesAvailable()
 
@@ -83,21 +84,6 @@ class SampleCollector {
   }
 }
 
-/** Poll until the engine's bg thread is no longer running, or timeout. */
-async function waitUntilStopped(host: SimHost, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const engine = (host as any).engine
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 20))
-    if (engine.isRunning && !engine.isRunning()) {
-      await new Promise((r) => setTimeout(r, 30))
-      ;(host as any).pacingTick?.()
-      return
-    }
-  }
-}
-
 /** Run a deck through a real SimHost transient and return the collected samples. */
 async function runTransient(deckLines: string[]): Promise<SampleCollector> {
   const col = new SampleCollector()
@@ -111,7 +97,7 @@ async function runTransient(deckLines: string[]): Promise<SampleCollector> {
     await host.whenIdle()
     host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
     await host.whenIdle()
-    await waitUntilStopped(host, 15_000)
+    await waitForFiniteRun(col.events, 1e-3)
   } finally {
     await host.dispose()
   }

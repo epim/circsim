@@ -20,6 +20,7 @@ import { checkLoopArea } from './checks/loopArea'
 import { checkAmpacity } from './checks/ampacity'
 import { checkIrDrop } from './checks/irDrop'
 import { checkThermal } from './checks/thermal'
+import { derivePartPower } from './power'
 
 type Check = (ctx: CriticContext) => CheckOutput
 
@@ -82,7 +83,11 @@ export function runCritic(
   opResult?: OpResult,
   opts?: Partial<CriticOptions>,
 ): CriticReport {
-  const merged: CriticOptions = { ...DEFAULT_CRITIC_OPTIONS, ...(opts ?? {}) }
+  if (opResult && !opResult.partPower) opResult = { ...opResult, partPower: derivePartPower(circuit, opResult) }
+  const merged: CriticOptions = {
+    ...DEFAULT_CRITIC_OPTIONS, ...(opts ?? {}),
+    ...(opResult?.copper ? { copperOz: opResult.copper.network.copperOz, zoneMeshMm: opResult.copper.network.zoneMeshMm } : {}),
+  }
   const ctx = buildContext(board, circuit, opResult, merged)
 
   const findings: Finding[] = []

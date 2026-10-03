@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest'
 import { SimHost } from '../index'
 import { ngspiceResourcesAvailable } from '../ngspiceFfi'
 import type { SimEvent } from '../protocol'
+import { waitForFiniteRun } from './finiteRun'
 
 const haveNgspice = ngspiceResourcesAvailable()
 
@@ -56,7 +57,7 @@ class SampleCollector {
   }
 
   /** Nearest captured sample of `vec` to sim-time `t`. */
-  valueAt(vec: string, t: number): number {
+  valueAt(vec: string, t: number): { time: number; value: number } {
     const col = this.cols[vec]
     let bestIdx = 0
     let bestErr = Infinity
@@ -67,28 +68,12 @@ class SampleCollector {
         bestIdx = i
       }
     }
-    return col[bestIdx]
+    return { time: this.time[bestIdx], value: col[bestIdx] }
   }
 
   finalValue(vec: string): number {
     const col = this.cols[vec]
     return col[col.length - 1]
-  }
-}
-
-/** Poll until the engine's bg thread is no longer running, or timeout. */
-async function waitUntilStopped(host: SimHost, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const engine = (host as any).engine
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 20))
-    if (engine.isRunning && !engine.isRunning()) {
-      // give the final SendData/flush a beat
-      await new Promise((r) => setTimeout(r, 30))
-      ;(host as any).pacingTick?.()
-      return
-    }
   }
 }
 
@@ -119,20 +104,24 @@ describe.skipIf(!haveNgspice)('SimHost transient streaming (real libngspice)', (
       host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
       await host.whenIdle()
 
-      await waitUntilStopped(host, 15_000)
+      await waitForFiniteRun(col.events, 10e-3)
 
       // Vectors event must have arrived (SendInitData → 'vectors').
       expect(col.vectorNames).toContain('out')
       expect(col.time.length).toBeGreaterThan(100)
 
       const RC = 1e3 * 1e-6 // 1 ms
+      expect(col.time[0]).toBeLessThan(1e-3)
+      expect(col.time.at(-1)).toBeGreaterThanOrEqual(5e-3)
       for (const t of [1e-3, 2e-3, 5e-3]) {
-        const captured = col.valueAt('out', t)
-        const analytic = 5 * (1 - Math.exp(-t / RC))
+        const sample = col.valueAt('out', t)
+        expect(Math.abs(sample.time - t)).toBeLessThan(RC / 100)
+        const captured = sample.value
+        const analytic = 5 * (1 - Math.exp(-sample.time / RC))
         const relErr = Math.abs(captured - analytic) / analytic
         // eslint-disable-next-line no-console
         console.log(
-          `[RC] t=${(t * 1e3).toFixed(0)}ms captured=${captured.toFixed(5)}V ` +
+          `[RC] target=${(t * 1e3).toFixed(0)}ms sampleTime=${sample.time}s captured=${captured.toFixed(5)}V ` +
             `analytic=${analytic.toFixed(5)}V relErr=${(relErr * 100).toFixed(3)}%`
         )
         expect(relErr).toBeLessThan(0.02)
@@ -156,7 +145,7 @@ describe.skipIf(!haveNgspice)('SimHost transient streaming (real libngspice)', (
       await host.whenIdle()
       host.handleCommand({ type: 'setPace', realtimeFactor: 'max' })
       await host.whenIdle()
-      await waitUntilStopped(host, 15_000)
+      await waitForFiniteRun(col.events, 10e-3)
 
       expect(col.batches.length).toBeGreaterThan(0)
       for (const b of col.batches) {
