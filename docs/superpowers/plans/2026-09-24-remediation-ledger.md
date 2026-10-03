@@ -171,3 +171,12 @@ Usage: the master cannot read the status command. Wave 0 usage before: not recor
 - 2026-10-02 01:06 PDT: #156 (#152) merged. Running: #155 (worker-crash diagnostics), #157 (sample-channel tolerance). Wave 2 waits on the human go-ahead.
 - 2026-10-02 02:17 PDT: #158 (#155) merged. #159 (#157) in its merge chain. After it: no open PRs; wave 2 waits on the human go-ahead.
 - 2026-10-02 02:24 PDT: #159 (#157) merged. No open PRs. Master b27dc04. Open issues: #133 (blocked upstream), #147 (into W2.1a), #20 and #25 (wave 2). Wave 2 waits on the human go-ahead; args in wave2-args.json.
+
+## Resume here (written 2026-10-02 22:45 PDT before a context compaction)
+
+- Master b27dc04, canary green (3665 unit, 276 characterization, 109 corpus, 10 CI legs). No open PRs, one worktree, 110 GB free.
+- Wave 0 and wave 1 complete, including batch 2 and all follow-ups. Council set: every issue #2 to #80 merged. Open issues: #133 (blocked upstream, documented in #150), #147 (folds into W2.1a), #20 and #25 (wave 2).
+- Wave 2 has NOT started; it waits for the human's explicit go-ahead. Task definitions: wave2-args.json (copied to C:/Users/bear/.claude/projects/C--Users-bear-circsim/tools/). Launch with the Workflow tool, scriptPath remediation-runner.js (same folder), args from that file; W2.1a and W2.1b start together, W2.2 after W2.1a, W2.3 after W2.2 (the after field handles it).
+- Merge mechanics: tools/train-prepare.sh <pr...> (merge master into the PR worktree, push, wait for the head run), tools/merge-train.sh <pr...> (gh pr merge --squash then tools/canary.sh), tools/update-fast.sh; pr-map.json maps PR number to worktree and branch. Known CI flake classes are listed in the memory note council-remediation-run; the classify-then-rerun pattern is in the wave log above.
+- Codex bridge agent: assignment closed on 2026-10-01 at the human's request; do not assign it more work (memory note codex-offload-not-worth-it). Bridge client: tools/bridge.js.
+- Human-owned items still open: code-signing certificates (R6 pipeline skips cleanly without them), CIRCSIM_PRIVATE_BOARDS_DIR for lantern measurements, demo video for #30.
