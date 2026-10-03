@@ -1,0 +1,342 @@
+{
+  "command": "kicad-cli pcb drc --format json --severity-all -o report.json board.kicad_pcb",
+  "tool": "KiCad 10.0",
+  "boards": {
+    "k8-tiny-tapeout": [
+      {
+        "ref": "J15",
+        "padNumber": "S2",
+        "net": "Net-(C3-Pad1)",
+        "drc": {
+          "type": "unconnected_items",
+          "description": "Missing connection between items",
+          "items": [
+            {
+              "description": "Track [Net-(C3-Pad1)] on F.Cu, length 4.0000 mm",
+              "pos": {
+                "x": 79.13,
+                "y": 55.5
+              },
+              "uuid": "213271c9-3786-4f85-96f2-53d0b576ddbf"
+            },
+            {
+              "description": "Track [Net-(C3-Pad1)] on F.Cu, length 4.0000 mm",
+              "pos": {
+                "x": 90.37,
+                "y": 59.5
+              },
+              "uuid": "0c1c1795-3102-4941-88c4-9c28c1ed84ac"
+            }
+          ]
+        }
+      },
+      {
+        "ref": "J15",
+        "padNumber": "S4",
+        "net": "Net-(C3-Pad1)",
+        "drc": {
+          "type": "unconnected_items",
+          "description": "Missing connection between items",
+          "items": [
+            {
+              "description": "Track [Net-(C3-Pad1)] on F.Cu, length 4.0000 mm",
+              "pos": {
+                "x": 79.13,
+                "y": 55.5
+              },
+              "uuid": "213271c9-3786-4f85-96f2-53d0b576ddbf"
+            },
+            {
+              "description": "Track [Net-(C3-Pad1)] on F.Cu, length 4.0000 mm",
+              "pos": {
+                "x": 90.37,
+                "y": 59.5
+              },
+              "uuid": "0c1c1795-3102-4941-88c4-9c28c1ed84ac"
+            }
+          ]
+        }
+      }
+    ],
+    "dialect-probe-kicad6.kicad_pcb": [
+      {
+        "ref": "C1",
+        "padNumber": "1",
+        "net": "MID",
+        "drc": {
+          "type": "unconnected_items",
+          "description": "Missing connection between items",
+          "items": [
+            {
+              "description": "Pad 1 [MID] of C1 on B.Cu",
+              "pos": {
+                "x": 114.292893,
+                "y": 120.707107
+              },
+              "uuid": "a708a7ae-5a17-4c0d-8e00-00000000000e"
+            },
+            {
+              "description": "Track [MID] on F.Cu, length 9.0554 mm",
+              "pos": {
+                "x": 110,
+                "y": 109
+              },
+              "uuid": "5c5581d4-5a17-4c0d-8e00-000000000014"
+            }
+          ]
+        }
+      },
+      {
+        "ref": "R2",
+        "padNumber": "2",
+        "net": "GND",
+        "drc": {
+          "type": "unconnected_items",
+          "description": "Missing connection between items",
+          "items": [
+            {
+              "description": "Via [GND] on F.Cu - B.Cu",
+              "pos": {
+                "x": 124,
+                "y": 115
+              },
+              "uuid": "fa8cfb85-5a17-4c0d-8e00-000000000015"
+            },
+            {
+              "description": "Pad 2 [GND] of R2 on F.Cu",
+              "pos": {
+                "x": 121,
+                "y": 110
+              },
+              "uuid": "2e2ac0ea-5a17-4c0d-8e00-00000000000a"
+            }
+          ]
+        }
+      }
+    ],
+    "dialect-probe-kicad7.kicad_pcb": [
+      {
+        "ref": "C1",
+        "padNumber": "1",
+        "net": "MID",
+        "drc": {
+          "type": "unconnected_items",
+          "description": "Missing connection between items",
+          "items": [
+            {
+              "description": "Pad 1 [MID] of C1 on B.Cu",
+              "pos": {
+                "x": 114.292893,
+                "y": 120.707107
+              },
+              "uuid": "a708a7ae-5a17-4c0d-8e00-00000000000e"
+            },
+            {
+              "description": "Track [MID] on F.Cu, length 9.0554 mm",
+              "pos": {
+                "x": 110,
+                "y": 109
+              },
+              "uuid": "5c5581d4-5a17-4c0d-8e00-000000000014"
+            }
+          ]
+        }
+      },
+      {
+        "ref": "R2",
+        "padNumber": "2",
+        "net": "GND",
+        "drc": {
+          "type": "unconnected_items",
+          "description": "Missing connection between items",
+          "items": [
+            {
+              "description": "Via [GND] on F.Cu - B.Cu",
+              "pos": {
+                "x": 124,
+                "y": 115
+              },
+              "uuid": "fa8cfb85-5a17-4c0d-8e00-000000000015"
+            },
+            {
+              "description": "Pad 2 [GND] of R2 on F.Cu",
+              "pos": {
+                "x": 121,
+                "y": 110
+              },
+              "uuid": "2e2ac0ea-5a17-4c0d-8e00-00000000000a"
+            }
+          ]
+        }
+      }
+    ],
+    "dialect-probe-kicad8.kicad_pcb": [
+      {
+        "ref": "C1",
+        "padNumber": "1",
+        "net": "MID",
+        "drc": {
+          "type": "unconnected_items",
+          "description": "Missing connection between items",
+          "items": [
+            {
+              "description": "Pad 1 [MID] of C1 on B.Cu",
+              "pos": {
+                "x": 114.292893,
+                "y": 120.707107
+              },
+              "uuid": "81af14c1-5a17-4c0d-8e00-000000000011"
+            },
+            {
+              "description": "Pad 1 [MID] of R2 on F.Cu",
+              "pos": {
+                "x": 119,
+                "y": 110
+              },
+              "uuid": "cc623a9b-5a17-4c0d-8e00-00000000000b"
+            }
+          ]
+        }
+      },
+      {
+        "ref": "R2",
+        "padNumber": "2",
+        "net": "GND",
+        "drc": {
+          "type": "unconnected_items",
+          "description": "Missing connection between items",
+          "items": [
+            {
+              "description": "Via [GND] on F.Cu - B.Cu",
+              "pos": {
+                "x": 124,
+                "y": 115
+              },
+              "uuid": "d5336898-5a17-4c0d-8e00-000000000018"
+            },
+            {
+              "description": "Pad 2 [GND] of R2 on F.Cu",
+              "pos": {
+                "x": 121,
+                "y": 110
+              },
+              "uuid": "6a99b44c-5a17-4c0d-8e00-00000000000c"
+            }
+          ]
+        }
+      }
+    ],
+    "dialect-probe-kicad9.kicad_pcb": [
+      {
+        "ref": "C1",
+        "padNumber": "1",
+        "net": "MID",
+        "drc": {
+          "type": "unconnected_items",
+          "description": "Missing connection between items",
+          "items": [
+            {
+              "description": "Pad 1 [MID] of C1 on B.Cu",
+              "pos": {
+                "x": 114.292893,
+                "y": 120.707107
+              },
+              "uuid": "81af14c1-5a17-4c0d-8e00-000000000011"
+            },
+            {
+              "description": "Track [MID] on F.Cu, length 9.0554 mm",
+              "pos": {
+                "x": 110,
+                "y": 109
+              },
+              "uuid": "36fbeee7-5a17-4c0d-8e00-000000000017"
+            }
+          ]
+        }
+      },
+      {
+        "ref": "R2",
+        "padNumber": "2",
+        "net": "GND",
+        "drc": {
+          "type": "unconnected_items",
+          "description": "Missing connection between items",
+          "items": [
+            {
+              "description": "Via [GND] on F.Cu - B.Cu",
+              "pos": {
+                "x": 124,
+                "y": 115
+              },
+              "uuid": "d5336898-5a17-4c0d-8e00-000000000018"
+            },
+            {
+              "description": "Pad 2 [GND] of R2 on F.Cu",
+              "pos": {
+                "x": 121,
+                "y": 110
+              },
+              "uuid": "6a99b44c-5a17-4c0d-8e00-00000000000c"
+            }
+          ]
+        }
+      }
+    ],
+    "dialect-probe-kicad10.kicad_pcb": [
+      {
+        "ref": "C1",
+        "padNumber": "1",
+        "net": "MID",
+        "drc": {
+          "type": "unconnected_items",
+          "description": "Missing connection between items",
+          "items": [
+            {
+              "description": "Pad 1 [MID] of C1 on B.Cu",
+              "pos": {
+                "x": 114.292893,
+                "y": 120.707107
+              },
+              "uuid": "81af14c1-5a17-4c0d-8e00-000000000011"
+            },
+            {
+              "description": "Pad 1 [MID] of R2 on F.Cu",
+              "pos": {
+                "x": 119,
+                "y": 110
+              },
+              "uuid": "cc623a9b-5a17-4c0d-8e00-00000000000b"
+            }
+          ]
+        }
+      },
+      {
+        "ref": "R2",
+        "padNumber": "2",
+        "net": "GND",
+        "drc": {
+          "type": "unconnected_items",
+          "description": "Missing connection between items",
+          "items": [
+            {
+              "description": "Via [GND] on F.Cu - B.Cu",
+              "pos": {
+                "x": 124,
+                "y": 115
+              },
+              "uuid": "d5336898-5a17-4c0d-8e00-000000000018"
+            },
+            {
+              "description": "Pad 2 [GND] of R2 on F.Cu",
+              "pos": {
+                "x": 121,
+                "y": 110
+              },
+              "uuid": "6a99b44c-5a17-4c0d-8e00-00000000000c"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -8,6 +8,8 @@ export interface CopperOptions {
   copperOz?: number
   zoneMeshMm?: number
   groundNetId?: number
+  /** Build signal copper too; netIds still names explicitly driven supply rails. */
+  allNets?: boolean
   /** Include supply-driven rails with nonstandard names. */
   netIds?: Iterable<number>
   supplyEntries?: readonly { netId: number; pos?: Vec2 }[]
@@ -40,13 +42,15 @@ export interface CopperNetwork {
   nodes: CopperNode[]
   edges: CopperEdge[]
   rails: Map<number, CopperRail>
+  /** Power rails and explicitly driven nets, excluding ordinary signal nets. */
+  powerNetIds?: ReadonlySet<number>
   /** Pads without copper contacts or outside their entry's connected component. */
   unreachedPads: CopperPadConnection[]
   padNode(ref: string, pad: string): string | undefined
   padConnection(ref: string, pad: string): CopperPadConnection | undefined
 }
 
-/** Power and ground copper, with contact bonds contracted before SPICE emission. */
+/** Selected copper nets, with contact bonds contracted before SPICE emission. */
 export function buildCopperNetwork(board: BoardModel, circuit: Circuit, opts: CopperOptions = {}): CopperNetwork {
   const copperOz = opts.copperOz ?? 1
   const zoneMeshMm = opts.zoneMeshMm ?? 2
@@ -54,7 +58,10 @@ export function buildCopperNetwork(board: BoardModel, circuit: Circuit, opts: Co
     throw new Error('Copper weight and pour mesh pitch must be finite and positive')
   }
   const classified = classifyCopperRails(circuit)
-  const netIds = new Set([...classified.powerNetIds, ...classified.groundNetIds, ...(opts.netIds ?? [])])
+  const netById = new Map(circuit.nets.map(n => [n.id, n]))
+  const powerNetIds = new Set([...classified.powerNetIds, ...(opts.netIds ?? [])].filter(id =>
+    netById.has(id) && !classified.groundNetIds.has(id) && id !== opts.groundNetId))
+  const netIds = new Set([...powerNetIds, ...classified.groundNetIds, ...(opts.allNets ? circuit.nets.map(net => net.id) : [])])
   if (opts.groundNetId !== undefined) netIds.add(opts.groundNetId)
   const nodes: CopperNode[] = []
   const edges: CopperEdge[] = []
@@ -62,7 +69,6 @@ export function buildCopperNetwork(board: BoardModel, circuit: Circuit, opts: Co
   const pads = new Map<string, string>()
   const connections = new Map<string, CopperPadConnection>()
   const unreachedPads: CopperPadConnection[] = []
-  const netById = new Map(circuit.nets.map((n) => [n.id, n]))
   const occupied = new Set(circuit.nets.map((n) => n.spiceNode))
   for (const netId of [...netIds].sort((a, b) => a - b)) {
     const net = netById.get(netId)
@@ -140,7 +146,7 @@ export function buildCopperNetwork(board: BoardModel, circuit: Circuit, opts: Co
     rails.set(netId, { graph, nodeNames, source, entry })
   }
   return {
-    copperOz, zoneMeshMm, nodes, edges, rails, unreachedPads,
+    copperOz, zoneMeshMm, nodes, edges, rails, unreachedPads, powerNetIds,
     padNode: (ref, pad) => pads.get(padKey(ref, pad)),
     padConnection: (ref, pad) => connections.get(padKey(ref, pad)),
   }

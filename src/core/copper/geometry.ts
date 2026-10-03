@@ -61,6 +61,49 @@ export function padWorldPos(fp: Footprint, pad: Pad): Vec2 {
   return { x: fp.at.x + o.x, y: fp.at.y + o.y }
 }
 
+/** Copper outline available in the board model; custom pads retain their anchor. */
+export function padCopperOutline(pad: Pad, pos: Vec2): Vec2[] {
+  const x = pad.size.w / 2
+  const y = pad.size.h / 2
+  const local: Vec2[] = []
+  if (pad.shape === 'circle' || pad.shape === 'oval') {
+    const r = Math.min(x, y)
+    for (let i = 0; i < 32; i++) {
+      const angle = i * Math.PI / 16
+      const cx = Math.cos(angle)
+      const cy = Math.sin(angle)
+      local.push(pad.shape === 'circle' ? { x: x * cx, y: y * cy } : {
+        x: r * cx + Math.sign(cx) * Math.max(0, x - r),
+        y: r * cy + Math.sign(cy) * Math.max(0, y - r),
+      })
+    }
+  } else {
+    local.push({ x: -x, y: -y }, { x, y: -y }, { x, y }, { x: -x, y })
+  }
+  return local.map(point => {
+    const rotated = rotateKicad(point.x, point.y, pad.at.rotDeg)
+    return { x: pos.x + rotated.x, y: pos.y + rotated.y }
+  })
+}
+
+/** Convex outline overlap, including boundary contact. */
+export function copperOutlinesOverlap(a: Vec2[], b: Vec2[]): boolean {
+  for (const outline of [a, b]) for (let i = 0; i < outline.length; i++) {
+    const p = outline[i]
+    const q = outline[(i + 1) % outline.length]
+    const nx = p.y - q.y
+    const ny = q.x - p.x
+    const project = (points: Vec2[]): [number, number] => {
+      const values = points.map(point => point.x * nx + point.y * ny)
+      return [Math.min(...values), Math.max(...values)]
+    }
+    const [a0, a1] = project(a)
+    const [b0, b1] = project(b)
+    if (a1 < b0 - 1e-9 || b1 < a0 - 1e-9) return false
+  }
+  return true
+}
+
 /** Length (mm) of a track: straight chord for segments, arc length for arcs. */
 export function segLengthMm(seg: TrackSegment): number {
   if (seg.kind === 'segment') return dist(seg.start, seg.end)

@@ -1,4 +1,5 @@
 import { padSenseName, type CopperOp } from '../copper'
+import { reduceCopperNetwork } from '../copper/kron'
 import type { SolveInputs, OpResult } from './types'
 
 /** Read the final native operating point. No second electrical solver or injected loads. */
@@ -6,7 +7,9 @@ export function copperResult(inputs: SolveInputs, op: OpResult, deck: readonly s
   const network = inputs.copperNetwork
   if (!inputs.copperAware || !network) return undefined
   const solved = op.method !== 'failed'
-  const nodeVoltages: Record<string, number> = solved ? { ...op.values, '0': 0 } : { '0': 0 }
+  const nativeVoltages = solved ? { ...op.values, '0': 0 } : { '0': 0 }
+  const nodeVoltages: Record<string, number> = solved && deck.includes('* copper mesh Kron-reduced onto pad terminals')
+    ? reduceCopperNetwork(network).recoverVoltages(nativeVoltages) : nativeVoltages
   const padVoltages: CopperOp['padVoltages'] = {}
   const padCurrents: CopperOp['padCurrents'] = {}
   const partPower: Record<string, number> = {}

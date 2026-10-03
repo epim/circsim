@@ -35,8 +35,9 @@ export function buildSolveInputs(
     copperAware: overrides.copperAware,
     copperNetwork: overrides.copperAware && board ? buildCopperNetwork(board, circuit, {
       ...overrides.copperOptions,
+      allNets: true,
       groundNetId,
-      netIds: [...(overrides.copperOptions?.netIds ?? []), ...instruments.flatMap((i) => i.kind === 'dc-supply' ? [i.netId] : [])],
+      netIds: [...(overrides.copperOptions?.netIds ?? []), ...instruments.flatMap(i => i.kind === 'dc-supply' ? [i.netId] : [])],
     }) : undefined,
     board,
     circuit,
@@ -56,7 +57,7 @@ export function buildSolveInputs(
  * baseline by clearing them first.
  */
 export function buildDeck(inputs: SolveInputs): string[] {
-  return buildDeckWithUndriven(inputs).deck
+  return buildDeckWithUndriven(inputs, 'transient').deck
 }
 
 /**
@@ -64,8 +65,11 @@ export function buildDeck(inputs: SolveInputs): string[] {
  * drives them (issue #43). Still the only place in the app that calls the deck
  * generator.
  */
-export function buildDeckWithUndriven(inputs: SolveInputs): { deck: string[]; undrivenNets: UndrivenNet[] } {
-  const { lines, diagnostics } = generateDeckWithDiagnostics(generateOptions(inputs))
+export function buildDeckWithUndriven(inputs: SolveInputs, purpose: 'op' | 'transient' = 'op'): { deck: string[]; undrivenNets: UndrivenNet[] } {
+  const { lines, diagnostics } = generateDeckWithDiagnostics({
+    ...generateOptions(inputs),
+    copperReduction: purpose === 'transient' ? 'terminals' : undefined,
+  })
   return { deck: lines, undrivenNets: undrivenNetsOf(diagnostics.undrivenIslands, inputs.circuit) }
 }
 

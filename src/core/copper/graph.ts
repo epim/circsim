@@ -2,7 +2,7 @@
 import type { Pad, TrackSegment, Vec2, Via, Zone } from '../kicad/types'
 import type { BoardModel } from '../kicad/types'
 import type { Circuit } from '../netlist/extract'
-import { dist, padWorldPos, segLengthMm, trackResistanceOhms } from './geometry'
+import { copperOutlinesOverlap, dist, padCopperOutline, padWorldPos, segLengthMm, trackResistanceOhms } from './geometry'
 
 export interface GraphContext { board: BoardModel; circuit: Circuit; opts: { copperOz: number; zoneMeshMm: number } }
 
@@ -115,6 +115,33 @@ function touchesZone(lat: Lattice, p: Vec2, reach: number): boolean {
   )
 }
 
+/** Split at every polygon crossing so even a sub-cell clearance stays open. */
+function lineInPours(a: Vec2, b: Vec2, pours: Lattice[]): boolean {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const stops = new Set([0, 1])
+  for (const pour of pours) for (const ring of [pour.outer, ...pour.holes]) {
+    for (let i = 0; i < ring.length; i++) {
+      const p = ring[i]
+      const q = ring[(i + 1) % ring.length]
+      const ex = q.x - p.x
+      const ey = q.y - p.y
+      const cross = dx * ey - dy * ex
+      if (Math.abs(cross) < 1e-12) continue
+      const u = ((p.x - a.x) * ey - (p.y - a.y) * ex) / cross
+      const v = ((p.x - a.x) * dy - (p.y - a.y) * dx) / cross
+      if (u > 0 && u < 1 && v >= 0 && v <= 1) stops.add(u)
+    }
+  }
+  const ordered = [...stops].sort((x, y) => x - y)
+  for (let i = 1; i < ordered.length; i++) {
+    if (ordered[i] - ordered[i - 1] < 1e-12) continue
+    const u = (ordered[i] + ordered[i - 1]) / 2
+    if (!pours.some(pour => inZone(pour, { x: a.x + dx * u, y: a.y + dy * u }))) return false
+  }
+  return true
+}
+
 /** Stack position of a copper layer, for ordering a via's span. */
 function copperOrder(layer: string): number {
   if (layer === 'F.Cu') return 0
@@ -172,12 +199,17 @@ export function buildRailGraph(ctx: GraphContext, netId: number): RailGraph {
   }
 
   // ── pours: one lattice per zone on this net ───────────────────────────────
+  const circuitRefs = new Set(circuit.parts.map(part => part.ref))
+  const padAnchors = board.footprints.filter(fp => circuitRefs.has(fp.ref)).flatMap(fp =>
+    fp.pads.filter(pad => pad.netId === netId && pad.type !== 'np_thru_hole').map(pad => ({
+      pad, pos: padWorldPos(fp, pad), reach: Math.max(pad.size.w, pad.size.h) / 2 + PAD_SNAP_SLACK_MM,
+    })))
   const lattices: Lattice[] = []
-  for (const zone of board.zones) {
+  for (const zone of [...board.zones, ...(board.copperGraphics?.zones ?? [])]) {
     if (zone.netId !== netId) continue
     // A multi-layer zone is one independent fill per layer.
     for (const layer of zoneLayers(board, zone)) {
-      const lat = buildLattice(zone, layer, opts.zoneMeshMm, newNode)
+      const lat = buildLattice(zone, layer, opts.zoneMeshMm, newNode, padAnchors.filter(anchor => padTouchesLayer(anchor.pad, layer)))
       if (lat) lattices.push(lat)
     }
   }
@@ -199,6 +231,23 @@ export function buildRailGraph(ctx: GraphContext, netId: number): RailGraph {
           edges.push({ a: id, b: other, ohms: sheetOhms, kind: 'pour', lengthMm: lat.h })
         }
       }
+    }
+  }
+  // Separate zone items can describe touching or overlapping pieces of one sheet.
+  // Connect nearby cell centres only when the entire link is inside their union.
+  for (let i = 0; i < lattices.length; i++) for (let j = i + 1; j < lattices.length; j++) {
+    const a = lattices[i]
+    const b = lattices[j]
+    if (a.layer !== b.layer || a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY) continue
+    for (const node of a.ids) {
+      if (node < 0) continue
+      const pos = nodePos[node]
+      const clipped = { x: Math.max(b.minX, Math.min(b.maxX, pos.x)), y: Math.max(b.minY, Math.min(b.maxY, pos.y)) }
+      const other = latticeCellAt(b, clipped, 0)
+      if (other < 0) continue
+      const lengthMm = dist(pos, nodePos[other])
+      if (lengthMm > a.h + b.h || !lineInPours(pos, nodePos[other], [a, b])) continue
+      edges.push({ a: node, b: other, ohms: Math.max(SHORT_OHMS, sheetOhms * lengthMm / Math.min(a.h, b.h)), kind: 'pour', lengthMm })
     }
   }
   const latticesOn = (layer: string): Lattice[] => lattices.filter((l) => l.layer === layer)
@@ -228,9 +277,77 @@ export function buildRailGraph(ctx: GraphContext, netId: number): RailGraph {
   // ── track segments ────────────────────────────────────────────────────────
   const railLayers = new Set<string>()
   for (const lat of lattices) railLayers.add(lat.layer)
+  const tracks = [...board.tracks, ...(board.copperGraphics?.tracks ?? [])].filter(t => t.netId === netId)
+  const vias = board.vias.filter(via => via.netId === netId)
+  for (const track of tracks) railLayers.add(track.layer)
+  for (const via of vias) for (const layer of via.layers.filter(isCopperLayer)) railLayers.add(layer)
+
+  // Track ends, via barrels and pads can touch the interior of another track.
+  // Index contact centres, then split the track at each actual contact. Creating
+  // a pad contact only after finding copper avoids inventing a route to bare pads.
+  type Contact = { pos: Vec2; reach: number; layer: string; pad?: Pad }
+  const contactHash = new Map<string, Contact[]>()
+  const CONTACT_CELL = 4
+  let maxContactReach = 0
+  const addContact = (contact: Contact): void => {
+    const key = `${Math.floor(contact.pos.x / CONTACT_CELL)},${Math.floor(contact.pos.y / CONTACT_CELL)}`
+    const bucket = contactHash.get(key)
+    if (bucket) bucket.push(contact)
+    else contactHash.set(key, [contact])
+    maxContactReach = Math.max(maxContactReach, contact.reach)
+  }
+  for (const track of tracks) for (const pos of [track.start, track.end]) {
+    addContact({ pos, reach: track.widthMm / 2, layer: track.layer })
+  }
+  for (const via of vias) {
+    const orders = via.layers.filter(isCopperLayer).map(copperOrder)
+    const lo = Math.min(...orders)
+    const hi = Math.max(...orders)
+    for (const layer of railLayers) if (copperOrder(layer) >= lo && copperOrder(layer) <= hi) {
+      addContact({ pos: via.at, reach: via.sizeMm / 2, layer })
+    }
+  }
+  for (const fp of board.footprints) if (circuitRefs.has(fp.ref)) for (const pad of fp.pads) {
+    if (pad.netId !== netId || pad.type === 'np_thru_hole') continue
+    for (const layer of railLayers) if (padTouchesLayer(pad, layer)) {
+      addContact({ pos: padWorldPos(fp, pad), reach: Math.max(pad.size.w, pad.size.h) / 2 + PAD_SNAP_SLACK_MM, layer, pad })
+    }
+  }
+  const padTrackContacts = new Map<Pad, Set<number>>()
+  const trackContacts = (track: TrackSegment): Map<number, number> => {
+    const stops = new Map<number, number>()
+    if (track.kind !== 'segment') return stops
+    const dx = track.end.x - track.start.x
+    const dy = track.end.y - track.start.y
+    const length2 = dx * dx + dy * dy
+    if (length2 === 0) return stops
+    const reach = maxContactReach + track.widthMm / 2
+    const x0 = Math.floor((Math.min(track.start.x, track.end.x) - reach) / CONTACT_CELL)
+    const x1 = Math.floor((Math.max(track.start.x, track.end.x) + reach) / CONTACT_CELL)
+    const y0 = Math.floor((Math.min(track.start.y, track.end.y) - reach) / CONTACT_CELL)
+    const y1 = Math.floor((Math.max(track.start.y, track.end.y) + reach) / CONTACT_CELL)
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+      for (const contact of contactHash.get(`${x},${y}`) ?? []) {
+        if (contact.layer !== track.layer) continue
+        const u = Math.max(0, Math.min(1, ((contact.pos.x - track.start.x) * dx + (contact.pos.y - track.start.y) * dy) / length2))
+        const pos = { x: track.start.x + dx * u, y: track.start.y + dy * u }
+        if (dist(pos, contact.pos) > contact.reach + track.widthMm / 2) continue
+        const node = nodeOf(track.layer, pos)
+        stops.set(u, node)
+        if (contact.pad) {
+          let contacts = padTrackContacts.get(contact.pad)
+          if (!contacts) padTrackContacts.set(contact.pad, contacts = new Set())
+          contacts.add(node)
+        } else {
+          const other = nodeOf(track.layer, contact.pos)
+          if (other !== node) edges.push({ a: node, b: other, ohms: SHORT_OHMS, kind: 'short', lengthMm: 0 })
+        }
+      }
+    }
+    return stops
+  }
   let hasTrackOrVia = false
-  for (const t of board.tracks) {
-    if (t.netId !== netId) continue
+  for (const t of tracks) {
     hasTrackOrVia = true
     railLayers.add(t.layer)
     const lats = latticesOn(t.layer)
@@ -240,6 +357,7 @@ export function buildRailGraph(ctx: GraphContext, netId: number): RailGraph {
     noteWidth(b, t.widthMm)
     const lengthMm = segLengthMm(t)
     if (!Number.isFinite(trackResistanceOhms(lengthMm, t.widthMm, opts.copperOz))) continue // zero width
+    const contacts = trackContacts(t)
 
     const nearPour = lats.filter(
       (l) =>
@@ -248,7 +366,7 @@ export function buildRailGraph(ctx: GraphContext, netId: number): RailGraph {
         Math.max(t.start.y, t.end.y) >= l.minY &&
         Math.min(t.start.y, t.end.y) <= l.maxY,
     )
-    if (nearPour.length === 0 || t.kind !== 'segment' || lengthMm < MIN_RUN_MM) {
+    if (t.kind !== 'segment' || lengthMm < MIN_RUN_MM) {
       if (nearPour.length > 0) {
         bondToPour(a, t.layer, t.start, t.widthMm / 2)
         bondToPour(b, t.layer, t.end, t.widthMm / 2)
@@ -273,7 +391,7 @@ export function buildRailGraph(ctx: GraphContext, netId: number): RailGraph {
     // the track's own resistance between midpoints. Bonding a cut point to every
     // cell near it (as an earlier version did) shorted neighbouring runs together
     // through shared cells and collapsed the pour under the track to one node.
-    const ts = new Set<number>([0, 1])
+    const ts = new Set<number>([0, 1, ...contacts.keys()])
     for (const l of nearPour) {
       addCrossings(ts, t.start.x, t.end.x, l.x0, l.h)
       addCrossings(ts, t.start.y, t.end.y, l.y0, l.h)
@@ -303,11 +421,19 @@ export function buildRailGraph(ctx: GraphContext, netId: number): RailGraph {
     }
     for (let k = 0; k + 1 < cuts.length; k++) {
       if ((cuts[k + 1] - cuts[k]) * lengthMm < MIN_RUN_MM) continue
-      const pm = at((cuts[k] + cuts[k + 1]) / 2)
-      const node = nodeOf(t.layer, pm)
-      noteWidth(node, t.widthMm)
-      addPiece(node, pm)
-      bondToPourCell(node, t.layer, pm, t.widthMm / 2)
+      if (nearPour.length > 0) {
+        const pm = at((cuts[k] + cuts[k + 1]) / 2)
+        const node = nodeOf(t.layer, pm)
+        noteWidth(node, t.widthMm)
+        addPiece(node, pm)
+        bondToPourCell(node, t.layer, pm, t.widthMm / 2)
+      }
+      const contact = contacts.get(cuts[k + 1])
+      if (contact !== undefined) {
+        noteWidth(contact, t.widthMm)
+        addPiece(contact, at(cuts[k + 1]))
+        bondToPourCell(contact, t.layer, at(cuts[k + 1]), t.widthMm / 2)
+      }
     }
     addPiece(b, t.end)
     bondToPourCell(a, t.layer, t.start, t.widthMm / 2)
@@ -359,6 +485,7 @@ export function buildRailGraph(ctx: GraphContext, netId: number): RailGraph {
   }
 
   const pads: RailPad[] = []
+  const padOutlines = new Map<RailPad, { pad: Pad; outline: Vec2[] }>()
   for (const part of [...circuit.parts].sort((x, y) => x.ref.localeCompare(y.ref))) {
     const fp = board.footprints.find((footprint) => footprint.ref === part.ref)
     if (!fp) continue
@@ -367,7 +494,8 @@ export function buildRailGraph(ctx: GraphContext, netId: number): RailGraph {
       const pos = padWorldPos(fp, pad)
       const reach = Math.max(pad.size.w, pad.size.h) / 2 + PAD_SNAP_SLACK_MM
       const node = newNode('(pad)', pos)
-      const contacts: number[] = []
+      const contacts: number[] = [...(padTrackContacts.get(pad) ?? [])]
+      for (const contact of contacts) edges.push({ a: node, b: contact, ohms: SHORT_OHMS, kind: 'short', lengthMm: 0 })
       const x0 = Math.floor((pos.x - reach) / CELL)
       const x1 = Math.floor((pos.x + reach) / CELL)
       const y0 = Math.floor((pos.y - reach) / CELL)
@@ -390,7 +518,21 @@ export function buildRailGraph(ctx: GraphContext, netId: number): RailGraph {
           contacts.push(target)
         }
       }
-      pads.push({ ref: part.ref, padNumber: pad.number, node, pos, contacts })
+      const railPad = { ref: part.ref, padNumber: pad.number, node, pos, contacts }
+      const outline = padCopperOutline(pad, pos)
+      for (const other of pads) {
+        const geometry = padOutlines.get(other)!
+        if (!pad.layers.some(layer => isCopperLayer(layer) &&
+          (layer === '*.Cu' || layer === '*' || padTouchesLayer(geometry.pad, layer)))) continue
+        const otherReach = Math.hypot(geometry.pad.size.w, geometry.pad.size.h) / 2
+        if (dist(pos, other.pos) > Math.hypot(pad.size.w, pad.size.h) / 2 + otherReach) continue
+        if (!copperOutlinesOverlap(outline, geometry.outline)) continue
+        edges.push({ a: node, b: other.node, ohms: SHORT_OHMS, kind: 'short', lengthMm: 0 })
+        contacts.push(other.node)
+        other.contacts.push(node)
+      }
+      pads.push(railPad)
+      padOutlines.set(railPad, { pad, outline })
     }
   }
 
@@ -421,7 +563,7 @@ function zoneLayers(board: GraphContext['board'], zone: Zone): string[] {
     } else if (l === '*.Cu') {
       out.add('F.Cu')
       out.add('B.Cu')
-      for (const t of board.tracks) out.add(t.layer)
+      for (const t of [...board.tracks, ...(board.copperGraphics?.tracks ?? [])]) out.add(t.layer)
       for (const v of board.vias) for (const vl of v.layers) if (isCopperLayer(vl) && vl !== '*.Cu') out.add(vl)
     } else if (isCopperLayer(l)) {
       out.add(l)
@@ -436,6 +578,7 @@ function buildLattice(
   layer: string,
   targetPitchMm: number,
   newNode: (layer: string, p: Vec2) => number,
+  anchors: { pos: Vec2; reach: number }[],
 ): Lattice | null {
   const outer = zone.polygon[0]
   if (!outer || outer.length < 3) return null
@@ -454,9 +597,10 @@ function buildLattice(
   if (!(w > 0) || !(ht > 0)) return null
   // At least three cells across the narrow side, coarsened to the cell budget.
   let h = Math.min(targetPitchMm > 0 ? targetPitchMm : 2, Math.min(w, ht) / 3)
-  h = Math.max(h, Math.sqrt((w * ht) / MAX_POUR_CELLS))
-  const nx = Math.max(1, Math.ceil(w / h))
-  const ny = Math.max(1, Math.ceil(ht / h))
+  const minimumPitch = Math.sqrt((w * ht) / MAX_POUR_CELLS)
+  h = Math.max(h, minimumPitch)
+  let nx = Math.max(1, Math.ceil(w / h))
+  let ny = Math.max(1, Math.ceil(ht / h))
   const lat: Lattice = {
     layer,
     h,
@@ -472,14 +616,24 @@ function buildLattice(
     maxX,
     maxY,
   }
-  let any = false
-  for (let j = 0; j < ny; j++) {
-    for (let i = 0; i < nx; i++) {
-      const c = { x: minX + (i + 0.5) * h, y: minY + (j + 0.5) * h }
-      if (!inZone(lat, c)) continue
-      lat.ids[j * nx + i] = newNode(layer, c)
-      any = true
+  // Refine only when an actual pad lies in copper but the coarse grid omitted
+  // its local feature. Build the occupancy mask first to avoid orphan nodes.
+  for (;;) {
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      if (inZone(lat, { x: minX + (i + 0.5) * h, y: minY + (j + 0.5) * h })) lat.ids[j * nx + i] = j * nx + i
     }
+    const missesPad = anchors.some(anchor => inZone(lat, anchor.pos) && latticeTargets(lat, anchor.pos, anchor.reach).length === 0)
+    if (!missesPad || h <= minimumPitch * (1 + 1e-12)) break
+    h = Math.max(minimumPitch, h / 2)
+    nx = Math.max(1, Math.ceil(w / h))
+    ny = Math.max(1, Math.ceil(ht / h))
+    Object.assign(lat, { h, nx, ny, ids: new Int32Array(nx * ny).fill(-1) })
+  }
+  let any = false
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    if (lat.ids[j * nx + i] < 0) continue
+    lat.ids[j * nx + i] = newNode(layer, { x: minX + (i + 0.5) * h, y: minY + (j + 0.5) * h })
+    any = true
   }
   return any ? lat : null
 }

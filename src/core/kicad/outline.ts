@@ -103,7 +103,7 @@ function circumcenter(a: Vec2, b: Vec2, c: Vec2): Vec2 | null {
  *
  * Returns ≥ STEPS_PER_90_DEG points per 90° of arc.
  */
-function tessellateArc(
+export function tessellateArc(
   start: Vec2,
   mid: Vec2,
   end: Vec2,

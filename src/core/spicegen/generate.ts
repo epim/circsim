@@ -1,4 +1,5 @@
 import { emitCopperCards, padSenseName, type CopperNetwork } from '../copper'
+import { reduceCopperNetwork } from '../copper/kron'
 /**
  * core/spicegen/generate.ts
  *
@@ -30,8 +31,10 @@ import { clampPotOhms, potResistorNames } from './instruments'
 // ─── Public API types ─────────────────────────────────────────────────────────
 
 export interface GenerateOptions {
-  /** Opt-in physical power/ground copper. Absent preserves the ideal deck. */
+  /** Opt-in physical copper. Absent preserves the ideal deck. */
   copperNetwork?: CopperNetwork
+  /** Retain only pad terminals for a transient; the operating point uses the full mesh. */
+  copperReduction?: 'terminals'
   /** Circuit (from core/netlist/extract) */
   circuit: Circuit
   /** Resolutions for every part (from core/models/resolve) */
@@ -109,7 +112,7 @@ interface SubcktDef {
 function copperSubcktLines(def: SubcktDef): string[] {
   if (!def.terminals.includes('gnd')) {
     const globalReturn = def.lines.slice(1).some((line) =>
-      !line.trimStart().startsWith('*') && !/^\s*\.ends\b/i.test(line) && /(^|[\s(,])gnd(?=$|[\s),])/i.test(line))
+      /^\s*[a-z]/i.test(line) && /(^|[\s(,])gnd(?=$|[\s),])/i.test(line))
     return globalReturn ? [
       `* copper warning: ${def.name} uses global gnd without a return port; current bypasses physical ground copper`,
       ...def.lines,
@@ -1889,10 +1892,16 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
   const partsByRef = new Map<string, Part>()
   for (const p of circuit.parts) if (!partsByRef.has(p.ref)) partsByRef.set(p.ref, p)
   if (opts.copperNetwork) {
-    lines.push('* physical power and ground copper')
-    lines.push(...emitCopperCards(opts.copperNetwork))
-    for (const edge of opts.copperNetwork.edges) {
-      islandNodes.link([opts.copperNetwork.nodes[edge.a].name, opts.copperNetwork.nodes[edge.b].name])
+    lines.push('* physical copper networks')
+    const emitted = opts.copperReduction === 'terminals' ? reduceCopperNetwork(opts.copperNetwork) : opts.copperNetwork
+    if (opts.copperReduction === 'terminals') {
+      lines.push('* copper mesh Kron-reduced onto pad terminals')
+      lines.push(...emitted.edges.map((edge, i) => `r_copper_${i + 1} ${emitted.nodes[edge.a].name} ${emitted.nodes[edge.b].name} ${edge.ohms.toPrecision(12)}`))
+    } else {
+      lines.push(...emitCopperCards(opts.copperNetwork))
+    }
+    for (const edge of emitted.edges) {
+      islandNodes.link([emitted.nodes[edge.a].name, emitted.nodes[edge.b].name])
     }
   }
 
