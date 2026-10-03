@@ -15,7 +15,15 @@ export function copperResult(inputs: SolveInputs, op: OpResult, deck: readonly s
   const netById = new Map(inputs.circuit.nets.map((n) => [n.id, n]))
   for (const part of inputs.circuit.parts) {
     const res = resolutionByRef.get(part.ref)
-    if (!res?.model || res.model.kind === 'stub') continue
+    if (!res?.model) {
+      // Omitted parts have no deck element and cannot carry modeled current.
+      if (solved) {
+        padCurrents[part.ref] = Object.fromEntries([...part.padNet.keys()].map((p) => [p, 0]))
+        partPower[part.ref] = 0
+      }
+      continue
+    }
+    if (res.model.kind === 'stub') continue
     const volts: Record<string, number> = {}
     const currents: Record<string, number> = {}
     const modeledPads = res.model.kind === 'primitive' ? [...part.padNet.keys()] : Object.keys(res.model.pinMap)

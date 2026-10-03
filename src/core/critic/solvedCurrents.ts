@@ -7,7 +7,8 @@
  * or an IC. Before this module the critic got LED sense currents only, so
  * every other load on a rail was invisible to the copper checks.
  *
- * What is derived, in order:
+ * Copper-aware solves supply measured terminal currents directly. For ideal
+ * solves, the following pass derives currents in order:
  *
  *   1. Measured parts, exactly: a resistor's current is (V1 - V2) / R from the
  *      solved node voltages, a capacitor carries nothing at DC, and an LED's
@@ -32,10 +33,10 @@
  * not-assessed line. Parts the deck does not model (open stubs, documented-open
  * parts, unresolved parts) carry no current by construction.
  *
- * This is the pre-copper-aware solve: the deck still treats each net as one
- * ideal node, so a current here is the current that net would carry if its
- * copper were perfect. W2.1 (#20) puts the copper into the deck; this module is
- * the seam the critic reads until then.
+ * The critic reads both modes through this seam. Copper-aware currents come
+ * from the shared physical solve; ideal currents describe perfect net copper.
+ * Missing meters remain unresolved. Omitted model-less parts have no circuit
+ * element, so their modeled current and power are exactly zero.
  *
  * Pure core; deterministic.
  */
@@ -95,7 +96,7 @@ export function deriveSolvedCurrents(
   if (solve.copper) {
     const padCurrents = solve.copper.padCurrents
     const parts = new Map(inputs.circuit.parts.map((p) => [p.ref, p]))
-    const modeled = inputs.resolutions.filter((r) => r.status !== 'documented-open' && r.model?.kind !== 'stub')
+    const modeled = inputs.resolutions.filter((r) => r.status !== 'documented-open' && r.model !== undefined && r.model.kind !== 'stub')
     return {
       padCurrents,
       partCurrents: Object.fromEntries(Object.entries(padCurrents).map(([ref, pads]) => [ref, Math.max(0, ...Object.values(pads).map(Math.abs))])),

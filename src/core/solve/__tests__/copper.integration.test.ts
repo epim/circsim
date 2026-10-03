@@ -78,14 +78,22 @@ describe.skipIf(!ffi.ngspiceResourcesAvailable())('copper-aware operating point'
     f.board.footprints.push({ ...fp, ref: 'R2', value: '10k', pads: fp.pads.map((p) => ({
       ...p, netId: p.number === '1' ? 3 : 2,
     })) })
+    f.board.footprints.push({ ...fp, ref: 'TP1', value: 'TestPoint', libId: 'TestPoint:TestPoint_Pad', pads: [{ ...fp.pads[0] }] })
     const circuit = extract(f.board, { groundNetId: 2 })
-    const inputs = buildSolveInputs(f.board, circuit, resolveAll(circuit), [
+    const resolutions = resolveAll(circuit)
+    expect(resolutions.find((r) => r.ref === 'TP1')!.model).toBeUndefined()
+    const inputs = buildSolveInputs(f.board, circuit, resolutions, [
       { kind: 'dc-supply', id: '1', netId: 1, volts: 5, seriesOhms: 0.001 },
     ], 2, { copperAware: true })
     const result = await withEngine((engine) => runSolvePlan(inputs, engine))
     expect(result.copper!.partPower.R2).toBe(0)
     const currents = deriveSolvedCurrents(inputs, result)
     expect(currents.unresolvedRefs).not.toContain('R2')
+    expect(currents.partCurrents.TP1).toBe(0)
+    expect(currents.padCurrents.TP1['1']).toBe(0)
+    expect(currents.partPower!.TP1).toBe(0)
+    expect(currents.unresolvedRefs).not.toContain('TP1')
+    expect(currents.unknownPowerRefs).not.toContain('TP1')
     const report = runCritic(f.board, circuit, { nodeVoltages: result.op.values, copper: result.copper, ...currents })
     for (const check of ['ir-drop', 'ampacity', 'thermal']) {
       expect(report.skipped.some((s) => s.check === check)).toBe(false)
@@ -188,8 +196,21 @@ describe.skipIf(!ffi.ngspiceResourcesAvailable())('copper-aware operating point'
       const reason = report.skipped.find((s) => s.check === check)?.reason
       expect(reason).toMatch(/supply.entry.*J1.*1.*no modelled copper/i)
       expect(reason).not.toContain('no modelled copper touches any pad')
+      expect(reason!.match(/J1\.1/g)).toHaveLength(1)
     }
   }, 90_000)
+
+  it('warns when a subcircuit uses global gnd without exposing a return port', () => {
+    const f = resistorBoard()
+    f.resolutions = f.resolutions.map((r) => r.ref === 'R1' ? {
+      ...r, model: { kind: 'subckt' as const, libFile: 'global.lib', subcktName: 'GLOBAL_LOAD', pinMap: { '1': 'vcc' } },
+    } : r)
+    const opts = { modelTexts: { 'global.lib': '.subckt GLOBAL_LOAD vcc\nrload vcc gnd 50\n.ends GLOBAL_LOAD' } }
+    const physical = buildSolveInputs(f.board, f.circuit, f.resolutions, [], 2, { ...opts, copperAware: true })
+    expect(buildDeck(physical).join('\n')).toContain('copper warning: global_load uses global gnd without a return port')
+    const ideal = buildSolveInputs(f.board, f.circuit, f.resolutions, [], 2, opts)
+    expect(buildDeck(ideal).join('\n')).not.toContain('copper warning:')
+  })
 
   it.each(['CD40106', 'CD4011'])('%s outputs and supply return follow their local physical ground', async (templateId) => {
     const f = resistorBoard()

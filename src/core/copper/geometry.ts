@@ -2,7 +2,7 @@
  * core/copper/geometry.ts
  *
  * Shared board geometry for physical copper and the Board Critic. Board-coordinate (KiCad mm)
- * math only , distances, track lengths/resistance, segment clearances, and
+ * math only: distances, track lengths/resistance, segment clearances, and
  * point-in-outline. No electron/react/three imports.
  *
  * Spec: docs/superpowers/specs/2026-06-19-circsim-board-critic-design.md §4
@@ -61,7 +61,7 @@ export function padWorldPos(fp: Footprint, pad: Pad): Vec2 {
   return { x: fp.at.x + o.x, y: fp.at.y + o.y }
 }
 
-/** Length (mm) of a track , straight chord for segments, arc length for arcs. */
+/** Length (mm) of a track: straight chord for segments, arc length for arcs. */
 export function segLengthMm(seg: TrackSegment): number {
   if (seg.kind === 'segment') return dist(seg.start, seg.end)
   return arcLengthMm(seg)

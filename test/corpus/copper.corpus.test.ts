@@ -45,7 +45,7 @@ describe.skipIf(!ngspiceResourcesAvailable())('pour-only fixture shared copper o
       const sheetOhms = 1.68e-8 / 34.8e-6
       const neckDrop = sheetOhms * (8 / 4 * 60 + 8 / 4 * 40)
       expect(railDrop).toBeGreaterThan(neckDrop * 0.95)
-      expect(railDrop).toBeLessThan(neckDrop * 2)
+      expect(railDrop).toBeLessThan(neckDrop * 1.7)
       expect(groundRise).toBeGreaterThan(0)
       expect(finding.metrics!.dropV).toBeCloseTo(railDrop, 8)
       expect(finding.metrics!.groundShiftV).toBeCloseTo(groundRise, 8)

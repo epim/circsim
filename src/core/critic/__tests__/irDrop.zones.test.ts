@@ -214,7 +214,7 @@ describe.skipIf(!haveNativeCopper)('not assessed instead of silence (issue #9)',
     const report = (await runCritic(board, circuit, opFor(circuit, { U1: 5 })))
     for (const check of ['ir-drop', 'ampacity'] as const) {
       expect(report.ranBy, check).not.toContain(check)
-      expect(report.skipped.find((s) => s.check === check)?.reason, check).toMatch(/VCC: no modelled copper touches pads J1\.1, U1\.8/)
+      expect(report.skipped.find((s) => s.check === check)?.reason, check).toMatch(/VCC: no modelled copper touches pads U1\.8/)
       expect(report.skipped.find((s) => s.check === check)?.reason, check).toContain('supply-entry pad J1.1 has no modelled copper contact')
     }
   })

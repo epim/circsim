@@ -9,10 +9,10 @@
  *   - NAME-BASED: reuse suggestSupplies/suggestGround (VCC, +5V, GND, VSS, …),
  *     including hierarchical forms like "/Power/+5V".
  *   - INFERRED: a net that ≥2 distinct bypass caps each bridge to a ground net
- *     is treated as a power rail , this catches real boards whose rails carry
+ *     is treated as a power rail. This catches real boards whose rails carry
  *     non-standard names (e.g. "/VBUS_C") but are clearly decoupled like a rail.
  *
- * Pure core: no electron/react/three imports. Deterministic , nets and parts
+ * Pure core: no electron/react/three imports. Deterministic: nets and parts
  * are iterated in sorted id / ref order so results never depend on Map order.
  */
 

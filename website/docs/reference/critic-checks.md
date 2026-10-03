@@ -18,8 +18,8 @@ Every finding is a **risk to check, not a verdict**, and every one carries an *"
 
 Before you energize, the three simulation-informed checks show as *"needs simulation"* in the panel.
 
-::: warning Two fixed assumptions worth knowing up front
-- **Copper weight is assumed to be 1 oz (35 µm) on every layer.** This is a fixed default: it is **not** read from your board's stackup and can't currently be changed. The ampacity and IR-drop numbers are computed against 1 oz. If your board is heavier (2 oz), those checks are conservative (they'll over-warn); if it's lighter (0.5 oz), they're optimistic. Trust them less.
+::: warning Copper and design-rule assumptions
+- **Copper weight defaults to 1 oz (35 µm) on every layer.** It is not read from your board's stackup. The physical solve options can change it, and ampacity and IR-drop use the same network weight. Check that assumption against your intended fabrication stackup.
 - **Design-rule numbers are circsim's defaults, not your project's.** The clearance minimum (0.2 mm) is a generic default, not your KiCad net-class rules. Treat the Critic as a second opinion, not a substitute for your CAD tool's own DRC.
 :::
 
@@ -75,7 +75,7 @@ Rates **each track against the current it actually carries**. The check shares t
 
 - **Undersized trace** *(warn, or error if current exceeds ~1.5× the rated capacity)*: narrow copper carrying more than it's rated for runs hot and can fuse. *Suggestion: widen the trace or add copper.*
 
-**Assumes:** 1 oz external copper, ΔT 10 °C, using the IPC-2221 charts method (the classic derating standard, coarser than the newer IPC-2152, and it doesn't distinguish inner from outer layers, so an inner-layer "pass" is optimistic). The supply entry is taken from your bench lead where one is attached, else guessed (see IR-drop). Copper pours are not rated: a pour is a sheet, and its current density is an IR-drop question.
+**Assumes:** the physical network's copper weight (default 1 oz), ΔT 10 °C, using the IPC-2221 external-layer charts method (the classic derating standard, coarser than the newer IPC-2152, and it doesn't distinguish inner from outer layers, so an inner-layer "pass" is optimistic). The supply entry is taken from your bench lead where one is attached, else guessed (see IR-drop). Copper pours are not rated: a pour is a sheet, and its current density is an IR-drop question.
 
 **Where the currents come from.** The copper-aware deck measures every resolved model terminal with a series 0 V meter. Pad voltages and segment currents come from the same ngspice operating point as the components, including the ground return. The critic uses the copper weight and mesh pitch of that solve. Signal nets retain ideal connectivity.
 
@@ -97,7 +97,7 @@ Reads physical pad voltages and segment currents from the copper-aware ngspice o
 - **Rail sags** *(warn / error)*: copper resistance drops voltage between the supply entry and the load; sagging rails brown-out ICs and shift analog references. *Suggestion: for a path through a pour, widen its narrowest section, stitch it to a second layer or move the load closer to the entry; for a track path, widen or shorten the trace, add a copper pour or a second feed, or move the load.*
 - **Ground return rises or falls** *(warn / error)*: the same, for the ground net: it rises under a positive rail's loads and falls under a negative rail's.
 
-**Assumes:** 1 oz copper (a fixed default, not read from your stackup, see the callout above); the zone *outline* stands in for the fill, so thermal-relief spokes, clearance islands around other nets' pads and keepouts are not modelled and a pour reads slightly better here than KiCad's fill will be; a neck narrower than the mesh pitch can be lost (the loads behind it are then reported as not reached); a track that ends on the middle of another track's body is not treated as joined; the supply entry (your lead, or a guess when none is recorded); currents as described under Ampacity.
+**Assumes:** the physical network's copper weight (default 1 oz, not read from your stackup); the zone *outline* stands in for the fill, so thermal-relief spokes, clearance islands around other nets' pads and keepouts are not modelled and a pour reads slightly better here than KiCad's fill will be; a neck narrower than the mesh pitch can be lost (the loads behind it are then reported as not reached); a track that ends on the middle of another track's body is not treated as joined; the supply entry (your lead, or a guess when none is recorded); currents as described under Ampacity.
 
 **Not assessed.** An ideal-net operating point cannot assess physical sag. With no branch currents in the operating point the check is listed as *not assessed*. Parts whose current the solve could not resolve, and pads the modelled copper does not connect to the supply entry, are named in the check's not-assessed line, and so is a rail that carries current but could not be solved at all, or whose only current feeds it; none of them is silently counted as zero or dropped.
 
@@ -112,7 +112,7 @@ A **first-order, relative** heat-spread proxy, not absolute temperature. It rela
 **Assumes:** a first-order 2D heat-spread proxy; relative units, not absolute °C.
 
 ::: warning Thermal needs complete solved terminal data
-Power is derived from solved terminal voltages and signed currents: resistor dissipation agrees with I squared R; a two-terminal diode or LED uses its voltage drop times current; an IC uses the signed sum of terminal V times I, subtracting power delivered through its outputs. Copper-aware solves meter each terminal of a model actually emitted into the deck. Ideal solves can supply power when their currents are unambiguous. Unresolved or unpowered parts, unavailable digital templates, and skipped incomplete primitive cards have unknown power and are listed as not assessed. A board field `PowerRating` such as `0.25W` enables an error when solved dissipation exceeds that explicit rating; package ratings are not guessed. For example, a 50 ohm resistor at 5 V dissipates 0.5 W and exceeds a 0.25 W rating. Read thermal placement findings strictly as a relative concern, never a temperature prediction.
+Power is derived from solved terminal voltages and signed currents: resistor dissipation agrees with I squared R; a two-terminal diode or LED uses its voltage drop times current; an IC uses the signed sum of terminal V times I, subtracting power delivered through its outputs. Copper-aware solves meter each terminal of a model actually emitted into the deck. Ideal solves can supply power when their currents are unambiguous. A model-less part has no circuit element and therefore zero modeled current and power; that is not a measurement of its real behavior. Parts with missing model meters, physically unpowered parts, unavailable digital templates, and skipped incomplete primitive cards have unknown power and are listed as not assessed. A board field `PowerRating` such as `0.25W` enables an error when solved dissipation exceeds that explicit rating; package ratings are not guessed. For example, a 50 ohm resistor at 5 V dissipates 0.5 W and exceeds a 0.25 W rating. Read thermal placement findings strictly as a relative concern, never a temperature prediction.
 :::
 
 ## Severity summary

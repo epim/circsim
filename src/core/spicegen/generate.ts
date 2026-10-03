@@ -107,7 +107,14 @@ interface SubcktDef {
 
 /** ngspice treats a literal gnd node as global 0, even in a subcircuit port. */
 function copperSubcktLines(def: SubcktDef): string[] {
-  if (!def.terminals.includes('gnd')) return def.lines
+  if (!def.terminals.includes('gnd')) {
+    const globalReturn = def.lines.slice(1).some((line) =>
+      !line.trimStart().startsWith('*') && !/^\s*\.ends\b/i.test(line) && /(^|[\s(,])gnd(?=$|[\s),])/i.test(line))
+    return globalReturn ? [
+      `* copper warning: ${def.name} uses global gnd without a return port; current bypasses physical ground copper`,
+      ...def.lines,
+    ] : def.lines
+  }
   let localReturn = 'circsim_return'
   const text = def.lines.join('\n').toLowerCase()
   while (text.includes(localReturn)) localReturn += '_'

@@ -7,9 +7,9 @@ The [Board Critic](../concepts/board-critic) is circsim's read-only, pre-fabrica
 You don't press a "run critic" button. The Critic audits automatically:
 
 - **When you open a board**: the static checks run immediately: floating/dangling nets, copper clearance, decoupling proximity, and loop area.
-- **After each [operating-point solve](./energize)**: the simulation-informed checks run against the real currents: ampacity and IR-drop (thermal is not active in this version: the panel lists it as "not assessed" because circsim doesn't compute per-part power yet).
+- **After each [operating-point solve](./energize)**: thermal can run from solved terminal power. The bench currently solves ideal nets, so ampacity and IR-drop remain not assessed. They require a physical copper solve, supported by the solve API with `copperAware: true`; bench and CLI controls are still being added.
 
-So the full flow is: open the board, glance at the static findings, then **Energize** to unlock the current-dependent ones.
+Open the board for static findings, then **Energize** to add the available thermal assessment. The panel names checks and parts it could not assess.
 
 ## Read the panel
 
@@ -49,7 +49,7 @@ An empty panel reads *"No risks flagged. Findings are checks, not verdicts."* Th
 
 ## What it won't catch
 
-The Critic's checks are physical-layout heuristics, not a full DRC or signal-integrity analysis. It doesn't model the layer stack, trace parasitics in the simulation, crosstalk, or EM. And the thermal check is a *relative* proxy, not a temperature. Read the [checks reference](../reference/critic-checks) for exactly what each check does and assumes, and [fidelity](../concepts/fidelity) for the broader limits.
+The Critic's checks are physical-layout heuristics, not a full DRC or signal-integrity analysis. The solve API can include power and ground copper resistance, but it does not extract inductance or capacitance from the layout or model crosstalk or EM. The thermal check is a *relative* proxy, not a temperature. Read the [checks reference](../reference/critic-checks) for exactly what each check does and assumes, and [fidelity](../concepts/fidelity) for the broader limits.
 
 ## Related
 

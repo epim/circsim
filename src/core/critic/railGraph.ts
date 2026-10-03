@@ -104,7 +104,10 @@ export function railGapNotes(ctx: CriticContext, netId: number, isGround: boolea
   const notes: string[] = []
   const native = ctx.opResult?.copper
   const unreached = native?.unreachedPads.filter((p) => p.netId === netId) ?? []
-  const bare = unreached.filter((p) => !p.hasCopper)
+  // The entry-specific gap already names a bare source pad. Retain its name
+  // in geometry-only failure notes, where no entry-specific gap is available.
+  const entryNamed = gap?.startsWith('supply-entry pad')
+  const bare = unreached.filter((p) => !p.hasCopper && !(p.isSource && entryNamed))
   const disconnected = unreached.filter((p) => p.hasCopper && !p.connectedToSource)
   const names = (pads: typeof unreached): string => pads.map((p) => `${p.ref}.${p.padNumber}`).join(', ')
   if (bare.length > 0) notes.push(`${name}: no modelled copper touches pads ${names(bare)}`)
