@@ -12,7 +12,7 @@ describe.skipIf(!ngspiceResourcesAvailable())('bandwidth-derived native step con
       await host.start()
       // A 1 percent base-resistor asymmetry selects the astable mode instead
       // of relying on numerical startup noise in the perfectly symmetric deck.
-      // Claude approved this deterministic variant in R2's fixture follow-up.
+      // Fixture choice follows #168 and #25 issuecomment-5972171312.
       await host.loadCircuit([
         '* discrete astable', 'v1 vcc 0 5', 'rc1 vcc c1 1k', 'rc2 vcc c2 1k',
         'rb1 vcc b1 47k', 'rb2 vcc b2 47.5k', 'cx1 c1 b2 100n', 'cx2 c2 b1 100n',
@@ -47,8 +47,8 @@ describe.skipIf(!ngspiceResourcesAvailable())('bandwidth-derived native step con
       const actual = period(bench.time, bench.vectors.c1)
       console.log(`[step-control] BJT astable: 1 us period=${reference}s, bench period=${actual}s`)
       // Recognition prevents the former flat line, but this nonlinear deck's
-      // period is not calibrated by RC/10. Claude explicitly deferred that
-      // fidelity issue; the documentation requires a 1 us comparison.
+      // period is not calibrated by RC/10. Period fidelity is tracked in #168;
+      // the #25 ruling (issuecomment-5972171312) requires a 1 us comparison.
       for (let i = 1; i < bench.time.length; i++) {
         expect(bench.time[i] - bench.time[i - 1]).toBeLessThanOrEqual(480e-6 * 1.00001)
       }
