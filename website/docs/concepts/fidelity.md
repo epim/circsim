@@ -57,12 +57,18 @@ The network and solve result expose pads without copper contacts or a path from 
 
 For a transient, circsim eliminates internal resistor nodes with Kron reduction and keeps the pad terminals. This preserves the mesh's terminal resistance while reducing what ngspice solves at each step. It does not add inductance, capacitance or a more detailed copper geometry model. Full and reduced native operating points agree within 0.1 µV at every tested pad and 1 µA on reconstructed segment currents on the pour-only fixture and a lantern-shaped synthetic board. The connectivity gate checks 950 multi-pad nets across 24 corpus, sample and synthetic boards. It skips and counts 546 single-pad nets, which need no route between terminals; 12 pad gaps on tiny-tapeout and the dialect probes have independent KiCad DRC evidence in the corpus baseline.
 
-Measured on Windows with native ngspice, one fresh process per board and mode, three warmups then 15 runs. Each run simulates 0.1 s with a requested 100 µs step. The medians include solving and reading saved vectors; cost per saved time point is not the cost of an internal adaptive solver step. These measurements exclude deck construction, reduction setup and live rendering.
+The earlier fixed-step measurements below used Windows native ngspice, one fresh process per board and mode, three warmups then 15 runs. Each run simulated 0.1 s with a requested 100 µs step. The medians include solving and reading saved vectors; cost per saved time point is not the cost of an internal adaptive solver step. These measurements exclude deck construction, reduction setup and live rendering.
 
 - **Bundled 555:** ideal 23.29 ms, full copper 26.48 ms, reduced copper 26.32 ms. Copper nodes: 27 full, 20 reduced.
 - **Lantern-shaped synthetic:** ideal 4.99 ms, full copper 4,241.13 ms, reduced copper 669.04 ms. Copper nodes: 1,733 full, 90 reduced.
 
-Per saved time point, the medians are 22.92 / 26.19 / 26.03 µs for the 555 and 4.94 / 4,194.98 / 661.76 µs for the lantern (ideal / full / reduced). The lantern has 1,011 saved time points in every mode; the 555 has 1,016 ideal and 1,011 physical. Reduction is about 6.3 times faster than the full lantern mesh in this measurement, but physical solving remains slower than ideal nets and below real time here. The 555 supply and return leads were placed directly on U1 pads 8 and 1. That sample is unrouted (#160), and its all-net physical network reports 16 pad gaps, so its physical run is not a validation of the ideal oscillator waveform. These are observations, not timing guarantees.
+Per saved time point, the medians are 22.92 / 26.19 / 26.03 µs for the 555 and 4.94 / 4,194.98 / 661.76 µs for the lantern (ideal / full / reduced). The lantern has 1,011 saved time points in every mode; the 555 has 1,016 ideal and 1,011 physical. Reduction was about 6.3 times faster than the full lantern mesh, with the reduced physical solve about 7 times slower than real time and about 130 times the ideal deck's cost at that fixed step.
+
+The live bench now uses a 5 ms ceiling in quiet regions. A function generator lowers that ceiling to at most 1/200 of its period, and ngspice inserts source breakpoints and refines further for switching and circuit dynamics. Native regression tests preserve nanosecond pulse edges, fast sine resolution and the ideal 555's three oscillator edges relative to a 100 µs run. Finer explicit analysis steps remain finer; this ceiling does not guarantee a particular signal bandwidth for arbitrary imported behavioral models.
+
+Live measurements include sample delivery and window restarts: a one-second warmup followed by three seconds at pace max. On Windows, the routed lantern advanced about 0.02x with the full mesh and 0.15x with the reduced mesh at 100 µs. At the 5 ms quiet ceiling it advanced about 1.0x full and 8.4x reduced, with unchanged copper counts (1,733 nodes / 3,368 resistors full; 90 / 1,980 reduced). The original unrouted ideal lantern remains a separate model-cost control and reached about 60x; the bundled physical 555 reached about 173x. The realtime tests require at least 1x for the reduced routed lantern and bundled physical 555 on every CI platform, and print factors plus native Newton-iteration and accepted-timepoint counts in the logs. Larger or faster circuits can still fall below real time.
+
+The 555 supply and return leads were placed directly on U1 pads 8 and 1. That sample is unrouted (#160), and its all-net physical network reports 16 pad gaps, so its physical run is not a validation of the ideal oscillator waveform. These are observations, not timing guarantees.
 
 circsim still does not model:
 
@@ -82,6 +88,8 @@ If circsim reports it "couldn't find a stable solution," that usually means the 
 - Component values span a huge range (a 1 GΩ resistor next to a 1 mΩ one).
 
 Assign ground to the right net, stub out unresolved parts, and check for floating nodes. See [reading the warnings](../guides/warnings).
+
+A rejected circuit cannot be simulated. Loading a valid circuit after a failed load or a fallback operating point starts with fresh solver state, so the earlier attempt cannot poison the next circuit. The convergence caveats still apply to the failed or fallback result itself.
 
 ## When to trust the results
 

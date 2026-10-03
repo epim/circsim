@@ -28,6 +28,7 @@
 import { DeckRejectedError, sanitizeDeck } from '../core/spicegen/sanitize'
 import { HaltCoordinator } from './haltCoordinator'
 import { NgspiceFfiEngine, ngspiceResourcesAvailable } from './ngspiceFfi'
+import { transientMaxStep } from '../core/spicegen/transientStep'
 import type { EngineEvent, SpiceEngine } from './engine'
 import {
   isScaleVectorName,
@@ -212,6 +213,8 @@ export function fitTranStop(vectorCount: number, tstep: number, tstop: number, b
 
 export class SimHost {
   private engine: SpiceEngine
+  private closing = false
+  private transientGeneration = 0
   private readonly emit: (ev: SimEvent, transfer?: ArrayBuffer[]) => void
   private readonly disableWatchdog: boolean
   private readonly disableTimers: boolean
@@ -238,6 +241,8 @@ export class SimHost {
 
   private currentDeck: string[] = []
   private deckLoaded = false
+  private engineNeedsReset = false
+  private failedLoad: string | null = null
 
   /**
    * True while the op retry ladder is running. Suppresses live convergence
@@ -437,6 +442,7 @@ export class SimHost {
         this.detectConvergence(ev.text)
         break
       case 'controlledExit':
+        this.engineNeedsReset = true
         this.emit({
           type: 'log',
           level: 'error',
@@ -507,6 +513,7 @@ export class SimHost {
    * Safe on a never-started host: command() throws, which is swallowed.
    */
   async dispose(): Promise<void> {
+    this.closing = true
     this.stopWatchdog()
     this.stopPeriodicTimers()
     if (this.alterTimer) {
@@ -515,6 +522,9 @@ export class SimHost {
     }
     this.tran = null
     try {
+      // A queued window restart can still be awaiting its native command.
+      // Drain the command queue as well as the halt/resume chain before unload.
+      await this.whenIdle()
       // Let the halt / resume commands already ordered finish first: a bg_halt
       // issued here while one of them is mid-flight (a bg_resume still starting
       // its thread) is the teardown crash seen under load (ngspice dies in the
@@ -545,6 +555,7 @@ export class SimHost {
 
   /** Handle a SimCommand from the renderer. Returns when the command is enqueued. */
   handleCommand(cmd: SimCommand): void {
+    if (this.closing) return
     switch (cmd.type) {
       case 'loadCircuit':
         this.enqueueLoadCircuit(cmd.deckLines)
@@ -630,6 +641,10 @@ export class SimHost {
    * a structured convergenceFailure.
    */
   private async doRunOp(): Promise<Record<string, number>> {
+    if (this.failedLoad !== null) {
+      this.emit({ type: 'opResult', values: {}, method: 'failed' })
+      return {}
+    }
     const ladder = [
       { cmd: 'op', label: 'op' },
       { cmd: 'setplot new\nop', label: 'op (retry)', options: 'set gminsteps=10' },
@@ -660,7 +675,9 @@ export class SimHost {
           // Name the rung that actually produced the solution so the renderer
           // can caveat fallback solves (F1 — a fallback op frequently reports
           // 0.000 V on nets it could not really resolve).
-          this.emit({ type: 'opResult', values: lastValues, method: this.opMethodForRung(rung) })
+          const method = this.opMethodForRung(rung)
+          if (method !== 'direct') this.engineNeedsReset = true
+          this.emit({ type: 'opResult', values: lastValues, method })
           return lastValues
         }
       }
@@ -674,6 +691,7 @@ export class SimHost {
         'stepping. Common causes: missing DC path to ground, a floating node, or ' +
         'an unstable feedback loop.'
     })
+    this.engineNeedsReset = true
     this.emit({ type: 'opResult', values: lastValues, method: 'failed' })
     return lastValues
   }
@@ -717,12 +735,21 @@ export class SimHost {
     wallNow: number,
     pace: number | 'max' = this.paceSetting
   ): Promise<void> {
+    if (this.closing) return
+    if (this.failedLoad !== null) {
+      this.emit({ type: 'convergenceFailure', detail: `Circuit was not loaded: ${this.failedLoad}` })
+      this.emit({ type: 'status', running: false, simTimeSeconds: 0, realtimeFactor: 0 })
+      return
+    }
+    this.transientGeneration++
+    tstep = transientMaxStep(tstep, this.currentDeck)
     // Bench window: the effective tstop is the smaller of the request and W,
     // and of the longest stop whose samples fit TRAN_MEMORY_BUDGET_BYTES. When
     // the request exceeds the window the run is "continuous" and restarts at the
     // window boundary, as the RSS guard already does for a window that outgrows
     // memory; otherwise it is a finite run that completes at windowStop.
     const windowStop = await this.memoryBoundStop(tstep, Math.min(tstop, this.benchWindowSeconds))
+    if (this.closing) return
     const continuous = tstop > windowStop
 
     // No sampling until this run's SendInitData arrives: the previous plot
@@ -1093,6 +1120,7 @@ export class SimHost {
    */
   private async restartBenchWindow(reason: 'window-elapsed' | 'memory'): Promise<void> {
     if (!this.tran) return
+    const generation = this.transientGeneration
     const { tstep, tstop, pace } = this.tran
     // Suspend the windowed run so the timers don't re-trigger mid-restart.
     this.tran = null
@@ -1100,12 +1128,16 @@ export class SimHost {
     this.stopPeriodicTimers()
 
     this.enqueue('benchRestart', async () => {
+      // Stop or a new load/run may have been queued before this timer's
+      // restart. It must not resurrect the run those commands replaced.
+      if (this.closing || generation !== this.transientGeneration) return
       // The halts, resumes and alters already ordered have run (see drain; a
       // resume sees tran gone and skips itself), and none can be added while
       // tran is null, so the bg_halt below is the last word on the old thread.
       await this.waitBgSettled()
       await this.engine.command('bg_halt', false)
       await this.waitForHalt()
+      await this.waitThreadGone()
       await this.engine.command('destroy all', false)
       this.halt.clear()
       // Reload the deck so the plot is fresh (frees retained timepoints).
@@ -1129,6 +1161,7 @@ export class SimHost {
   }
 
   private async stopTransient(): Promise<void> {
+    this.transientGeneration++
     // Through the chain: a resume still waiting out its settle gap must not run
     // after this halt (runResume also sees tran gone).
     const halted = this.chain(() => this.runHalt())
@@ -1201,6 +1234,11 @@ export class SimHost {
   }
 
   private async doLoadCircuit(deckLines: string[]): Promise<void> {
+    this.transientGeneration++
+    if (this.tran) {
+      await this.stopTransient()
+      await this.waitThreadGone()
+    }
     // ngSpice_Circ treats every array entry as exactly ONE card and never splits
     // on embedded newlines, so a multi-line entry (a pasted .subckt block, a
     // joined run of resistors) would reach the parser as a single malformed
@@ -1216,11 +1254,13 @@ export class SimHost {
     // cannot silently simulate a stale circuit as if the new one had loaded.
     const gate = sanitizeDeck(cards)
     if (!gate.ok) {
-      if (this.deckLoaded) {
+      if (this.deckLoaded && !this.engineNeedsReset) {
         await this.engine.command('destroy all', false)
-        this.deckLoaded = false
-        this.currentDeck = []
       }
+      this.deckLoaded = false
+      this.currentDeck = []
+      this.failedLoad = new DeckRejectedError(gate.violations).message
+      this.emit({ type: 'loadFailed', detail: this.failedLoad })
       throw new DeckRejectedError(gate.violations)
     }
     // A watch belongs to the deck it was sent for: a new deck starts with every
@@ -1228,14 +1268,54 @@ export class SimHost {
     // SolveEngine.runTran) gets full series whatever the bench did before.
     this.watch = null
     this.watchVersion++
-    if (this.deckLoaded) {
-      await this.engine.command('destroy all', false) // Spec §7.4 gotcha 5
+    try {
+      if (this.engineNeedsReset) await this.resetEngineBeforeLoad()
+      else if (this.deckLoaded) await this.engine.command('destroy all', false)
+      this.engine.loadCircuit(cards)
+      this.currentDeck = cards
+      this.deckLoaded = true
+      this.failedLoad = null
+      this.vectorCount = 0
+      this.clampNoted = ''
+    } catch (error) {
+      this.engineNeedsReset = true
+      this.deckLoaded = false
+      this.currentDeck = []
+      this.failedLoad = error instanceof Error ? error.message : String(error)
+      this.emit({ type: 'loadFailed', detail: this.failedLoad })
+      throw error
     }
-    this.currentDeck = cards
-    this.engine.loadCircuit(this.currentDeck)
-    this.deckLoaded = true
-    this.vectorCount = 0
-    this.clampNoted = ''
+  }
+
+  /** A partial parse or OP fallback must never be followed by another Circ call. */
+  private async resetEngineBeforeLoad(): Promise<void> {
+    this.stopPeriodicTimers()
+    if (this.alterTimer) clearTimeout(this.alterTimer)
+    this.alterTimer = null
+    this.pendingAlters = []
+    this.tran = null
+    this.sampler = null
+    this.halt.clear()
+    await this.engineChain
+    await this.waitBgSettled()
+    await this.engine.command('bg_halt', false)
+    await this.waitForHalt()
+    const deadline = Date.now() + 500
+    while (this.bgThreadRunning && Date.now() < deadline) await sleep(5)
+    // Unlike best-effort final disposal, recovery must not unload a library
+    // whose thread is still alive. A failed drain rejects this load cleanly.
+    if (this.bgThreadRunning || this.engine.isRunning()) throw new Error('Cannot reset ngspice while its background thread is running')
+    if (this.bgEverRan) await sleep(150)
+    this.engine.dispose()
+    this.engine.init()
+    await this.engine.command(NGSPICE_NO_MEM_CHECK, false)
+    this.bgEverRan = false
+    this.bgThreadRunning = false
+    this.bgSettlingSince = null
+    this.settlingThreadUp = false
+    this.lastBgStartAt = -Infinity
+    this.deckLoaded = false
+    this.engineNeedsReset = false
   }
 
   // ── promise API for the in-process SolveEngine (src/simhost/solveEngine.ts) ──
@@ -1265,6 +1345,8 @@ export class SimHost {
     tstart = 0
   ): Promise<{ time: Float64Array; vectors: Record<string, Float64Array> }> {
     return this.enqueueAwaitable('runTran', async () => {
+      if (this.failedLoad !== null) throw new Error(`Circuit was not loaded: ${this.failedLoad}`)
+      tstep = transientMaxStep(tstep, this.currentDeck)
       if (!(tstart >= 0 && tstart < tstop)) {
         throw new RangeError(`runTran needs 0 <= tstart < tstop; got tstart=${tstart}, tstop=${tstop}`)
       }
@@ -1578,7 +1660,7 @@ export class SimHost {
   // ── periodic pacing/flush + status timers ──────────────────────────────────
 
   private startPeriodicTimers(): void {
-    if (this.disableTimers || this.pacingTimer) return
+    if (this.closing || this.disableTimers || this.pacingTimer) return
     this.pacingTimer = setInterval(() => this.pacingTick(), PACING_INTERVAL_MS)
     if (typeof this.pacingTimer.unref === 'function') this.pacingTimer.unref()
     this.sampleTimer = setInterval(() => this.sampleTick(), SAMPLE_INTERVAL_MS)

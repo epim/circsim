@@ -44,6 +44,9 @@ export type SimCommand =
 
 export type SimEvent =
   | { type: 'ready'; ngspiceVersion: string }
+  // A rejected deck is not loaded. Pending solves fail cleanly; the next valid
+  // load resets native state first when parsing left a partial circuit (#163).
+  | { type: 'loadFailed'; detail: string }
   | { type: 'vectors'; names: string[] } // vector list after run starts
   | {
       type: 'samples'
@@ -94,7 +97,7 @@ export interface LatestSnapshot {
  * quietest stretches, and the scope decimates to pixel columns anyway. Shared
  * so the renderer's bandwidth-derived tstep and the real-time tests agree.
  */
-export const BENCH_TSTEP_MAX_SECONDS = 100e-6
+export const BENCH_TSTEP_MAX_SECONDS = 5e-3
 
 // ─── op solve method (Spec §8.8 retry ladder — additive extension) ───────────
 
