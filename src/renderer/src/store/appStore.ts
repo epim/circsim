@@ -1090,7 +1090,18 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
     if (!next) return
     continuationRunning = true
     // Invoke synchronously so the next continuation cannot race its engine claim.
-    void Promise.resolve(next()).finally(() => {
+    let pending: Promise<void> | void
+    try {
+      pending = next()
+    } catch (error) {
+      store.setState(s => ({ logLines: [...s.logLines, {
+        level: 'error', text: `Queued bench action failed: ${error instanceof Error ? error.message : String(error)}`,
+      }] }))
+      continuationRunning = false
+      drainEngineContinuations()
+      return
+    }
+    void Promise.resolve(pending).finally(() => {
       continuationRunning = false
       drainEngineContinuations()
     })
@@ -1148,7 +1159,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
             if (!state.deckDirty) for (const next of state.instruments) {
               if (!('id' in next)) continue
               const previous = previousInstruments.find(inst => 'id' in inst && inst.id === next.id)
-              if (!previous) continue
+              if (!previous || previous === next) continue
               const plan = alterPlan(previous, next, state.resolutions)
               if (plan.kind === 'alter') for (const command of plan.commands) {
                 const parsed = parseAlterCommand(command)

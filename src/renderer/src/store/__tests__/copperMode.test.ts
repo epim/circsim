@@ -125,6 +125,7 @@ describe('bench copper mode and independent critic operating point', () => {
   it.each(['run-then-knob', 'knob-then-run'] as const)('keeps Run and the latest knob value during a held critic: %s', async order => {
     const options = { holdPhysical: true }
     const { store, mock } = bench(undefined, options)
+    store.getState().addInstrument({ kind: 'dc-supply', id: 'spare', netId: 2, volts: 2, seriesOhms: 0.1 })
     const pending = store.getState().powerOn()
     await vi.waitFor(() => expect(mock.sent.filter(c => c.type === 'runOp')).toHaveLength(2))
     const knob = () => store.getState().updateInstrument('psu', { kind: 'dc-supply', id: 'psu', netId: 1, volts: 4, seriesOhms: 0.1 })
@@ -140,6 +141,7 @@ describe('bench copper mode and independent critic operating point', () => {
     const transient = mock.sent.findIndex(c => c.type === 'runTransient')
     expect(mock.sent.slice(transient + 1).filter(c => c.type === 'loadCircuit' || c.type === 'runOp')).toEqual([])
     if (order === 'run-then-knob') expect(mock.sent.some(c => c.type === 'alter' && c.value === '4')).toBe(true)
+    expect(mock.sent.some(c => c.type === 'alter' && c.device.includes('spare'))).toBe(false)
   })
 
   it('surfaces a failed planned restart instead of leaving silent Power On and Run', async () => {
@@ -152,6 +154,32 @@ describe('bench copper mode and independent critic operating point', () => {
     await store.getState().powerOn()
     expect(mock.sent).toHaveLength(sent)
     expect(store.getState().convergenceCard).not.toBeNull()
+  })
+
+  it('continues queued knob work after a Run continuation throws synchronously', async () => {
+    const options = { holdPhysical: true }
+    const { store, mock } = bench(undefined, options)
+    const send = mock.send.bind(mock)
+    let thrown = false
+    mock.send = command => {
+      send(command)
+      if (command.type === 'runTransient' && !thrown) {
+        thrown = true
+        throw new Error('transient send failed')
+      }
+    }
+    const pending = store.getState().powerOn()
+    await vi.waitFor(() => expect(mock.sent.filter(c => c.type === 'runOp')).toHaveLength(2))
+    store.getState().run()
+    store.getState().updateInstrument('psu', { kind: 'dc-supply', id: 'psu', netId: 1, volts: 4, seriesOhms: 0.1 })
+    options.holdPhysical = false
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+    await pending
+    await store.getState().whenReopSettled()
+    store.getState().run()
+    await vi.waitFor(() => expect(store.getState().simState).toBe('running'))
+    expect(mock.sent.filter(c => c.type === 'runTransient')).toHaveLength(2)
+    expect(store.getState().instruments.find(i => i.kind === 'dc-supply' && i.id === 'psu')).toMatchObject({ volts: 4 })
   })
   it('a failed critic op retains geometry, keeps the ideal bench result and reports missing assessment', async () => {
     const { store } = bench('failed')
