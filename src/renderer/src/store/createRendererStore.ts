@@ -74,6 +74,7 @@ export function createRendererStore(): AppStore {
   // arrives via the window 'message' listener above (which also replays), so we
   // only record the crash notice here.
   window.circsim.onSimhostCrashed(({ willRespawn, exitCode, reason }) => {
+    plannedRestart = false
     store.getState().noteCrash(willRespawn, { exitCode, reason })
   })
 

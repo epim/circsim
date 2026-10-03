@@ -1076,6 +1076,25 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
   let pendingCriticRefresh: (() => Promise<void>) | null = null
   let engineIdleResolvers: Array<() => void> = []
   let runQueuedAfterCritic = false
+  const engineContinuations: Array<() => Promise<void> | void> = []
+  let continuationRunning = false
+
+  function enqueueEngineContinuation(continuation: () => Promise<void> | void): void {
+    engineContinuations.push(continuation)
+    drainEngineContinuations()
+  }
+
+  function drainEngineContinuations(): void {
+    if (powerOnOpInFlight || continuationRunning) return
+    const next = engineContinuations.shift()
+    if (!next) return
+    continuationRunning = true
+    // Invoke synchronously so the next continuation cannot race its engine claim.
+    void Promise.resolve(next()).finally(() => {
+      continuationRunning = false
+      drainEngineContinuations()
+    })
+  }
 
   async function awaitEngineIdle(): Promise<void> {
     while (powerOnOpInFlight) await new Promise<void>(resolve => engineIdleResolvers.push(resolve))
@@ -1083,6 +1102,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
   function releasePowerOnEngine(): void {
     powerOnOpInFlight = false
+    drainEngineContinuations()
     const resolvers = engineIdleResolvers
     engineIdleResolvers = []
     for (const resolve of resolvers) resolve()
@@ -1110,38 +1130,56 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
    * solved — solve again. Coalesces a burst of changes into the minimum number of
    * op solves, always ending on the LATEST value. Re-entrancy-safe via reopInFlight.
    */
-  async function runCoalescedReop(): Promise<void> {
+  function runCoalescedReop(previousInstruments: Instrument[]): void {
     if (reopInFlight) {
       // An op is already running; mark that another solve is wanted and return.
       reopRequested = true
       return
     }
     reopInFlight = true
-    try {
-      do {
+    const token = openToken
+    enqueueEngineContinuation(async () => {
+      try {
+        do {
+          reopRequested = false
+          if (token !== openToken) break
+          const state = store.getState()
+          if (state.simState === 'running' || state.simState === 'paused') {
+            if (!state.deckDirty) for (const next of state.instruments) {
+              if (!('id' in next)) continue
+              const previous = previousInstruments.find(inst => 'id' in inst && inst.id === next.id)
+              if (!previous) continue
+              const plan = alterPlan(previous, next, state.resolutions)
+              if (plan.kind === 'alter') for (const command of plan.commands) {
+                const parsed = parseAlterCommand(command)
+                if (parsed) simClient.send(parsed)
+              }
+            }
+            break
+          }
+          lastSolvedInstruments = store.getState().instruments
+          await store.getState().powerOn()
+          previousInstruments = lastSolvedInstruments
+          // Loop again only if a change arrived during the solve AND it left the
+          // instruments different from what we just solved (no-op guard).
+        } while (
+          reopRequested &&
+          !sameInstruments(lastSolvedInstruments, store.getState().instruments)
+        )
+      } finally {
+        reopInFlight = false
         reopRequested = false
-        if (powerOnOpInFlight) await awaitEngineIdle()
-        lastSolvedInstruments = store.getState().instruments
-        await store.getState().powerOn()
-        // Loop again only if a change arrived during the solve AND it left the
-        // instruments different from what we just solved (no-op guard).
-      } while (
-        reopRequested &&
-        !sameInstruments(lastSolvedInstruments, store.getState().instruments)
-      )
-    } finally {
-      reopInFlight = false
-      reopRequested = false
-      flushReopSettled()
-      // Knob steps await only their bench ops. Refresh the physical critic once
-      // for the final snapshot, after the burst, using the same serialized engine.
-      const refresh = pendingCriticRefresh
-      pendingCriticRefresh = null
-      if (refresh) {
-        powerOnOpInFlight = true
-        try { await refresh() } finally { releasePowerOnEngine() }
+        flushReopSettled()
+        // Knob steps await only their bench ops. Refresh the physical critic once
+        // for the final snapshot, after the burst, using the same serialized engine.
+        const refresh = pendingCriticRefresh
+        pendingCriticRefresh = null
+        if (refresh && token === openToken && store.getState().simState === 'idle') {
+          powerOnOpInFlight = true
+          try { await refresh() } finally { releasePowerOnEngine() }
+        }
       }
-    }
+    })
   }
 
   /** Ensure a ring buffer exists for every current voltage-probe; prune the rest. */
@@ -1960,7 +1998,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
       // number of op solves and always ends on the FINAL value (runCoalescedReop):
       // if an op is in flight the latest value is queued and solved once it lands.
       if (energized) {
-        void runCoalescedReop()
+        runCoalescedReop(instruments)
       }
     },
 
@@ -2080,7 +2118,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
 
         // Geometry is available while the physical assessment is pending or
         // unavailable. It must never borrow the ideal bench's electrical values.
-        const unavailableCritic: SolveResult = {
+        const unavailableCritic: SolveResult = physicalInputs === inputs ? solved : {
           ...solved, op: { values: {}, method: 'failed' }, netVoltages: new Map(),
           copper: copperResult(physicalInputs, { values: {}, method: 'failed' }, buildDeck(physicalInputs)),
         }
@@ -2172,8 +2210,16 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
                     try {
                       await options.restartSimhost()
                       engineNeedsRestart = false
-                    } catch {
-                      set(s => ({ logLines: [...s.logLines, { level: 'error', text: 'SimHost restart failed; the bench requires a fresh engine.' }] }))
+                    } catch (error) {
+                      set(s => ({
+                        logLines: [...s.logLines, { level: 'error', text: 'SimHost restart failed; the bench requires a fresh engine.' }],
+                        convergenceCard: {
+                          plainLanguage: 'The simulator could not restart after the copper assessment. Restart the app to continue using the bench.',
+                          retryLadderNote: 'The previous engine was left unavailable to prevent an unsafe circuit reload.',
+                          rawDetail: error instanceof Error ? error.message : String(error),
+                          culprit: null, at: Date.now(),
+                        },
+                      }))
                     }
                   }
                 }
@@ -2254,7 +2300,7 @@ export function createAppStore(options: CreateAppStoreOptions): AppStore {
         if (criticSolveInFlight && !runQueuedAfterCritic) {
           runQueuedAfterCritic = true
           const token = openToken
-          void awaitEngineIdle().then(() => {
+          enqueueEngineContinuation(() => {
             runQueuedAfterCritic = false
             if (token === openToken && get().simState === 'idle') get().run()
           })

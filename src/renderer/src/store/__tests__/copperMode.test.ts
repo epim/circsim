@@ -121,6 +121,38 @@ describe('bench copper mode and independent critic operating point', () => {
     const last = mock.sent.filter(c => c.type === 'loadCircuit').at(-1)!
     expect(last.deckLines.some(line => /^vpad_/i.test(line))).toBe(false)
   })
+
+  it.each(['run-then-knob', 'knob-then-run'] as const)('keeps Run and the latest knob value during a held critic: %s', async order => {
+    const options = { holdPhysical: true }
+    const { store, mock } = bench(undefined, options)
+    const pending = store.getState().powerOn()
+    await vi.waitFor(() => expect(mock.sent.filter(c => c.type === 'runOp')).toHaveLength(2))
+    const knob = () => store.getState().updateInstrument('psu', { kind: 'dc-supply', id: 'psu', netId: 1, volts: 4, seriesOhms: 0.1 })
+    if (order === 'run-then-knob') { store.getState().run(); knob() }
+    else { knob(); store.getState().run() }
+    options.holdPhysical = false
+    mock.emit({ type: 'opResult', values: { vin: 5, out: 2.5 } })
+    await pending
+    await store.getState().whenReopSettled()
+    await vi.waitFor(() => expect(mock.sent.filter(c => c.type === 'runTransient')).toHaveLength(1))
+    expect(store.getState().simState).toBe('running')
+    expect(store.getState().instruments.find(i => i.kind === 'dc-supply' && i.id === 'psu')).toMatchObject({ volts: 4 })
+    const transient = mock.sent.findIndex(c => c.type === 'runTransient')
+    expect(mock.sent.slice(transient + 1).filter(c => c.type === 'loadCircuit' || c.type === 'runOp')).toEqual([])
+    if (order === 'run-then-knob') expect(mock.sent.some(c => c.type === 'alter' && c.value === '4')).toBe(true)
+  })
+
+  it('surfaces a failed planned restart instead of leaving silent Power On and Run', async () => {
+    const { store, mock, restartSimhost } = bench('failed')
+    restartSimhost.mockRejectedValueOnce(new Error('supervisor fatal'))
+    await store.getState().powerOn()
+    expect(store.getState().convergenceCard?.plainLanguage).toContain('Restart the app')
+    const sent = mock.sent.length
+    store.getState().run()
+    await store.getState().powerOn()
+    expect(mock.sent).toHaveLength(sent)
+    expect(store.getState().convergenceCard).not.toBeNull()
+  })
   it('a failed critic op retains geometry, keeps the ideal bench result and reports missing assessment', async () => {
     const { store } = bench('failed')
     await store.getState().powerOn()

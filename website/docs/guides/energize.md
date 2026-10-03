@@ -61,6 +61,8 @@ In ideal mode, the bench readings appear as soon as their solve finishes; the ph
 
 The extra physical assessment runs after a direct ideal solve. If the ideal solve needed a fallback, the critic keeps geometry findings and leaves electrical copper checks unassessed. A physical critic solve that needs a fallback can still provide a bias snapshot, but circsim replaces its simulation host before restoring the ideal bench, to avoid reusing native transient state.
 
+Run and knob changes made while that assessment is pending are applied in order. Once a transient has started, a supply knob change uses the normal live update instead of replacing the run with another operating point. If the simulation host cannot restart, a recovery card explains that the app must be restarted before the bench can continue.
+
 ## Next
 
 - **[Probe nets & read the scope](./probe-and-scope)**: go from a frozen instant to live waveforms.
