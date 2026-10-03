@@ -581,6 +581,24 @@ function parseBoardText(node: SExpr): BoardText | null {
 
 // ─── zone parsing ─────────────────────────────────────────────────────────────
 
+/** Copper polygon points, including KiCad's embedded three-point arcs. */
+function parseCopperPolygonPts(node: SExpr): Vec2[] {
+  const ptsNode = find(node, 'pts')
+  if (!ptsNode || !Array.isArray(ptsNode)) return []
+  const pts: Vec2[] = []
+  for (const pt of ptsNode) {
+    if (!Array.isArray(pt)) continue
+    if (pt[0] === 'xy') pts.push({ x: numAtom(pt, 1), y: numAtom(pt, 2) })
+    else if (pt[0] === 'arc') {
+      const start = parseVec2Child(pt, 'start')
+      const mid = parseVec2Child(pt, 'mid')
+      const end = parseVec2Child(pt, 'end')
+      pts.push(...tessellateArc(start, mid, end), end)
+    }
+  }
+  return pts
+}
+
 function parseZone(node: SExpr, nets: NetIndex): Zone | null {
   if (!Array.isArray(node) || node[0] !== 'zone') return null
 
@@ -602,19 +620,7 @@ function parseZone(node: SExpr, nets: NetIndex): Zone | null {
   const polygon: Vec2[][] = []
   const polyNodes = findAll(node, 'polygon')
   for (const polyNode of polyNodes) {
-    const ptsNode = find(polyNode, 'pts')
-    if (!ptsNode || !Array.isArray(ptsNode)) continue
-    const pts: Vec2[] = []
-    for (const pt of ptsNode) {
-      if (!Array.isArray(pt)) continue
-      if (pt[0] === 'xy') pts.push({ x: numAtom(pt, 1), y: numAtom(pt, 2) })
-      else if (pt[0] === 'arc') {
-        const start = parseVec2Child(pt, 'start')
-        const mid = parseVec2Child(pt, 'mid')
-        const end = parseVec2Child(pt, 'end')
-        pts.push(...tessellateArc(start, mid, end), end)
-      }
-    }
+    const pts = parseCopperPolygonPts(polyNode)
     if (pts.length > 0) polygon.push(pts)
   }
 
@@ -629,7 +635,8 @@ function parseCopperGraphic(node: SExpr, nets: NetIndex): NonNullable<BoardModel
   if (!layer.endsWith('.Cu') || !netNode) return null
   const netId = nets.resolve(netNode)
   if (netId === undefined || netId === 0) return null
-  const primitives = parseEdgePrimitive(node)
+  const copperPts = node[0] === 'gr_poly' ? parseCopperPolygonPts(node) : null
+  const primitives = copperPts ? polyLines(copperPts) : parseEdgePrimitive(node)
   if (!primitives) return null
   const stroke = find(node, 'stroke')
   const width = find(stroke ?? node, 'width')

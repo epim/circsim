@@ -420,8 +420,9 @@ export function buildRailGraph(ctx: GraphContext, netId: number): RailGraph {
       prevPos = toPos
     }
     for (let k = 0; k + 1 < cuts.length; k++) {
-      if ((cuts[k + 1] - cuts[k]) * lengthMm < MIN_RUN_MM) continue
-      if (nearPour.length > 0) {
+      // Tiny intervals need no pour midpoint, but their terminal contact must
+      // still split the track rather than being connected only through a pour.
+      if ((cuts[k + 1] - cuts[k]) * lengthMm >= MIN_RUN_MM && nearPour.length > 0) {
         const pm = at((cuts[k] + cuts[k + 1]) / 2)
         const node = nodeOf(t.layer, pm)
         noteWidth(node, t.widthMm)

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseBoard } from '../../kicad/board'
 import { extract } from '../../netlist/extract'
 import { buildCopperNetwork } from '../index'
+import { buildRailGraph } from '../graph'
 
 function board(copper: string, destination: { x: number; y: number; layer?: string }): string {
   return `(kicad_pcb (version 20221018) (generator pcbnew)
@@ -17,6 +18,17 @@ function board(copper: string, destination: { x: number; y: number; layer?: stri
 }
 
 describe('copper contacts along a track', () => {
+  it('keeps a track piece at a pad just after a pour mesh crossing', () => {
+    const x = 10 + 1e-7
+    const model = parseBoard(board(`(zone (net 1) (layer "F.Cu")
+      (polygon (pts (xy -2 -3) (xy 22 -3) (xy 22 3) (xy -2 3))))`, { x, y: 0 }))
+    const graph = buildRailGraph({ board: model, circuit: extract(model), opts: { copperOz: 1, zoneMeshMm: 2 } }, 1)
+    const contact = graph.nodePos.findIndex(pos => Math.abs(pos.x - x) < 1e-8 && pos.y === 0)
+    expect(contact).toBeGreaterThanOrEqual(0)
+    expect(graph.edges.some(edge => edge.kind === 'track' && (edge.a === contact || edge.b === contact))).toBe(true)
+    expect(graph.edges.filter(edge => edge.kind === 'track').reduce((sum, edge) => sum + edge.lengthMm, 0)).toBeCloseTo(20, 9)
+  })
+
   it.each([
     ['pad', '', { x: 10, y: 0 }],
     ['branch endpoint', '(segment (start 10 0) (end 10 5) (width 0.25) (layer "F.Cu") (net 1))', { x: 10, y: 5 }],

@@ -1,5 +1,6 @@
 import { emitCopperCards, padSenseName, type CopperNetwork } from '../copper'
 import { reduceCopperNetwork } from '../copper/kron'
+import { COPPER_TERMINAL_REDUCTION_MARKER } from './copperMarker'
 /**
  * core/spicegen/generate.ts
  *
@@ -1895,7 +1896,7 @@ export function generateDeckWithDiagnostics(opts: GenerateOptions): {
     lines.push('* physical copper networks')
     const emitted = opts.copperReduction === 'terminals' ? reduceCopperNetwork(opts.copperNetwork) : opts.copperNetwork
     if (opts.copperReduction === 'terminals') {
-      lines.push('* copper mesh Kron-reduced onto pad terminals')
+      lines.push(COPPER_TERMINAL_REDUCTION_MARKER)
       lines.push(...emitted.edges.map((edge, i) => `r_copper_${i + 1} ${emitted.nodes[edge.a].name} ${emitted.nodes[edge.b].name} ${edge.ohms.toPrecision(12)}`))
     } else {
       lines.push(...emitCopperCards(opts.copperNetwork))
